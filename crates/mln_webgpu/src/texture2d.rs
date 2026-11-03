@@ -121,6 +121,12 @@ impl texture2d::Texture2D for Texture2D {
         if safe_state.max_anisotropy < 1 {
             safe_state.max_anisotropy = 1;
         }
+        // Port-only: keep the sampler when the state is unchanged. Tweakers
+        // set the atlases' configuration on every frame, and a new sampler
+        // each time is costly in the browser (a JavaScript object per call).
+        if self.sampler.is_some() && self.sampler_state == safe_state {
+            return;
+        }
         self.sampler_state = safe_state;
         self.sampler = None;
 

@@ -97,6 +97,34 @@ impl UploadPass {
         None
     }
 
+    /// A buffer of at least `vertex_count` default values of `data_type`
+    /// for an attribute the drawable doesn't provide: white for colors
+    /// (Float4), full opacity (Float2), zeros otherwise.
+    ///
+    /// Port-only: C++ creates one for each drawable whenever it rebuilds its
+    /// attribute bindings, which symbol drawables do on most frames. The
+    /// context keeps one per type instead, grown to the largest count. In the
+    /// browser the per-rebuild buffers were tens of megabytes a second.
+    fn dummy_vertex_buffer(&self, data_type: AttributeDataType, vertex_count: usize) -> UniqueVertexBufferResource {
+        let mut cache = self.context.dummy_vertex_buffers().borrow_mut();
+        let cached_count = cache.get(&data_type).map_or(0, |(count, _)| *count);
+        if let Some((count, buffer)) = cache.get(&data_type)
+            && *count >= vertex_count
+        {
+            return buffer.clone();
+        }
+        let count = vertex_count.max(2 * cached_count).max(1);
+        let mut data = vec![0u8; VertexAttribute::get_stride_of(data_type) * count];
+        if matches!(data_type, AttributeDataType::Float4 | AttributeDataType::Float2) {
+            for v in data.chunks_exact_mut(4) {
+                v.copy_from_slice(&1.0f32.to_ne_bytes());
+            }
+        }
+        let buffer: UniqueVertexBufferResource = self.create_vertex_buffer(&data, false);
+        cache.insert(data_type, (count, buffer.clone()));
+        buffer
+    }
+
     /// `webgpu::VertexAttribute::getBuffer(attrib, uploadPass, usage, forceUpdate)`
     pub fn get_attribute_buffer(
         &self,
@@ -154,28 +182,10 @@ impl upload_pass::UploadPass for UploadPass {
 
             let Some(effective) = override_ else {
                 // No attribute was provided. WebGPU requires all vertex
-                // attributes to have buffers bound, so create a dummy buffer
+                // attributes to have buffers bound, so bind a dummy buffer
                 // with default values.
                 let stride = VertexAttribute::get_stride_of(default.get_data_type());
-                let buffer_size = stride * vertex_count;
-                let mut dummy_data = vec![0u8; buffer_size];
-                match default.get_data_type() {
-                    // For color attribute - default to white (1,1,1,1)
-                    AttributeDataType::Float4 => {
-                        for v in dummy_data.chunks_exact_mut(4).take(vertex_count * 4) {
-                            v.copy_from_slice(&1.0f32.to_ne_bytes());
-                        }
-                    }
-                    // For opacity attribute - default to full opacity (1,1)
-                    AttributeDataType::Float2 => {
-                        for v in dummy_data.chunks_exact_mut(4).take(vertex_count * 2) {
-                            v.copy_from_slice(&1.0f32.to_ne_bytes());
-                        }
-                    }
-                    // For other types, fill with zeros
-                    _ => {}
-                }
-                let dummy_buffer: UniqueVertexBufferResource = self.create_vertex_buffer(&dummy_data, false);
+                let dummy_buffer = self.dummy_vertex_buffer(default.get_data_type(), vertex_count);
                 bindings[index] = Some(AttributeBinding {
                     attribute: AttributeDescriptor { data_type: default.get_data_type(), offset: 0 },
                     vertex_stride: stride as u32,

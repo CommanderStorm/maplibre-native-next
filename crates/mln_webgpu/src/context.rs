@@ -26,7 +26,7 @@ use mln_gfx::context::{Context as GfxContext, ContextBase};
 use mln_gfx::depth_mode::DepthMode;
 use mln_gfx::drawable_builder::UniqueDrawableBuilder;
 use mln_gfx::renderer::layer_group::LayerGroupBasePtr;
-use mln_gfx::gfx_types::DrawModeType;
+use mln_gfx::gfx_types::{AttributeDataType, DrawModeType};
 use mln_gfx::rendering_stats::RenderingStats;
 use mln_gfx::shader_group::StringIDSetsPair;
 use mln_gfx::shader_registry::ShaderRegistry;
@@ -39,9 +39,11 @@ use mln_gfx::types::{DepthFunctionType, DepthMaskType, StencilOpType, TextureCha
 use mln_gfx::util_hash::hash;
 use mln_gfx::uniform_buffer::{UniformBufferArray, UniformBufferPtr, UniqueUniformBufferArray};
 use mln_gfx::vertex_attribute::{VertexAttributeArray, VertexAttributeArrayPtr};
+use mln_gfx::vertex_buffer::UniqueVertexBufferResource;
 use mln_util::size::Size;
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 pub struct Context {
@@ -57,6 +59,10 @@ pub struct Context {
     clip_mask_renderable: Cell<Option<usize>>,
     clip_mask_pipeline_hash: Cell<Option<u64>>,
     clip_mask_uniform_buffers: RefCell<Vec<wgpu::Buffer>>,
+    // Port-only: the placeholder vertex buffers of
+    // UploadPass::build_attribute_bindings, one per attribute type, with the
+    // vertex count each covers.
+    dummy_vertex_buffers: RefCell<HashMap<AttributeDataType, (usize, UniqueVertexBufferResource)>>,
 }
 
 /// `clipMaskStencilMode`
@@ -85,6 +91,7 @@ impl Context {
             weak_self: weak.clone(),
             global_uniform_buffers: RefCell::new(UniformBufferArray::new()),
             tile_vertex_buffer: RefCell::new(None),
+            dummy_vertex_buffers: RefCell::default(),
             tile_index_buffer: RefCell::new(None),
             clip_mask_shader: RefCell::new(None),
             clip_mask_renderable: Cell::new(None),
@@ -122,6 +129,13 @@ impl Context {
     /// `createTexture2D()` with the concrete type.
     pub fn create_webgpu_texture_2d(&self) -> Rc<RefCell<Texture2D>> {
         Rc::new(RefCell::new(Texture2D::new(self.rc())))
+    }
+
+    /// The placeholder vertex buffers (see `UploadPass::dummy_vertex_buffer`).
+    pub(crate) fn dummy_vertex_buffers(
+        &self,
+    ) -> &RefCell<HashMap<AttributeDataType, (usize, UniqueVertexBufferResource)>> {
+        &self.dummy_vertex_buffers
     }
 
     /// A buffer holding `data` (zero padded to 4 bytes), as `createBuffer`
