@@ -430,10 +430,7 @@ impl SurfaceBackend {
         let renderer_backend = RendererBackend::new(ContextMode::Unique);
 
         // Create the instance
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: instance_backends(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+        let instance = crate::headless_backend::create_instance(instance_backends());
 
         // Request adapter
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

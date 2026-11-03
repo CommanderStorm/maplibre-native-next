@@ -7,6 +7,9 @@
 // the instance to `WGPU_BACKEND` if set (wgpu's env var, e.g. "vulkan"),
 // else Vulkan on Linux, so tests run on lavapipe (user.bazelrc's
 // VK_DRIVER_FILES) like the C++ CI; other platforms use wgpu's defaults.
+// On Emscripten the instance is the browser's WebGPU through Dawn's webgpu.h
+// (emdawnwebgpu, as the C++ core uses there), via mln_wgpu_webgpu_h: wgpu
+// itself only has GLES on that target.
 
 use crate::context::Context;
 use crate::offscreen_texture::OffscreenTextureResource;
@@ -97,6 +100,22 @@ fn instance_backends() -> wgpu::Backends {
     if cfg!(target_os = "linux") { wgpu::Backends::VULKAN } else { wgpu::Backends::all() }
 }
 
+/// Creates the wgpu instance for `backends`. Shared with `SurfaceBackend`.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn create_instance(backends: wgpu::Backends) -> wgpu::Instance {
+    wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..wgpu::InstanceDescriptor::new_without_display_handle() })
+}
+
+/// Creates the wgpu instance for `backends`, through webgpu.h (see the top
+/// of this file). Shared with `SurfaceBackend`.
+#[cfg(target_os = "emscripten")]
+pub(crate) fn create_instance(backends: wgpu::Backends) -> wgpu::Instance {
+    mln_wgpu_webgpu_h::create_instance(wgpu::InstanceDescriptor {
+        backends,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    })
+}
+
 impl HeadlessBackend {
     /// `HeadlessBackend(size = {256, 256}, swapBehaviour = NoFlush,
     /// contextMode = Unique)`
@@ -109,10 +128,7 @@ impl HeadlessBackend {
         };
 
         // wgpu-native backend initialization
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: instance_backends(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+        let instance = create_instance(instance_backends());
 
         // Request adapter (blocking)
         let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

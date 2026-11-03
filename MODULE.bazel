@@ -181,8 +181,11 @@ crate.spec(
 )
 
 # Ports the C++ WebGPU backend (src/mln/webgpu, which runs on Dawn or
-# wgpu-native) onto the Rust implementation of the same API.
+# wgpu-native) onto the Rust implementation of the same API. `custom` lets
+# //crates/mln_wgpu_webgpu_h plug in the browser's WebGPU (webgpu.h) on
+# Emscripten, where wgpu itself only has GLES; the default features stay.
 crate.spec(
+    features = ["custom"],
     package = "wgpu",
     version = "30",
 )

@@ -18,6 +18,8 @@ rust_library(
         "//crates/mln_gfx",
         "//crates/mln_tile_id",
         "//crates/mln_util",
+        # The instance on Emscripten (headless_backend.rs create_instance).
+        "//crates/mln_wgpu_webgpu_h",
         "@next_crates//:bytemuck",
         "@next_crates//:pollster",
         "@next_crates//:wgpu",
