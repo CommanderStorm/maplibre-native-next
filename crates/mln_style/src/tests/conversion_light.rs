@@ -7,9 +7,9 @@ use mln_conversion::Convertible;
 use mln_style_types::Position;
 use mln_util::Color;
 
+// gtest: StyleConversion.Light
 #[test]
 fn light() {
-    // TEST(StyleConversion, Light), first block.
     let mut error = Error::default();
     let parse_light = |src: &str, error: &mut Error| {
         let json = parse_json(src);

@@ -7,6 +7,7 @@ fn defines(keys: &[&str]) -> HashMap<String, bool> {
     keys.iter().map(|k| ((*k).to_owned(), true)).collect()
 }
 
+// gtest: ShaderGroupPreprocessor.isDirective_ValidDirectives
 #[test]
 fn is_directive_valid_directives() {
     assert!(is_directive("#ifdef FEATURE", "ifdef"));
@@ -25,6 +26,7 @@ fn is_directive_valid_directives() {
     assert!(is_directive("#   ifdef FEATURE", "ifdef"));
 }
 
+// gtest: ShaderGroupPreprocessor.isDirective_InvalidDirectives
 #[test]
 fn is_directive_invalid_directives() {
     assert!(!is_directive("ifdef FEATURE", "ifdef")); // Missing #
@@ -35,6 +37,7 @@ fn is_directive_invalid_directives() {
     assert!(!is_directive("   ", "ifdef")); // Whitespace only
 }
 
+// gtest: ShaderGroupPreprocessor.getDirectiveArgument_ValidArguments
 #[test]
 fn get_directive_argument_valid_arguments() {
     assert_eq!(get_directive_argument("#ifdef FEATURE"), "FEATURE");
@@ -44,6 +47,7 @@ fn get_directive_argument_valid_arguments() {
     assert_eq!(get_directive_argument("#ifdef\tFEATURE"), "FEATURE"); // Tab separator
 }
 
+// gtest: ShaderGroupPreprocessor.getDirectiveArgument_InvalidOrEmpty
 #[test]
 fn get_directive_argument_invalid_or_empty() {
     assert_eq!(get_directive_argument(""), ""); // Empty line
@@ -53,6 +57,7 @@ fn get_directive_argument_invalid_or_empty() {
     assert_eq!(get_directive_argument("no hash symbol"), ""); // Invalid format
 }
 
+// gtest: ShaderGroupPreprocessor.getDirectiveArgument_MultipleWords
 #[test]
 fn get_directive_argument_multiple_words() {
     // Should only return the first word
@@ -60,6 +65,7 @@ fn get_directive_argument_multiple_words() {
     assert_eq!(get_directive_argument("#ifdef FEATURE\nmore text"), "FEATURE");
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_SimpleIfdef
 #[test]
 fn preprocess_wgsl_simple_ifdef() {
     let source = "\nline1\n#ifdef ENABLED\nline2\n#endif\nline3\n";
@@ -69,6 +75,7 @@ fn preprocess_wgsl_simple_ifdef() {
     assert!(result.contains("line3"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_IfdefDisabled
 #[test]
 fn preprocess_wgsl_ifdef_disabled() {
     // ENABLED is not defined
@@ -79,6 +86,7 @@ fn preprocess_wgsl_ifdef_disabled() {
     assert!(result.contains("line3"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_Ifndef
 #[test]
 fn preprocess_wgsl_ifndef() {
     // DISABLED is not defined
@@ -89,6 +97,7 @@ fn preprocess_wgsl_ifndef() {
     assert!(result.contains("line3"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_IfndefWithDefine
 #[test]
 fn preprocess_wgsl_ifndef_with_define() {
     let source = "\nline1\n#ifndef DISABLED\nline2\n#endif\nline3\n";
@@ -98,6 +107,7 @@ fn preprocess_wgsl_ifndef_with_define() {
     assert!(result.contains("line3"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_Else
 #[test]
 fn preprocess_wgsl_else() {
     let source = "\n#ifdef ENABLED\nline1\n#else\nline2\n#endif\n";
@@ -106,6 +116,7 @@ fn preprocess_wgsl_else() {
     assert!(!result.contains("line2"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_ElseInverted
 #[test]
 fn preprocess_wgsl_else_inverted() {
     // ENABLED is not defined
@@ -115,6 +126,7 @@ fn preprocess_wgsl_else_inverted() {
     assert!(result.contains("line2"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_NestedConditionals
 #[test]
 fn preprocess_wgsl_nested_conditionals() {
     let source = "\nline1\n#ifdef OUTER\nline2\n#ifdef INNER\nline3\n#endif\nline4\n#endif\nline5\n";
@@ -124,6 +136,7 @@ fn preprocess_wgsl_nested_conditionals() {
     }
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_NestedConditionalsPartiallyEnabled
 #[test]
 fn preprocess_wgsl_nested_conditionals_partially_enabled() {
     // INNER is not defined
@@ -136,6 +149,7 @@ fn preprocess_wgsl_nested_conditionals_partially_enabled() {
     assert!(result.contains("line5"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_ComplexNesting
 #[test]
 fn preprocess_wgsl_complex_nesting() {
     let source = "\n#ifdef A\ninsideA1\n#ifdef B\ninsideB\n#else\nnotB\n#endif\ninsideA2\n#endif\noutside\n";
@@ -147,11 +161,13 @@ fn preprocess_wgsl_complex_nesting() {
     assert!(result.contains("outside"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_EmptySource
 #[test]
 fn preprocess_wgsl_empty_source() {
     assert_eq!(preprocess_wgsl("", &defines(&[])), "");
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_NoConditionals
 #[test]
 fn preprocess_wgsl_no_conditionals() {
     let source = "\nline1\nline2\nline3\n";
@@ -161,6 +177,7 @@ fn preprocess_wgsl_no_conditionals() {
     assert!(result.contains("line3"));
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_PreservesNewlines
 #[test]
 fn preprocess_wgsl_preserves_newlines() {
     let source = "line1\n#ifdef ENABLED\nline2\n#endif\nline3";
@@ -169,6 +186,7 @@ fn preprocess_wgsl_preserves_newlines() {
     assert_eq!(result.matches('\n').count(), 3);
 }
 
+// gtest: ShaderGroupPreprocessor.preprocessWGSL_MismatchedEndif
 #[test]
 fn preprocess_wgsl_mismatched_endif() {
     // Extra endif should be ignored gracefully

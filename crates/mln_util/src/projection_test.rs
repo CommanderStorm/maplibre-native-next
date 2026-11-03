@@ -55,6 +55,7 @@ fn ll(lat: f64, lon: f64) -> LatLng {
     LatLng::new(lat, lon).unwrap()
 }
 
+// gtest: Projection.Boundaries
 #[test]
 fn boundaries() {
     let sw = ll(-90.0, -180.0);
@@ -96,6 +97,7 @@ fn boundaries() {
     expect_double_eq!(unprojected.longitude(), ne.longitude());
 }
 
+// gtest: Projection.MetersPerPixelAtLatitude
 #[test]
 fn meters_per_pixel_at_latitude() {
     let mut zoom = 0.0;
@@ -148,6 +150,7 @@ fn meters_per_pixel_at_latitude() {
     );
 }
 
+// gtest: Projection.ProjectedMeters
 #[test]
 fn projected_meters() {
     let mut lat_lng = ll(0.0, 0.0);
@@ -176,6 +179,7 @@ fn projected_meters() {
     assert_eq!(lat_lng.longitude(), LONGITUDE_MAX);
 }
 
+// gtest: Projection.InvalidProjectedMeters
 #[test]
 fn invalid_projected_meters() {
     // C++ `ProjectedMeters{NAN}`: the easting defaults to 0.

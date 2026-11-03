@@ -53,6 +53,8 @@ const HELP: &str = "  render-test {OPTIONS}
                                         diff.png and the HTML report
       --self-check                      (port) Compare each test's expected
                                         image with itself instead of rendering
+      --timeout=[seconds]               (port) Error a test that runs longer
+                                        than this (default 60, 0: no limit)
 ";
 
 /// `ArgumentsTuple` plus the port's options.
@@ -67,6 +69,8 @@ pub struct Arguments {
     pub test_filter: String,
     pub self_check: bool,
     pub output: Option<String>,
+    /// Port-only per-test wall-clock limit in milliseconds (0: none).
+    pub timeout_millis: u64,
 }
 
 /// `parseArguments(argc, argv)` (args.hxx). C++ calls `exit(code)`; here
@@ -81,6 +85,7 @@ pub fn parse_arguments(args: &[String]) -> Result<Arguments, i32> {
     let mut update: Option<String> = None;
     let mut self_check = false;
     let mut output: Option<String> = None;
+    let mut timeout_millis: u64 = 60_000;
 
     let parse_error = |message: String| -> i32 {
         log::info(Event::General, HELP);
@@ -127,6 +132,17 @@ pub fn parse_arguments(args: &[String]) -> Result<Arguments, i32> {
                 "filter" => test_filter = Some(take_value("--filter")?),
                 "update" => update = Some(take_value("--update")?),
                 "output" => output = Some(take_value("--output")?),
+                "timeout" => {
+                    let value = take_value("--timeout")?;
+                    timeout_millis = value
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|t| t.is_finite() && *t >= 0.0)
+                        .map(|t| (t * 1000.0) as u64)
+                        .ok_or_else(|| {
+                            parse_error(format!("Argument 'timeout' received invalid value type '{value}'"))
+                        })?;
+                }
                 _ => return Err(parse_error(format!("Flag could not be matched: {name}"))),
             }
             continue;
@@ -216,6 +232,7 @@ pub fn parse_arguments(args: &[String]) -> Result<Arguments, i32> {
         test_filter: test_filter.unwrap_or_default(),
         self_check,
         output,
+        timeout_millis,
     })
 }
 
@@ -361,6 +378,9 @@ pub fn run_render_tests_with(arguments: &Arguments, factory: Option<ImplFactory>
         arguments.self_check,
         output_path.clone(),
     );
+    if !arguments.self_check && arguments.timeout_millis > 0 {
+        runner.set_test_timeout(Some(std::time::Duration::from_millis(arguments.timeout_millis)));
+    }
     if shuffle {
         // printf("%d", uint32_t)
         println!("{ANSI_COLOR_YELLOW}Shuffle seed: {}{ANSI_COLOR_RESET}", seed as i32);

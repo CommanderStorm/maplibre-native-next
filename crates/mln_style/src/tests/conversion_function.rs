@@ -19,9 +19,9 @@ where
     convert_property_value::<T>(&Convertible::from(&value), error, allow_data_expressions, false)
 }
 
+// gtest: StyleConversion.Function
 #[test]
 fn function() {
-    // TEST(StyleConversion, Function)
     // The C++ test reuses one Error; each case here checks the message of
     // its own conversion, which is what the C++ assertions observe.
     let check = |json: &str, ok: bool, message: Option<&str>| {
@@ -60,9 +60,9 @@ where
     }
 }
 
+// gtest: StyleConversion.CompositeFunctionExpression
 #[test]
 fn composite_function_expression() {
-    // TEST(StyleConversion, CompositeFunctionExpression)
     parse_check::<f32>(r#"["interpolate", ["linear"], ["zoom"], 0, ["number", ["get", "x"]], 10, 10]"#, "");
     parse_check::<f32>(
         r#"["coalesce", ["interpolate", ["linear"], ["zoom"], 0, ["number", ["get", "x"]], 10, 10], 0]"#,
@@ -85,9 +85,9 @@ fn composite_function_expression() {
     parse_check::<bool>(r#"["has", "x", ["properties"]]"#, "");
 }
 
+// gtest: StyleConversion.FormattedIdentityFunction
 #[test]
 fn formatted_identity_function() {
-    // TEST(StyleConversion, FormattedIdentityFunction)
     // See https://github.com/mapbox/mapbox-gl-js/issues/7311
     // We never introduced this bug on gl-native, but we _almost_ did
     let mut error = Error::default();

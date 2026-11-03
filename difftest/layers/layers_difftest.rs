@@ -204,6 +204,7 @@ fn dump_circle(out: &mut String, bucket: &CircleBucket, zooms: &[f32]) {
     dump_indexes(out, "triangles", &bucket.triangles);
     dump_segments(out, "segments", &bucket.segments);
     for (id, b) in &bucket.paint_property_binders {
+        let b = b.read().unwrap();
         let buf = &b.interleaved_vertex_buffer;
         dump_interleaved(out, id, buf);
         dump_binder(out, "circle-blur", &b.circle_blur, buf, zooms);
@@ -227,6 +228,7 @@ fn dump_fill(out: &mut String, bucket: &FillBucket, zooms: &[f32]) {
     dump_indexes(out, "basiclines", &bucket.basic_lines);
     dump_segments(out, "basicsegments", &bucket.basic_line_segments);
     for (id, b) in &bucket.paint_property_binders {
+        let b = b.read().unwrap();
         let buf = &b.interleaved_vertex_buffer;
         dump_interleaved(out, id, buf);
         dump_binder(out, "fill-color", &b.fill_color, buf, zooms);
@@ -242,6 +244,7 @@ fn dump_line(out: &mut String, bucket: &LineBucket, zooms: &[f32]) {
     dump_indexes(out, "triangles", &bucket.triangles);
     dump_segments(out, "segments", &bucket.segments);
     for (id, b) in &bucket.paint_property_binders {
+        let b = b.read().unwrap();
         let buf = &b.interleaved_vertex_buffer;
         dump_interleaved(out, id, buf);
         dump_binder(out, "line-blur", &b.line_blur, buf, zooms);
@@ -514,7 +517,7 @@ fn rust_polyline_report(request: &Json) -> String {
             &mut vertices,
             LineBucket::layout_vertex,
             &mut segments,
-            SegmentBase::new,
+            &SegmentBase::new,
             get_segment,
             &mut indexes,
         );

@@ -2,8 +2,7 @@
 // src/mln/renderer/layers/render_fill_extrusion_layer.cpp (drawable path,
 // `!MLN_USE_FILL_EXTRUSION_INSTANCING`).
 //
-// TODO(port): queryIntersectsFeature (queries) and captureRenderedFeatures
-// (UpdateParameters::captureRenderedFeatures).
+// TODO(port): captureRenderedFeatures (UpdateParameters::captureRenderedFeatures).
 
 use super::fill_extrusion_layer_tweaker::FillExtrusionLayerTweaker;
 use super::{TileDrawables, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
@@ -111,6 +110,32 @@ impl RenderLayer for RenderFillExtrusionLayer {
 
     fn is_3d(&self) -> bool {
         true
+    }
+
+    // query
+    fn query_intersects_feature(
+        &self,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+        _zoom: f32,
+        transform_state: &TransformState,
+        pixels_to_tile_units: f32,
+        _pos_matrix: &mln_util::mat4::Mat4,
+        _feature_state: &mln_style::expression::expression::FeatureState,
+    ) -> bool {
+        let evaluated = get_evaluated::<FillExtrusionLayerProperties>(&self.base.evaluated_properties);
+        let translated_query_geometry = crate::geometry::feature_index::FeatureIndex::translate_query_geometry(
+            query_geometry,
+            evaluated.get::<FillExtrusionTranslate>(),
+            *evaluated.get::<FillExtrusionTranslateAnchor>(),
+            transform_state.get_bearing() as f32,
+            pixels_to_tile_units,
+        );
+
+        mln_util::intersection_tests::polygon_intersects_multi_polygon(
+            translated_query_geometry.as_ref().unwrap_or(query_geometry),
+            feature.get_geometries(),
+        )
     }
 
     fn update(

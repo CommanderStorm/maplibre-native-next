@@ -1,6 +1,7 @@
 //! Ports src/mln/renderer/buckets (the bucket types M3 renders).
 
 pub mod circle_bucket;
+pub mod debug_bucket; // layers: debug
 pub mod fill_bucket;
 pub mod fill_extrusion_bucket;
 pub mod heatmap_bucket; // dem-heatmap

@@ -954,6 +954,7 @@ mod tests {
     // test/style/conversion/function.test.cpp.
     use super::*;
 
+    // gtest: StyleConversion.TokenStrings
     #[test]
     fn token_strings() {
         assert!(!has_tokens(""));

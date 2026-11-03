@@ -225,6 +225,8 @@ pub struct Impl {
     json: String,
 
     glyph_url: String,
+    /// symbols: `std::shared_ptr<FontFaces> fontFaces`.
+    font_faces: Option<std::sync::Arc<mln_text::glyph::FontFaces>>,
     // TODO(port): fontFaces (MLN_TEXT_SHAPING_HARFBUZZ, M5).
     sources: CollectionWithPersistentOrder<dyn Source>,
     /// The source impls with the changes made through the sources since the
@@ -302,6 +304,7 @@ impl Impl {
             url: String::new(),
             json: String::new(),
             glyph_url: String::new(),
+            font_faces: None,
             sources: CollectionWithPersistentOrder::default(),
             source_impls_cache: RefCell::new(None),
             source_observer,
@@ -476,6 +479,7 @@ impl Impl {
             );
         }
         self.glyph_url = parser.glyph_url.clone();
+        self.font_faces = parser.font_faces.clone();
         self.loaded = true;
         self.observer().on_style_loaded();
     }
@@ -726,6 +730,11 @@ impl Impl {
         };
         new_images.remove(found);
         self.shared.borrow_mut().images = Arc::new(new_images);
+    }
+
+    /// symbols: `getFontFaces()`.
+    pub fn get_font_faces(&self) -> Option<std::sync::Arc<mln_text::glyph::FontFaces>> {
+        self.font_faces.clone()
     }
 
     pub fn get_glyph_url(&self) -> &str {

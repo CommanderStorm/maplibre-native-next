@@ -23,9 +23,9 @@ fn object_len(value: &Value) -> usize {
     }
 }
 
+// gtest: StyleConversion.LayerTransition
 #[test]
 fn layer_transition() {
-    // TEST(StyleConversion, LayerTransition)
     let layer = parse_layer(
         r#"{
         "type": "background",
@@ -51,9 +51,9 @@ fn layer_transition() {
     );
 }
 
+// gtest: StyleConversion.SerializeDefaults
 #[test]
 fn serialize_defaults() {
-    // TEST(StyleConversion, SerializeDefaults)
     let layer = parse_layer(
         r#"{
         "type": "background",
@@ -66,9 +66,9 @@ fn serialize_defaults() {
     assert_eq!(2, object_len(&value));
 }
 
+// gtest: StyleConversion.RoundtripWithTransitions
 #[test]
 fn roundtrip_with_transitions() {
-    // TEST(StyleConversion, RoundtripWithTransitions)
     let layer = parse_layer(
         r#"{
         "type": "background",
@@ -110,9 +110,9 @@ fn parse_filter(expression: &str) -> Filter {
     convert::<Filter>(&Convertible::from(&json), &mut error).expect("filter")
 }
 
+// gtest: StyleConversion.OverrideDefaults
 #[test]
 fn override_defaults() {
-    // TEST(StyleConversion, OverrideDefaults)
     let layer = parse_layer(
         r#"{
         "type": "symbol",
@@ -155,9 +155,9 @@ fn override_defaults() {
     assert_eq!(2, object_member_len(&round_tripped_value, "paint"));
 }
 
+// gtest: StyleConversion.SetGenericProperties
 #[test]
 fn set_generic_properties() {
-    // TEST(StyleConversion, SetGenericProperties)
     let mut layer = parse_layer(
         r#"{
         "type": "symbol",

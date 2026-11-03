@@ -291,6 +291,7 @@ mod tests {
         assert_eq!(z, tile_data.z);
     }
 
+    // gtest: Resource.Style
     #[test]
     fn style() {
         let resource = Resource::style("http://example.com");
@@ -298,6 +299,7 @@ mod tests {
         assert_eq!("http://example.com", resource.url);
     }
 
+    // gtest: Resource.Source
     #[test]
     fn source() {
         let resource = Resource::source("http://example.com");
@@ -305,6 +307,7 @@ mod tests {
         assert_eq!("http://example.com", resource.url);
     }
 
+    // gtest: Resource.Tile
     #[test]
     fn tile_test() {
         let t = "http://example.com/{z}/{x}/{y}{ratio}.png";
@@ -344,6 +347,7 @@ mod tests {
         check_tile(&tile(t, 1.0, 1, 2, 3, Scheme::TMS), "http://example.com/3/1/5.png", t, 1, 1, 5, 3);
     }
 
+    // gtest: Resource.Glyphs
     #[test]
     fn glyphs() {
         let resource = Resource::glyphs("http://example.com/{fontstack}/{range}", &vec!["stack".to_owned()], (0, 255));
@@ -351,6 +355,7 @@ mod tests {
         assert_eq!("http://example.com/stack/0-255", resource.url);
     }
 
+    // gtest: Resource.SpriteImage
     #[test]
     fn sprite_image() {
         let resource = Resource::sprite_image("http://example.com/sprite", 2.0);
@@ -362,6 +367,7 @@ mod tests {
         assert_eq!("http://example.com/sprite@2x.png?query=true", param_resource.url);
     }
 
+    // gtest: Resource.Image
     #[test]
     fn image() {
         let resource = Resource::image("http://example.com/sprite.jpg");
@@ -369,6 +375,7 @@ mod tests {
         assert_eq!("http://example.com/sprite.jpg", resource.url);
     }
 
+    // gtest: Resource.SpriteJSON
     #[test]
     fn sprite_json() {
         let resource = Resource::sprite_json("http://example.com/sprite", 2.0);

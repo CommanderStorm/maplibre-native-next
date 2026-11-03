@@ -387,6 +387,7 @@ mod tagged_string {
         s.encode_utf16().collect()
     }
 
+    // gtest: TaggedString.Trim
     #[test]
     fn trim() {
         let mut basic =
@@ -411,6 +412,7 @@ mod tagged_string {
         assert_eq!(no_trim.raw_text(), u("no trim!"));
     }
 
+    // gtest: TaggedString.ImageSections
     #[test]
     fn image_sections() {
         let mut string = TaggedString::default();

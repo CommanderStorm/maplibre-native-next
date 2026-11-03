@@ -1,15 +1,20 @@
-// Ports the style-side tests of test/style/source.test.cpp (the GeoJSON
-// source; the render-source tests are in mln_renderer/tests/source_test.rs).
+// Ports the style-side tests of test/style/source.test.cpp (the ones that
+// need no RenderSource; those are in mln_renderer/tests/source_test.rs).
 
 use crate::observer::SourceObserver;
 use crate::source::Source;
 use crate::sources::geojson_source::GeoJSONSource;
+use crate::sources::image_source::ImageSource;
 use crate::sources::tile_source::{UrlOrTileset, VectorSource};
 use mln_util::tileset::{Tileset, VectorEncoding};
 use mln_actor::RunLoop;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{Kind, Response};
+use mln_storage::response::{Error as ResponseError, Reason};
 use mln_util::exception::ExceptionPtr;
+use mln_util::geo::LatLng;
+use mln_util::image::PremultipliedImage;
+use mln_util::size::Size;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -43,6 +48,76 @@ impl SourceObserver for StubStyleObserver {
     }
 }
 
+// gtest: Source.LoadingFail
+#[test]
+fn loading_fail() {
+    let run_loop = RunLoop::new();
+    let file_source = StubFileSource::new(ResponseType::Asynchronous);
+    file_source.set_response(Kind::Source, |resource| {
+        assert_eq!("url", resource.url);
+        let mut response = Response::new();
+        response.error = Some(Box::new(ResponseError::new(Reason::Other, "Failed by the test case")));
+        Some(response)
+    });
+
+    let observer = Rc::new(StubStyleObserver::default());
+    let failed = Rc::new(RefCell::new(false));
+    {
+        let failed = failed.clone();
+        let handle = run_loop.handle();
+        *observer.source_error.borrow_mut() = Some(Box::new(move |source, error| {
+            assert_eq!("source", source.get_id());
+            assert_eq!("Failed by the test case", error.to_string());
+            *failed.borrow_mut() = true;
+            handle.stop();
+        }));
+    }
+
+    let source = VectorSource::new("source", UrlOrTileset::Url("url".to_owned()), None, None, VectorEncoding::Mapbox);
+    source.set_observer(Some(observer.clone()));
+    source.load_description(&file_source);
+
+    run_loop.run();
+    assert!(*failed.borrow());
+}
+
+// gtest: Source.LoadingCorrupt
+#[test]
+fn loading_corrupt() {
+    let run_loop = RunLoop::new();
+    let file_source = StubFileSource::new(ResponseType::Asynchronous);
+    file_source.set_response(Kind::Source, |resource| {
+        assert_eq!("url", resource.url);
+        let mut response = Response::new();
+        response.data = Some(Arc::new(b"CORRUPTED".to_vec()));
+        Some(response)
+    });
+
+    let observer = Rc::new(StubStyleObserver::default());
+    let failed = Rc::new(RefCell::new(None));
+    {
+        let failed = failed.clone();
+        let handle = run_loop.handle();
+        *observer.source_error.borrow_mut() = Some(Box::new(move |source, error| {
+            assert_eq!("source", source.get_id());
+            *failed.borrow_mut() = Some(error.to_string());
+            handle.stop();
+        }));
+    }
+
+    let source = VectorSource::new("source", UrlOrTileset::Url("url".to_owned()), None, None, VectorEncoding::Mapbox);
+    source.set_observer(Some(observer.clone()));
+    source.load_description(&file_source);
+
+    run_loop.run();
+    // C++ expects rapidjson's "Invalid value. at offset 0"; JSON syntax
+    // errors carry serde_json's message in the port (DEVIATIONS.md, "[style]
+    // JSON syntax errors").
+    let message = failed.borrow().clone().expect("source error");
+    assert_eq!("expected value at line 1 column 1", message);
+}
+
+// gtest: Source.GeoJSonSourceUrlUpdate
 #[test]
 fn geojson_source_url_update() {
     let run_loop = RunLoop::new();
@@ -91,6 +166,7 @@ fn as_vector(source: &dyn Source) -> &VectorSource {
     source.as_any().downcast_ref::<VectorSource>().expect("a VectorSource")
 }
 
+// gtest: Source.VectorSourceSetTiles
 #[test]
 fn vector_source_set_tiles() {
     let run_loop = RunLoop::new();
@@ -119,6 +195,7 @@ fn vector_source_set_tiles() {
     assert!(*changed.borrow());
 }
 
+// gtest: Source.VectorSourceUrlSetTiles
 #[test]
 fn vector_source_url_set_tiles() {
     let run_loop = RunLoop::new();
@@ -155,4 +232,59 @@ fn vector_source_url_set_tiles() {
     source.load_description(&file_source);
     run_loop.run();
     assert_eq!(*count.borrow(), 2);
+}
+
+// gtest: Source.ImageSourceImageUpdate
+#[test]
+fn image_source_image_update() {
+    let run_loop = RunLoop::new();
+    let file_source = StubFileSource::new(ResponseType::Asynchronous);
+    file_source.set_global_response(|resource| {
+        assert_eq!("http://url", resource.url);
+        let mut response = Response::new();
+        response.data = Some(Arc::new(super::util::read_file_bytes("test/fixtures/image/no_profile.png")));
+        Some(response)
+    });
+
+    let observer = Rc::new(StubStyleObserver::default());
+    let changed = Rc::new(RefCell::new(false));
+    {
+        let changed = changed.clone();
+        let handle = run_loop.handle();
+        *observer.source_changed.borrow_mut() = Some(Box::new(move |_source| {
+            // Should be called (test will hang if it doesn't)
+            *changed.borrow_mut() = true;
+            handle.stop();
+        }));
+    }
+    let coords = [LatLng::default(); 4];
+
+    let source = ImageSource::new("source", coords);
+    source.set_url("http://url");
+    source.set_observer(Some(observer.clone()));
+
+    // Load initial, so the source state will be loaded=true
+    source.load_description(&file_source);
+    let mut rgba = PremultipliedImage::new(Size::new(1, 1));
+    rgba.data[0] = 255;
+    rgba.data[1] = 254;
+    rgba.data[2] = 253;
+    rgba.data[3] = 0;
+
+    // Schedule an update (`test.loop.invoke`; the source is not Send, so an
+    // AsyncTask on this loop stands in for it).
+    let update = {
+        let source = source.clone();
+        let rgba = RefCell::new(Some(rgba));
+        mln_actor::AsyncTask::new(move || {
+            // Update the url
+            if let Some(rgba) = rgba.borrow_mut().take() {
+                source.set_image(rgba);
+            }
+        })
+    };
+    update.send();
+
+    run_loop.run();
+    assert!(*changed.borrow());
 }

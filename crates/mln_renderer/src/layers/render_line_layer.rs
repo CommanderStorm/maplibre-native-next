@@ -1,8 +1,7 @@
 // Ports src/mln/renderer/layers/render_line_layer.hpp and
 // src/mln/renderer/layers/render_line_layer.cpp (drawable path).
 //
-// TODO(port): the line-pattern branch (icon atlas textures,
-// DrawableAtlasesTweaker) and captureRenderedFeatures.
+// TODO(port): captureRenderedFeatures.
 
 use super::line_layer_tweaker::{LineDrawableData, LineLayerTweaker, LineType};
 use super::{TileDrawables, refresh_if_bucket_updated, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
@@ -636,12 +635,46 @@ impl RenderLayer for RenderLineLayer {
                     add_drawable(drawable, LineType::SDF);
                 }
             } else if !self.unevaluated.get::<LinePattern>().is_undefined() {
-                // pattern line
-                // TODO(port): LinePatternShader drawables with the tile's
-                // icon atlas texture (DrawableAtlasesTweaker); C++ only adds
-                // them when the tile has atlas textures, which need the
-                // image atlas (sprites).
-                continue;
+                // pattern line (conformance)
+                if self.line_pattern_shader_group.is_none() {
+                    self.line_pattern_shader_group = shaders.get_shader_group("LinePatternShader");
+                }
+                let Some(group) = self.line_pattern_shader_group.clone() else {
+                    continue;
+                };
+                let Some(shader) = group.get_or_create_shader(context, &properties_as_uniforms, POS_NORMAL_ATTRIB_NAME)
+                else {
+                    continue;
+                };
+
+                let mut builder = create_line_builder("linePattern", shader);
+
+                // vertices and attributes
+                add_attributes(builder.as_mut(), bucket, vertex_attrs);
+
+                // texture
+                if let Some(atlases) = tile.get_atlas_textures().filter(|a| a.icon.borrow().is_some()) {
+                    let icon_tweaker: mln_gfx::drawable_tweaker::DrawableTweakerPtr =
+                        Rc::new(crate::gfx::drawable_atlases_tweaker::DrawableAtlasesTweaker::new(
+                            Some(atlases.clone()),
+                            None,
+                            Some(ID_LINE_IMAGE_TEXTURE),
+                            /*is_text*/ false,
+                            /*sdf_icons*/ true, // to force linear filter
+                            /*rotation_alignment*/ mln_style_types::AlignmentType::Auto,
+                            /*icon_scaled*/ false,
+                            /*text_size_is_zoom_constant*/ false,
+                        ));
+
+                    builder.add_tweaker(icon_tweaker);
+
+                    set_segments(builder.as_mut(), bucket);
+
+                    builder.flush(context);
+                    for drawable in builder.clear_drawables() {
+                        add_drawable(drawable, LineType::Pattern);
+                    }
+                }
             } else if has_gradient {
                 // gradient line
                 if self.line_gradient_shader_group.is_none() {

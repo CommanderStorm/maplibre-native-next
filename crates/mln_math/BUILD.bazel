@@ -11,3 +11,10 @@ rust_test(
     name = "mln_math_test",
     crate = ":mln_math",
 )
+
+# Ported C++ gtests (test/math); markers `// gtest: Group.Name`.
+rust_test(
+    name = "mln_math_gtest",
+    srcs = ["tests/gtest_math.rs"],
+    deps = [":mln_math"],
+)

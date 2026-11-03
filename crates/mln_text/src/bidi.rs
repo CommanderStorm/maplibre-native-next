@@ -250,16 +250,19 @@ mod bidi_test {
         v.iter().copied().collect()
     }
 
+    // gtest: BiDi.ArabicShaping
     #[test]
     fn arabic_shaping() {
         assert_eq!(apply_arabic_shaping(&u("اليَمَن\u{200E}\u{200E}")), u("ﺍﻟﻴﹷﻤﹷﻦ\u{200E}\u{200E}"));
     }
 
+    // gtest: BiDi.Tashkeel
     #[test]
     fn tashkeel() {
         assert_eq!(apply_arabic_shaping(&u("سلام۳۹")), u("ﺳﻼﻡ۳۹"));
     }
 
+    // gtest: BiDi.MixedShaping
     #[test]
     fn mixed_shaping() {
         assert_eq!(
@@ -268,12 +271,14 @@ mod bidi_test {
         );
     }
 
+    // gtest: BiDi.ReverseArabic
     #[test]
     fn reverse_arabic() {
         let mut bidi = BiDi::new();
         assert_eq!(bidi.process_text(&apply_arabic_shaping(&u("سلام۳۹")), set(&[])).unwrap(), vec![u("۳۹ﻡﻼﺳ")]);
     }
 
+    // gtest: BiDi.ReverseMixed
     #[test]
     fn reverse_mixed() {
         let mut bidi = BiDi::new();
@@ -287,6 +292,7 @@ mod bidi_test {
         );
     }
 
+    // gtest: BiDi.WithLineBreaks
     #[test]
     fn with_line_breaks() {
         let mut bidi = BiDi::new();
@@ -301,6 +307,7 @@ mod bidi_test {
         );
     }
 
+    // gtest: BiDi.StyledText
     #[test]
     fn styled_text() {
         // This test uses line breaks that intentionally split/reorder/

@@ -14,14 +14,16 @@ use crate::log::{self, Event};
 use crate::manifest_parser::Manifest;
 use crate::file_source::ProxyFileSource;
 use crate::metadata::{
-    GfxProbe, MapMode, MemoryProbe, NetworkProbe, TestMetadata, check_value,
+    GfxProbe, MapMode, MemoryProbe, NetworkProbe, RenderedQueryOptions, ScreenBox, TestMetadata, check_value,
 };
 use crate::parser::{
-    TileLodMode, parse_test_operations, read_expected_image_entries, read_expected_metric_entries,
-    read_expected_metrics,
+    TileLodMode, parse_test_operations, read_expected_image_entries, read_expected_json_entries,
+    read_expected_metric_entries, read_expected_metrics, read_json, to_json_features, to_json_value,
     test_operation_names::{GFX_PROBE_OP, MEMORY_PROBE_OP, NETWORK_PROBE_OP},
 };
-use maplibre_native_base::Value;
+use crate::test_runner_common::{deep_equal, tokenize};
+use maplibre_native_base::{Point, Value};
+use mln_util::feature::Feature;
 use mln_platform_default_image::{decode_image, encode_png};
 use mln_util::geo::LatLng;
 use mln_util::image::PremultipliedImage;
@@ -145,6 +147,11 @@ pub trait TestRunnerImpl {
     fn add_source(&mut self, _id: &str, _json: &str) -> Result<(), MapError> {
         not_ported("Style::addSource")
     }
+    /// conformance: `convert<style::Light>(json)` then `style.setLight`
+    /// (a conversion error is `MapError::Conversion`).
+    fn set_light(&mut self, _json: &str) -> Result<(), MapError> {
+        not_ported("Style::setLight")
+    }
     /// `bool(style.removeSource(id))`.
     fn remove_source(&mut self, _id: &str) -> Result<bool, MapError> {
         not_ported("Style::removeSource")
@@ -214,6 +221,59 @@ pub trait TestRunnerImpl {
     fn set_tile_lod_mode(&mut self, _mode: TileLodMode) -> Result<(), MapError> {
         not_ported("Map::setTileLodMode")
     }
+    /// `map.getStyle().getDefaultCamera()` (tile mode).
+    fn default_camera(&mut self) -> Result<CameraOptions, MapError> {
+        not_ported("Style::getDefaultCamera")
+    }
+    /// `util::tileCover(map.latLngBoundsForCamera(camera), zoom)`.
+    fn tile_cover_for_camera(&mut self, _camera: &CameraOptions, _zoom: u8) -> Result<Vec<TileId>, MapError> {
+        not_ported("Map::latLngBoundsForCamera + util::tileCover")
+    }
+    /// `frontend.getRenderer()->collectPlacedSymbolData(enable)`.
+    fn collect_placed_symbol_data(&mut self, _enable: bool) {}
+    /// `frontend.getRenderer()->getPlacedSymbolsData()`.
+    fn get_placed_symbols_data(&mut self) -> Vec<PlacedSymbol> {
+        Vec::new()
+    }
+    /// `frontend.getRenderer()->queryRenderedFeatures(geometry, options)`
+    /// for a query test's point or box.
+    fn query_rendered_features(
+        &mut self,
+        _geometry: &QueryGeometry,
+        _options: &RenderedQueryOptions,
+    ) -> Result<Vec<Feature>, MapError> {
+        not_ported("Renderer::queryRenderedFeatures")
+    }
+}
+
+/// `mln::PlacedSymbolData` (renderer.hpp), boxes as minX, minY, maxX, maxY.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedSymbol {
+    /// Contents of the label (UTF-16)
+    pub key: Vec<u16>,
+    pub text_collision_box: Option<[f32; 4]>,
+    pub icon_collision_box: Option<[f32; 4]>,
+    pub text_placed: bool,
+    pub icon_placed: bool,
+    pub intersects_tile_border: bool,
+    pub viewport_padding: f32,
+    pub layer: String,
+}
+
+/// An `UnwrappedTileID` of the tile-mode cover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileId {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+    pub wrap: i16,
+}
+
+/// A query test's `queryGeometry`: a point or a box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum QueryGeometry {
+    Point(Point<f64>),
+    Box(ScreenBox),
 }
 
 /// Creates the `TestRunner::Impl` for a test: `HeadlessFrontend(size,
@@ -304,6 +364,8 @@ pub struct TestRunner {
     /// Where actual.png and diff.png go. C++ writes them next to the test's
     /// style.json; the port never writes into the C++ tree.
     output_path: PathBuf,
+    /// Port-only: the per-test wall-clock limit (see watchdog.rs).
+    watchdog: Option<crate::watchdog::Watchdog>,
 }
 
 impl TestRunner {
@@ -315,7 +377,21 @@ impl TestRunner {
         output_path: PathBuf,
     ) -> Self {
         crate::file_source::register_proxy_file_source();
-        TestRunner { maps: HashMap::new(), manifest, update_results, factory, self_check, output_path }
+        TestRunner {
+            maps: HashMap::new(),
+            manifest,
+            update_results,
+            factory,
+            self_check,
+            output_path,
+            watchdog: None,
+        }
+    }
+
+    /// Port-only: errors a test that runs longer than `limit` (`None`: no
+    /// limit).
+    pub fn set_test_timeout(&mut self, limit: Option<Duration>) {
+        self.watchdog = limit.map(crate::watchdog::Watchdog::new);
     }
 
     pub fn get_manifest(&self) -> &Manifest {
@@ -348,14 +424,79 @@ impl TestRunner {
     }
 
     /// `checkQueryTestResults`.
-    fn check_query_test_results(&self, _actual_image: PremultipliedImage, metadata: &mut TestMetadata) {
-        // TODO(port): queryRenderedFeatures, toJSON(features), the
-        // expected*.json comparison with deepEqual (expression-test/
-        // test_runner_common.cpp) and simpleDiff.
-        let message = "TODO(port): query tests (queryRenderedFeatures, checkQueryTestResults)";
-        log::warning(Event::General, &format!("{}: {message}", metadata.id));
-        metadata.error_message = message.to_string();
-        metadata.render_errored += 1;
+    fn check_query_test_results(
+        &self,
+        actual_image: PremultipliedImage,
+        features: Vec<Feature>,
+        metadata: &mut TestMetadata,
+    ) {
+        let expectations = metadata.paths.expectations.clone();
+
+        metadata.actual = encode_png(&actual_image);
+
+        if actual_image.size.is_empty() {
+            metadata.error_message = "Invalid size for actual image".to_string();
+            metadata.render_errored += 1;
+            return;
+        }
+
+        metadata.actual_json = to_json_features(&features);
+
+        if metadata.actual_json.is_empty() {
+            metadata.error_message = "Invalid size for actual JSON".to_string();
+            metadata.render_errored += 1;
+            return;
+        }
+
+        // The update modes are rejected when parsing arguments (the port
+        // does not write baselines).
+        debug_assert!(!matches!(self.update_results, UpdateResults::Platform | UpdateResults::Default));
+
+        let actual_json = metadata.actual_json.clone();
+        self.write_output(metadata, "actual.json", actual_json.as_bytes());
+
+        let mut expected_json_paths = Vec::new();
+        for dir in expectations.iter().rev() {
+            if filesystem::exists(dir) {
+                expected_json_paths = read_expected_json_entries(dir);
+                if !expected_json_paths.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        if expected_json_paths.is_empty() {
+            metadata.error_message = format!("Failed to find expectations for: {}", metadata.paths.style_path);
+            metadata.render_errored += 1;
+            return;
+        }
+
+        for entry in &expected_json_paths {
+            let Ok(expected) = read_json(entry) else {
+                metadata.error_message = format!("Failed to load expected JSON {entry}");
+                metadata.render_errored += 1;
+                return;
+            };
+
+            let Ok(actual) = serde_json::from_str::<serde_json::Value>(&metadata.actual_json) else {
+                metadata.error_message =
+                    format!("Error parsing actual JSON for: {}", metadata.paths.style_path);
+                metadata.render_errored += 1;
+                return;
+            };
+
+            let actual_val = geojson::convert_value(&actual);
+            let expected_val = geojson::convert_value(&expected);
+            let equal = deep_equal(&actual_val, &expected_val);
+
+            metadata.difference = if equal { 0.0 } else { 1.0 };
+            if equal {
+                metadata.diff = b"Match".to_vec();
+            } else {
+                metadata.diff = simple_diff(&actual_val, &expected_val).into_bytes();
+                metadata.render_failed += 1;
+            }
+        }
     }
 
     /// `checkRenderTestResults`.
@@ -784,6 +925,8 @@ impl TestRunner {
         ProxyFileSource::set_tracking_active(false);
 
         let mut ctx = TestContext::new(metadata);
+        // Port-only per-test time limit, stopped when `run` returns.
+        let _watchdog_guard = self.watchdog.as_ref().map(crate::watchdog::Watchdog::arm);
 
         if !ctx.metadata.ignored_test {
             for operation in get_before_operations(&self.manifest) {
@@ -800,8 +943,8 @@ impl TestRunner {
             u32::from(ctx.metadata.cross_source_collisions)
         );
 
-        let cut_off_labels_report = String::new();
-        let duplications_report = String::new();
+        let mut cut_off_labels_report = String::new();
+        let mut duplications_report = String::new();
 
         let result_image = if self.self_check {
             // The operations are parsed (with their parse-time effects on
@@ -843,12 +986,14 @@ impl TestRunner {
             // C++ catches exceptions only around frontend.render(); a Rust
             // panic anywhere in the map code errors this test instead of
             // ending the run, and drops the map, which may be inconsistent.
-            let rendered = catch_unwind(AssertUnwindSafe(|| render_with_map(&mut ctx)));
+            let rendered = catch_unwind(AssertUnwindSafe(|| {
+                render_with_map(&mut ctx, &mut cut_off_labels_report, &mut duplications_report)
+            }));
             match rendered {
                 Ok(image) => image,
                 Err(panic) => {
                     ctx.runner_impl = None;
-                    ctx.metadata.error_message = format!("Rendering panicked: {}", panic_message(&panic));
+                    ctx.metadata.error_message = panic_error_message("Rendering panicked", &panic);
                     ctx.metadata.render_errored += 1;
                     self.maps.remove(&key);
                     return;
@@ -864,6 +1009,46 @@ impl TestRunner {
                 }
             }
         }
+
+        // C++ queries after the operations, on the frontend's renderer.
+        let mut features = Vec::new();
+        if !ctx.metadata.render_test && ctx.runner_impl.is_some() {
+            // `queryGeometry[0]` and `[1]` are numbers: a point; else a box.
+            let is_point = ctx
+                .metadata
+                .document
+                .pointer("/metadata/test/queryGeometry/0")
+                .is_some_and(serde_json::Value::is_number)
+                && ctx
+                    .metadata
+                    .document
+                    .pointer("/metadata/test/queryGeometry/1")
+                    .is_some_and(serde_json::Value::is_number);
+            let geometry = if is_point {
+                QueryGeometry::Point(ctx.metadata.query_geometry)
+            } else {
+                QueryGeometry::Box(ctx.metadata.query_geometry_box)
+            };
+            let options = ctx.metadata.query_options.clone();
+            let queried = catch_unwind(AssertUnwindSafe(|| ctx.get_map().query_rendered_features(&geometry, &options)));
+            match queried {
+                Ok(Ok(result)) => features = result,
+                Ok(Err(MapError::NotPorted(what))) => {
+                    ctx.fail_not_ported(&what);
+                }
+                Ok(Err(error)) => {
+                    ctx.metadata.error_message = format!("{error:?}");
+                    ctx.metadata.render_errored += 1;
+                }
+                Err(panic) => {
+                    ctx.runner_impl = None;
+                    ctx.metadata.error_message = panic_error_message("Query panicked", &panic);
+                    ctx.metadata.render_errored += 1;
+                    self.maps.remove(&key);
+                    return;
+                }
+            }
+        }
         drop(ctx);
 
         if metadata.render_test {
@@ -872,33 +1057,223 @@ impl TestRunner {
             }
             Self::append_label_cut_off_results(metadata, &cut_off_labels_report, &duplications_report);
             self.check_render_test_results(result_image, metadata);
-        } else {
-            self.check_query_test_results(result_image, metadata);
+        } else if metadata.render_errored == 0 {
+            self.check_query_test_results(result_image, features, metadata);
         }
     }
 }
 
 /// The map part of `TestRunner::run`: `resetContext`, the default camera,
 /// then `runTest` (or, in tile mode, one `runTest` per covering tile).
-fn render_with_map(ctx: &mut TestContext<'_>) -> PremultipliedImage {
+fn render_with_map(
+    ctx: &mut TestContext<'_>,
+    cut_off_labels_report: &mut String,
+    duplications_report: &mut String,
+) -> PremultipliedImage {
     let runner_impl = &mut **ctx.runner_impl.as_mut().expect("runnerImpl");
     if let Err(error) = runner_impl.reset_context(ctx.metadata) {
         return map_error_image(ctx, error);
     }
 
     if ctx.metadata.map_mode == MapMode::Tile {
-        // TODO(port): tile mode: util::tileCover(map.latLngBoundsForCamera(camera), zoom),
-        // a resetContext + jumpTo(tile center) + runTest per tile copied into
-        // one image, and the label cut-off / duplication reports from
-        // Renderer::getPlacedSymbolsData.
-        ctx.fail_not_ported("MapMode::Tile (tileCover, per-tile rendering)");
-        return PremultipliedImage::default();
+        return render_tiles(ctx, cut_off_labels_report, duplications_report);
     }
 
     if let Err(error) = ctx.get_map().jump_to_default_camera() {
         return map_error_image(ctx, error);
     }
     run_test(ctx)
+}
+
+/// `getTileCenterCoordinates(tileId)`.
+fn get_tile_center_coordinates(tile_id: &TileId) -> LatLng {
+    let scale = f64::from(1u32 << tile_id.z);
+    let tile_center = Point::new(
+        (f64::from(tile_id.x) + 0.5) * mln_util::constants::TILE_SIZE_D,
+        (f64::from(tile_id.y) + 0.5) * mln_util::constants::TILE_SIZE_D,
+    );
+    // Projection::unproject(tileCenter, scale) (LatLng::Unwrapped); tile
+    // centers are always valid coordinates.
+    mln_util::projection::Projection::unproject(&tile_center, scale, mln_util::geo::WrapMode::Unwrapped)
+        .expect("tile center")
+}
+
+/// `getTileScreenPixelSize(pixelRatio)`.
+fn get_tile_screen_pixel_size(pixel_ratio: f32) -> u32 {
+    (mln_util::constants::TILE_SIZE_D * f64::from(pixel_ratio)) as u32
+}
+
+/// `getImageTileOffset(dims, dim, pixelRatio)`.
+fn get_image_tile_offset(dims: &std::collections::BTreeSet<u32>, dim: u32, pixel_ratio: f32) -> u32 {
+    match dims.iter().position(|&d| d == dim) {
+        Some(index) => index as u32 * get_tile_screen_pixel_size(pixel_ratio),
+        None => {
+            debug_assert!(false);
+            0
+        }
+    }
+}
+
+/// `util::toString(UnwrappedTileID)`.
+fn tile_id_string(tile_id: &TileId) -> String {
+    format!(
+        "{}/{}/{}{}{}",
+        tile_id.z,
+        tile_id.x,
+        tile_id.y,
+        if tile_id.wrap >= 0 { "+" } else { "" },
+        tile_id.wrap
+    )
+}
+
+/// `SymbolLocationAndStatus`.
+struct SymbolLocationAndStatus {
+    tile_id: TileId,
+    location: [f32; 4],
+    placed: bool,
+    is_icon: bool,
+}
+
+/// The `MapMode::Tile` branch of `TestRunner::run`: one `runTest` per tile
+/// covering the default camera's view, each centered on its tile, copied
+/// into one image, with the label cut-off and duplication reports.
+fn render_tiles(
+    ctx: &mut TestContext<'_>,
+    cut_off_labels_report: &mut String,
+    duplications_report: &mut String,
+) -> PremultipliedImage {
+    let camera = match ctx.get_map().default_camera() {
+        Ok(camera) => camera,
+        Err(error) => return map_error_image(ctx, error),
+    };
+    debug_assert!(camera.zoom.is_some());
+    debug_assert!(camera.center.is_some());
+    let zoom = camera.zoom.unwrap_or(0.0) as u8;
+    let tile_ids = match ctx.get_map().tile_cover_for_camera(&camera, zoom) {
+        Ok(tile_ids) => tile_ids,
+        Err(error) => return map_error_image(ctx, error),
+    };
+    debug_assert!(!tile_ids.is_empty());
+    let mut x_dims = std::collections::BTreeSet::new();
+    let mut y_dims = std::collections::BTreeSet::new();
+    for tile_id in &tile_ids {
+        x_dims.insert(tile_id.x);
+        y_dims.insert(tile_id.y);
+        debug_assert!(tile_id.z == zoom);
+    }
+    let pixel_ratio = ctx.metadata.pixel_ratio;
+    let tile_screen_size = get_tile_screen_pixel_size(pixel_ratio);
+
+    let mut symbol_index: HashMap<Vec<u16>, Vec<SymbolLocationAndStatus>> = HashMap::new();
+
+    let mut result = PremultipliedImage::new(Size::new(
+        x_dims.len() as u32 * tile_screen_size,
+        y_dims.len() as u32 * tile_screen_size,
+    ));
+    for tile_id in &tile_ids {
+        let reset = {
+            let runner_impl = &mut **ctx.runner_impl.as_mut().expect("runnerImpl");
+            runner_impl.reset_context(ctx.metadata)
+        };
+        if let Err(error) = reset {
+            return map_error_image(ctx, error);
+        }
+        ctx.get_map().collect_placed_symbol_data(true);
+        let camera_for_tile = CameraOptions { center: Some(get_tile_center_coordinates(tile_id)), ..camera.clone() };
+        if let Err(error) = ctx.get_map().jump_to(&camera_for_tile) {
+            return map_error_image(ctx, error);
+        }
+
+        let result_for_tile = run_test(ctx);
+        if !result_for_tile.valid() {
+            // C++ returns from `run` here without checking the results (the
+            // test then counts as passed); the port errors it.
+            ctx.metadata.error_message =
+                format!("Failed rendering tile: {}/{}/{}", tile_id.z, tile_id.x, tile_id.y);
+            ctx.metadata.render_errored += 1;
+            return PremultipliedImage::default();
+        }
+        let x_offset = get_image_tile_offset(&x_dims, tile_id.x, pixel_ratio);
+        let y_offset = get_image_tile_offset(&y_dims, tile_id.y, pixel_ratio);
+
+        let placed_symbols = ctx.get_map().get_placed_symbols_data();
+
+        let mut find_cut_offs = |metadata: &mut TestMetadata,
+                                 placed_symbol: &PlacedSymbol,
+                                 mut bbox: [f32; 4],
+                                 placed: bool,
+                                 is_icon: bool| {
+            // box.min.x += xOffset - viewportPadding (unsigned + float)
+            let dx = x_offset as f32 - placed_symbol.viewport_padding;
+            let dy = y_offset as f32 - placed_symbol.viewport_padding;
+            bbox[0] += dx;
+            bbox[2] += dx;
+            bbox[1] += dy;
+            bbox[3] += dy;
+
+            let symbols = symbol_index.entry(placed_symbol.key.clone()).or_default();
+            let Some(it) = symbols.iter().find(|a| a.is_icon == is_icon && a.location == bbox) else {
+                symbols.push(SymbolLocationAndStatus { tile_id: *tile_id, location: bbox, placed, is_icon });
+                return;
+            };
+            let key = String::from_utf16_lossy(&placed_symbol.key);
+            let kind = if is_icon { "icon" } else { "text" };
+            let location = format!(
+                "(({}, {}), ({}, {}))",
+                ostream_float(f64::from(bbox[0])),
+                ostream_float(f64::from(bbox[1])),
+                ostream_float(f64::from(bbox[2])),
+                ostream_float(f64::from(bbox[3]))
+            );
+            if *tile_id == it.tile_id && is_icon == it.is_icon {
+                metadata.duplications_count += 1;
+                *duplications_report += &format!(
+                    "\n{}. \"{key}\" {kind} {location} from layer: {} at {}",
+                    metadata.duplications_count,
+                    placed_symbol.layer,
+                    tile_id_string(tile_id)
+                );
+                return;
+            }
+            if it.placed != placed && is_icon == it.is_icon {
+                metadata.label_cut_off_found += 1;
+                *cut_off_labels_report += &format!(
+                    "\n{}. \"{key}\" {kind} {location} from layer: {}{}{} and{}{}",
+                    metadata.label_cut_off_found,
+                    placed_symbol.layer,
+                    if placed { " is placed at " } else { " is not placed at " },
+                    tile_id_string(tile_id),
+                    if it.placed { " placed at " } else { " not placed at " },
+                    tile_id_string(&it.tile_id)
+                );
+            }
+        };
+
+        for placed_symbol in &placed_symbols {
+            if placed_symbol.intersects_tile_border {
+                if let Some(text_box) = placed_symbol.text_collision_box {
+                    find_cut_offs(ctx.metadata, placed_symbol, text_box, placed_symbol.text_placed, false);
+                }
+                if let Some(icon_box) = placed_symbol.icon_collision_box {
+                    find_cut_offs(ctx.metadata, placed_symbol, icon_box, placed_symbol.icon_placed, true);
+                }
+            }
+        }
+
+        let size = result_for_tile.size;
+        if let Err(e) = PremultipliedImage::copy(
+            &result_for_tile,
+            &mut result,
+            Point::new(0, 0),
+            Point::new(x_offset, y_offset),
+            size,
+        ) {
+            ctx.metadata.error_message = format!("Failed to copy tile image: {e:?}");
+            ctx.metadata.render_errored += 1;
+            return PremultipliedImage::default();
+        }
+    }
+    result
 }
 
 fn map_error_image(ctx: &mut TestContext<'_>, error: MapError) -> PremultipliedImage {
@@ -958,6 +1333,15 @@ fn self_check_image(metadata: &TestMetadata) -> PremultipliedImage {
         (metadata.size.width as f32 * metadata.pixel_ratio) as u32,
         (metadata.size.height as f32 * metadata.pixel_ratio) as u32,
     ))
+}
+
+/// The error of a test that panicked: the timeout message for a
+/// `TestTimedOut` (watchdog.rs), else `"<what>: <panic message>"`.
+fn panic_error_message(what: &str, panic: &Box<dyn std::any::Any + Send>) -> String {
+    match panic.downcast_ref::<crate::watchdog::TestTimedOut>() {
+        Some(timed_out) => timed_out.message(),
+        None => format!("{what}: {}", panic_message(panic)),
+    }
 }
 
 fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
@@ -1039,6 +1423,43 @@ fn get_after_operations(manifest: &Manifest) -> TestOperations {
         result.push(unsupported_operation(probe.clone()));
     }
     result
+}
+
+/// `simpleDiff(result, expected)`: a line diff of the two values' JSON for
+/// the report.
+pub fn simple_diff(result: &Value, expected: &Value) -> String {
+    let result_tokens = tokenize(&to_json_value(result));
+    let expected_tokens = tokenize(&to_json_value(expected));
+    let max_length = result_tokens.len().max(expected_tokens.len());
+    let mut diff = String::new();
+
+    diff += "<pre>\n";
+    let flush = |vec: &[String], pos: usize, out: &mut String, separator: &str| {
+        for item in &vec[pos..] {
+            *out += &format!("{separator}{item}\n");
+        }
+    };
+
+    for i in 0..max_length {
+        if result_tokens.len() <= i {
+            flush(&expected_tokens, i, &mut diff, "-");
+            break;
+        }
+
+        if expected_tokens.len() <= i {
+            flush(&result_tokens, i, &mut diff, "+");
+            break;
+        }
+
+        if result_tokens[i] != expected_tokens[i] {
+            diff += &format!("<b>-{}</b>\n", expected_tokens[i]);
+            diff += &format!("<b>+{}</b>\n", result_tokens[i]);
+        } else {
+            diff += &format!("{}\n", result_tokens[i]);
+        }
+    }
+    diff += "</pre>\n";
+    diff
 }
 
 /// `std::ostream << float` with the default format (`%g`, precision 6).

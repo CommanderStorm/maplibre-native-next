@@ -1,11 +1,10 @@
 // Ports the VectorTile tests of test/tile/vector_tile.test.cpp (the
 // VectorTileData ones are mln_tile's).
-//
-// TODO(port): Issue8542 (querySourceFeatures, queries).
 
 use mln_actor::{RunLoop, TaggedScheduler, scheduler};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
+use mln_renderer::query::SourceQueryOptions;
 use mln_renderer::tile::tile::Tile;
 use mln_renderer::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 use mln_renderer::tile::vector_tile::VectorTile;
@@ -83,6 +82,7 @@ fn mvt_tile(test: &VectorTileTest) -> VectorTile {
     )
 }
 
+// gtest: VectorTile.setError
 #[test]
 fn set_error() {
     let test = VectorTileTest::new();
@@ -93,6 +93,7 @@ fn set_error() {
     assert!(tile.is_complete());
 }
 
+// gtest: VectorTile.onError
 #[test]
 fn on_error() {
     let test = VectorTileTest::new();
@@ -102,4 +103,15 @@ fn on_error() {
     assert!(!tile.is_renderable());
     assert!(tile.is_loaded());
     assert!(tile.is_complete());
+}
+
+// gtest: VectorTile.Issue8542
+#[test]
+fn issue_8542() {
+    let test = VectorTileTest::new();
+    let tile = mvt_tile(&test);
+
+    // Query before data is set
+    let mut result = Vec::new();
+    tile.query_source_features(&mut result, &SourceQueryOptions::new(Some(vec!["layer".to_owned()]), None), None);
 }

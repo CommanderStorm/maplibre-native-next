@@ -42,7 +42,9 @@ impl Converter for SourceOptions {
                 }
             };
         }
-        Some(SourceOptions::default())
+        // gtests-data: C++ `return {};` is an empty optional, not a default
+        // SourceOptions (SourceOptions.Basic). Both callers treat the two alike.
+        None
     }
 }
 

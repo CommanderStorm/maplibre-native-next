@@ -141,17 +141,20 @@ fn loading_success(sprite_path: String, expected_images: usize, pixel_ratio: f32
 }
 
 // INSTANTIATE_TEST_SUITE_P(SpriteLoaderSprites, SpriteLoaderParametrized, ...)
+// gtest: SpriteLoaderParametrized.LoadingSuccess
 #[test]
 fn loading_success_sprite_1x() {
     loading_success(default_sprite_path(), 418, 1.0);
 }
 
+// gtest: SpriteLoaderParametrized.LoadingSuccess
 #[test]
 fn loading_success_versatiles_1x() {
     let path = cpp_path("test/fixtures/resources/versatiles-sprite/sprite").to_string_lossy().into_owned();
     loading_success(path, 112, 1.0);
 }
 
+// gtest: SpriteLoaderParametrized.LoadingSuccess
 #[test]
 fn loading_success_versatiles_2x() {
     let path = cpp_path("test/fixtures/resources/versatiles-sprite/sprite").to_string_lossy().into_owned();
@@ -168,6 +171,7 @@ fn expect_error(test: &SpriteLoaderTest) -> Rc<RefCell<Option<String>>> {
     error_message
 }
 
+// gtest: SpriteLoader.JSONLoadingFail
 #[test]
 fn json_loading_fail() {
     let test = SpriteLoaderTest::new(1.0);
@@ -181,6 +185,7 @@ fn json_loading_fail() {
     assert_eq!(Some("Failed by the test case".to_owned()), *error.borrow());
 }
 
+// gtest: SpriteLoader.ImageLoadingFail
 #[test]
 fn image_loading_fail() {
     let test = SpriteLoaderTest::new(1.0);
@@ -194,6 +199,7 @@ fn image_loading_fail() {
     assert_eq!(Some("Failed by the test case".to_owned()), *error.borrow());
 }
 
+// gtest: SpriteLoader.JSONLoadingCorrupted
 #[test]
 fn json_loading_corrupted() {
     let test = SpriteLoaderTest::new(1.0);
@@ -210,6 +216,7 @@ fn json_loading_corrupted() {
     assert!(error.starts_with("Failed to parse JSON: "), "{error}");
 }
 
+// gtest: SpriteLoader.ImageLoadingCorrupted
 #[test]
 fn image_loading_corrupted() {
     let test = SpriteLoaderTest::new(1.0);
@@ -224,6 +231,7 @@ fn image_loading_corrupted() {
     assert!(error.borrow().is_some());
 }
 
+// gtest: SpriteLoader.LoadingCancel
 #[test]
 fn loading_cancel() {
     let test = SpriteLoaderTest::new(1.0);

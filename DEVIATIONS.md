@@ -35,7 +35,7 @@ account for it.
   Encoding writes the same chunks, but flate2 (miniz_oxide) compresses
   differently from zlib: same pixels, different bytes. That changes
   compressed `probeFileSize` metrics (they measure `util::compress`); no
-  pixel comparison is affected. JPEG and WebP decoding are TODO(port).
+  pixel comparison is affected. JPEG decoding is TODO(port) (WebP: see [dem-heatmap] below).
 - **[expression] `fmin`/`fmax` signed zeros, verified** (entry above):
   `//difftest/util:math_difftest` (`observed_signed_zero_behaviour` and the
   full ±0/NaN/inf cross product through `util::min`/`max`/`clamp`) shows the
@@ -577,6 +577,15 @@ account for it.
   zoom-and-property-function}` differ from the OpenGL baselines; C++ WebGPU
   ignores both (metrics/ignores/platform-macos-webgpu.json), the port lists
   them in tools/render-test/ignores/rust-port.json with that reason.
+- **[layers] `within`: degenerate input** (style/expression/within.cpp,
+  util/geometry_util.cpp, `GeoJSONFeature(feature, canonical)` in
+  expression.cpp). Rings and lines with fewer than two points walk no
+  edges (C++ computes `size() - 1` on a `size_t` and reads out of bounds),
+  int64 tile-coordinate arithmetic wraps (overflow is UB in C++), and a
+  wagyu error in `fixupPolygons` while evaluating an expression on a
+  GeoJSON feature keeps the unfixed rings instead of throwing out of
+  `evaluate`. Valid input gives the same results (expression corpus
+  within/* and the within render tests).
 - **[mlt] Spec compliance over C++ compatibility (user decision, 2026-11-03).**
   Four fixture tiles (metrics/integration/tiles/14-4357-6245.mlt,
   counties-7-37-48.mlt, mapbox.mapbox-streets-v7/4-4-7.mlt and 4-5-7.mlt, and
@@ -719,11 +728,9 @@ account for it.
   WebGPU texture is (`deferredCreation`). A texture dropped off the render
   thread leaves its registry entry until `removeUnusedDynamicTextures`.
   Not observable.
-- **[symbols] No font faces** (`text/glyph_manager.cpp` HarfBuzz font
-  faces, `getCharGlyphIDType`, `finalizeSymbols`, `GeometryTile::
-  onGlyphsAvailable` shaping). Every character is a FontPBF glyph; styles
-  with `"font-faces"` (complex-script fonts) render with the PBF glyphs
-  instead. TODO(port).
+- **[symbols] Font faces** (style "font-faces", `text/glyph_manager.cpp`
+  HarfBuzz shaping). Ported, on mln_text's HBShaper (HarfRust; see the
+  [text] entries for its measured differences from HarfBuzz).
 - **[symbols] merge_lines keys** (`layout/merge_lines.cpp`). C++ keys its
   line-end maps on `util::hash(text, x, y)` (a `size_t` hash_combine); the
   port keys on the exact `(text, x, y)` tuple. Identical unless two C++
@@ -758,3 +765,58 @@ account for it.
   drawables hold copies, so it re-applies (hillshade) or rebuilds
   (color-relief) only when the bucket's masked geometry changed, and keeps
   one DEM texture per bucket and backfill generation. Same pixels.
+- **[dem-heatmap] WebP decoding on `image-webp`**
+  (platform/default/src/mln/util/webp_reader.cpp, libwebp). `decodeWEBP`
+  uses the image-webp crate (prefer-a-crate rule): lossless VP8L images,
+  e.g. the render tests' `*.ocean.webp` DEM tiles, decode to the same
+  pixels (both color-relief/hillshade combinations that use them pass);
+  lossy VP8 images use its bilinear chroma upsampling, libwebp's default
+  "fancy" upsampling, not compared pixel by pixel (no render test uses
+  lossy WebP). Failures return an empty image with the C++ warnings.
+- **[query] Combined query results in style order, topmost layer first**
+  (render_orchestrator.cpp `queryRenderedFeatures`). C++ concatenates the
+  per-layer results while iterating `filteredLayers`, an
+  `std::unordered_map` (libstdc++ hash order; C++ ignores the tests where
+  the order shows, e.g. query-tests/fill-translate/multiple-layers,
+  mapbox-gl-native#12701). The port goes from the topmost style layer down,
+  the order GL JS (which wrote the expectations) returns. Results within a
+  layer keep the C++ order (tiles by z, y, wrap, x; features by descending
+  sort index).
+- **[query] FeatureIndex internals** (geometry/feature_index.cpp). The
+  `RefIndexedSubfeature` strings are interned `Arc<str>`s instead of
+  references into the index's containers (`unordered_set`/`unordered_map`
+  node stability), so the index can be built on a worker and shared.
+  `addFeature` fetches the source layer, feature and feature state once per
+  indexed feature (C++: lazily at the first queried layer of the bucket;
+  the values are the same for every layer). Malformed geometry
+  (`convertFeature` throws, uncaught in C++) drops the feature.
+- **[query] Query-test JSON** (render-test/parser.cpp `toJSON(features)`).
+  The actual JSON is written by serde_json's pretty printer instead of
+  rapidjson's PrettyWriter: same layout (two-space indent, `"key": value`),
+  number spelling may differ. It is only parsed back for the `deepEqual`
+  comparison (numbers compared after `stripPrecision`), written to
+  actual.json and shown in the report's diff. Property maps are written in
+  key order (C++: `unordered_map` order). A query test whose render or
+  query already errored is reported with that error instead of being
+  re-checked (C++ would overwrite the message with "Invalid size for
+  actual image").
+- **[query] Per-test time limit in the runner** (port-only; render-test has
+  none). `--timeout=<seconds>` (default 60, 0 disables): a test still
+  running after the limit is reported as errored, "Test timed out after N
+  s", and the run continues with a fresh map. A watchdog thread posts a
+  task to the test thread's RunLoop that unwinds out of the test
+  (`resume_unwind`), caught by the runner's existing `catch_unwind`; so it
+  only catches tests that keep turning the RunLoop (every wait in the
+  runner and HeadlessFrontend does), not a hang inside one task.
+  `--self-check` runs without a limit.
+- **[query] Runner tile mode** (render-test/runner.cpp, `MapMode::Tile`).
+  A tile that fails to render errors the test; C++ sets "Failed rendering
+  tile: ..." and returns from `run` without checking the results, so the
+  test counts as passed. The label cut-off/duplication report writes keys
+  with `String::from_utf16_lossy` (C++: `codecvt_utf8<char16_t>`, UCS-2);
+  the messages only differ for astral characters.
+- **[symbols] GLFW surface present mode** (`glfw_webgpu_backend_impl.ipp`
+  uses FIFO when vsync'ed). FIFO blocks acquire/present on Wayland while
+  the window is hidden (no frame callbacks), which froze the GLFW app's
+  event loop when the user switched windows; the port uses MAILBOX when the
+  surface supports it (still vsync'ed, never blocks) and FIFO otherwise.

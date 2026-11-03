@@ -514,6 +514,7 @@ mod tests {
     // Atlas padding is not scaled with textureScale, so a 2x glyph quad is 1
     // logical pixel smaller than its 1x equivalent. GL JS-style fractional metrics
     // keep its center aligned with the 1x quad.
+    // gtest: getGlyphQuads.DoubleResolutionGlyphPreservesLogicalQuadSize
     #[test]
     fn get_glyph_quads_double_resolution_glyph_preserves_logical_quad_size() {
         let metrics1x = GlyphMetrics {
@@ -571,6 +572,7 @@ mod tests {
         assert_float_eq(quads2x[0].br.y - quads2x[0].tl.y, 31.0);
     }
 
+    // gtest: getIconQuads.normal
     #[test]
     fn get_icon_quads_normal() {
         let _layout = SymbolLayoutProperties::Evaluated::default();
@@ -606,6 +608,7 @@ mod tests {
         assert_float_eq(quad.br.y, bottom);
     }
 
+    // gtest: getIconQuads.style
     #[test]
     fn get_icon_quads_style() {
         let _anchor = Anchor::new(0.0, 0.0, 0.0, Some(0));

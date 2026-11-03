@@ -202,7 +202,7 @@ impl LineBucket {
             &mut self.vertices,
             LineBucket::layout_vertex,
             &mut self.segments,
-            SegmentBase::new,
+            &SegmentBase::new,
             |segment: &mut SegmentBase| segment,
             &mut self.triangles,
         );

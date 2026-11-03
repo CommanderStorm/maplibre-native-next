@@ -101,8 +101,9 @@ impl Default for PolylineGeneratorOptions {
 
 /// `LayoutVertexFunc`: `(p, e, round, up, dir, linesofar) -> vertex`.
 pub type LayoutVertexFunc<V> = fn(Point<i16>, Point<f64>, bool, bool, i8, i32) -> V;
-/// `CreateSegmentFunc`: `(vertexOffset, indexOffset) -> segment`.
-pub type CreateSegmentFunc<S> = fn(usize, usize) -> S;
+/// `CreateSegmentFunc`: `(vertexOffset, indexOffset) -> segment` (a
+/// `std::function`: the drawable builder's captures the builder).
+pub type CreateSegmentFunc<'a, S> = &'a dyn Fn(usize, usize) -> S;
 /// `GetSegmentFunc`.
 pub type GetSegmentFunc<S> = fn(&mut S) -> &mut SegmentBase;
 
@@ -176,7 +177,7 @@ pub struct PolylineGenerator<'a, V, S> {
     vertices: &'a mut Vec<V>,
     layout_vertex: LayoutVertexFunc<V>,
     segments: &'a mut Vec<S>,
-    create_segment: CreateSegmentFunc<S>,
+    create_segment: CreateSegmentFunc<'a, S>,
     get_segment: GetSegmentFunc<S>,
     indexes: &'a mut Vec<u16>,
 
@@ -190,7 +191,7 @@ impl<'a, V, S> PolylineGenerator<'a, V, S> {
         polyline_vertices: &'a mut Vec<V>,
         layout_vertex_func: LayoutVertexFunc<V>,
         polyline_segments: &'a mut Vec<S>,
-        create_segment_func: CreateSegmentFunc<S>,
+        create_segment_func: CreateSegmentFunc<'a, S>,
         get_segment_func: GetSegmentFunc<S>,
         polyline_indexes: &'a mut Vec<u16>,
     ) -> Self {

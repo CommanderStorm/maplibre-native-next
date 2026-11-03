@@ -158,7 +158,37 @@ impl HeadlessFrontend {
         }
     }
 
-    // TODO(port): pixelForLatLng, latLngForPixel.
+    // gtests-core: pixelForLatLng/latLngForPixel (test/map Map.RendererState),
+    // with RendererState::pixelForLatLng/latLngForPixel inlined.
+    /// `pixelForLatLng(coordinate)`.
+    pub fn pixel_for_lat_lng(&self, coordinate: &mln_util::geo::LatLng) -> mln_util::geo::ScreenCoordinate {
+        match self.shared.update_parameters.borrow().as_ref() {
+            Some(parameters) => {
+                let state = &parameters.transform_state;
+                // C++ computes the unwrapped LatLng but projects `latLng`
+                // (renderer_state.cpp); kept.
+                let mut unwrapped_lat_lng = coordinate.wrapped();
+                unwrapped_lat_lng.unwrap_for_shortest_path(&state.get_lat_lng(mln_util::geo::WrapMode::Wrapped));
+                let _ = unwrapped_lat_lng;
+                let point = state.lat_lng_to_screen_coordinate(coordinate);
+                mln_util::geo::ScreenCoordinate::new(point.x, f64::from(state.get_size().height) - point.y)
+            }
+            None => mln_util::geo::ScreenCoordinate::default(),
+        }
+    }
+
+    /// `latLngForPixel(point)`.
+    pub fn lat_lng_for_pixel(&self, point: &mln_util::geo::ScreenCoordinate) -> mln_util::geo::LatLng {
+        match self.shared.update_parameters.borrow().as_ref() {
+            Some(parameters) => {
+                let state = &parameters.transform_state;
+                let mut flipped_point = *point;
+                flipped_point.y = f64::from(state.get_size().height) - flipped_point.y;
+                state.screen_coordinate_to_lat_lng(&flipped_point, mln_util::geo::WrapMode::Wrapped)
+            }
+            None => mln_util::geo::LatLng::default(),
+        }
+    }
 
     pub fn read_still_image(&self) -> PremultipliedImage {
         self.shared.backend.read_still_image()

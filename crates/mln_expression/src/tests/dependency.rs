@@ -1,27 +1,30 @@
-// Ports test/style/expression/dependency.test.cpp (minus the
-// FormatSectionOverride helper, Distance and CustomLayer, which live in
-// other crates or are not ported yet).
+// Ports test/style/expression/dependency.test.cpp (its unused
+// FormatSectionOverride helper is a renderer type).
 
 use crate::collator_expression::CollatorExpression;
 use crate::dsl::*;
 use crate::expression::{Dependency, Expression};
 use crate::semiliteral::Semiliteral;
 
+// gtest: ExpressionDependencies.Get
 #[test]
 fn get_() {
     assert_eq!(Dependency::FEATURE, number(get_str("property"), None).dependencies());
 }
 
+// gtest: ExpressionDependencies.Id
 #[test]
 fn id_() {
     assert_eq!(Dependency::FEATURE, id().dependencies());
 }
 
+// gtest: ExpressionDependencies.Zoom
 #[test]
 fn zoom_() {
     assert_eq!(Dependency::ZOOM, zoom().dependencies());
 }
 
+// gtest: ExpressionDependencies.Convert
 #[test]
 fn convert() {
     assert_eq!(Dependency::FEATURE, to_color(string(get_str("color"), None), None).dependencies());
@@ -60,6 +63,7 @@ fn convert() {
     );
 }
 
+// gtest: ExpressionDependencies.Compare
 #[test]
 fn compare() {
     let c = || string(get_str("color"), None);
@@ -69,6 +73,7 @@ fn compare() {
     assert_eq!(Dependency::FEATURE, eq(c(), c()).dependencies());
 }
 
+// gtest: ExpressionDependencies.Interpolate
 #[test]
 fn interpolate_() {
     let l = || literal(0.0.into());
@@ -85,6 +90,7 @@ fn interpolate_() {
     interpolate(linear(), l(), vec![(0.0, l()), (0.0, l()), (0.0, n())]);
 }
 
+// gtest: ExpressionDependencies.Image
 #[test]
 fn image_() {
     assert_eq!(Dependency::IMAGE, image(literal_str("airport-11")).dependencies());
@@ -94,9 +100,27 @@ fn image_() {
     );
 }
 
-// TODO(port): ExpressionDependencies.Distance (the distance expression).
-// TODO(port): ExpressionDependencies.CustomLayer (mln_style).
+// gtest: ExpressionDependencies.Distance
+#[test]
+#[ignore = "TODO(port): the \"distance\" expression (src/mln/style/expression/distance.cpp) fails to parse"]
+fn distance() {
+    let point_geo_source = r#"{
+         "type": "Point",
+         "coordinates":[24.938492774963375,60.16980226227959]}"#;
+    let expr_str = format!(r#"["distance", {point_geo_source} ]"#);
+    let expression = create_expression_from_str(&expr_str).expect("distance expression");
+    assert_eq!(Dependency::FEATURE, expression.dependencies());
+}
 
+// gtest: ExpressionDependencies.CustomLayer
+#[test]
+#[ignore = "TODO(port): CustomLayer (style/layers/custom_layer*) and CustomLayerProperties"]
+fn custom_layer() {
+    // TODO(port): body: `CustomLayerProperties{makeMutable<CustomLayer::Impl>("", nullptr)}.getDependencies()`
+    // is `Dependency::None` (an mln_style test once CustomLayer exists).
+}
+
+// gtest: ExpressionDependencies.Semiliteral
 #[test]
 fn semiliteral() {
     let expression = Semiliteral::new(vec![get_str("property"), zoom()]);

@@ -2,3 +2,4 @@
 /user.bazelrc
 /.nix-shell/
 /target/
+__pycache__/

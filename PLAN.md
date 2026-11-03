@@ -162,6 +162,8 @@ per pair when we get there, from the measured edges.
 | M5 | Symbols and text | HarfRust shaping difftests; glyph PBFs; collision and placement; `text-*` and `icon-*` render tests |
 | M6 | Rest of the style spec, query tests, platform shells | |
 
+Status 2026-11-03 17:40 (verified): full shared render suite **1326 of 1460 passed, 0 failed**; all of Liberty's layer types render in `//platform/glfw:mln-glfw`. Next focus (user): unit-test parity.
+
 Near-term target (2026-11-03), **OpenFreeMap Liberty**: 111 layers
 (background, raster PNG z0-6, 16 fill incl. 2 `fill-pattern`, 67 line incl. 17
 `line-dasharray`, 25 symbol with glyph PBFs and sprite icons, 1
@@ -182,11 +184,15 @@ all on the M1 critical path:
 | `style` | `mln_style_types`, `mln_style` (incl. `style/conversion/*` converters and `PropertyExpression`) | parse the M1 test styles into `Style::Impl` with `BackgroundLayer` properties, transitions and functions (finished) |
 | `shaping` (M5 groundwork, replaces `text`) | `mln_text` (shaping.cpp, BiDi, glyph_manager), `mln_util::i18n`, `//difftest/shaping` | line breaking and positioning identical to C++; BiDi matched against ICU (parked: stub the rest; `symbols` takes over mln_text) |
 | `glfw` (smoke test, parked) | `//platform/glfw`, `mln_webgpu::SurfaceBackend`, online/HTTP file source, `Style::load_url` | `mln-glfw` opens OpenFreeMap Liberty over HTTPS in a window (background, fill, line today) |
-| `dem-heatmap` (conformance wave) | raster-dem/hillshade, heatmap, color-relief | their render tests (79 blocked) |
-| `conformance` (OpenFreeMap / conformance wave) | raster (incl. image sources), fill-extrusion, PatternAtlas + pattern hooks | full-suite pass count up; Liberty's raster, buildings, dashes and patterns |
+| `dem-heatmap` (conformance wave) | raster-dem/hillshade, heatmap, color-relief | their render tests (79 blocked) (finished: heatmap 17/17, hillshade 27/27, color-relief 5/5) |
+| `query` (conformance wave) | query tests (`queryRenderedFeatures`, feature index), runner operations, //tools/render-test, the orchestrator | 124 query tests + ~65 operation-blocked tests |
+| `text-conformance` (conformance wave) | non-placement symbol failures (vertical text, variable anchors, icon-text-fit, line labels, formatted text, ...) | the text/icon/symbol tests that don't need placement |
+| `conformance` (OpenFreeMap / conformance wave) | raster (incl. image sources), fill-extrusion, PatternAtlas + pattern hooks | full-suite pass count up; Liberty's raster, buildings, dashes and patterns (finished: ~160 tests; port ignore list down to ~43) |
 | `symbols` (OpenFreeMap / conformance wave) | symbol layout, glyph and icon atlases, collision, placement, symbol drawables; stubs (e.g. LTR-only) where needed | `text-*`, `icon-*`, `symbol-*` render tests (61 groups); Liberty's 25 symbol layers |
+| `gtests-core` (unit-test parity) | C++ gtests in test/{util,map,api,actor,math,algorithm,geometry,renderer,platform}; `tools/gtest-parity` with `// gtest: Group.Name` markers | parity table per module |
+| `gtests-data` (unit-test parity) | C++ gtests in test/{style,storage,text,tile,sprite,gl} | parity table per module |
 | `sources` (M3) | `mln_style` sources (`source*.rs`, `sources/`, `conversion/source.rs`, GeoJSON conversion), `mln_renderer::{sources,tile}` (RenderSource, TilePyramid, Tile, GeometryTile, GeometryTileWorker, tile loaders, GeoJSON/vector tiles) | GeoJSON and vector sources load tiles and run the worker that creates buckets |
-| `layers` (M3) | `mln_renderer::{buckets,layers}` for circle, fill, line (+ raster), paint property binders, their tweakers; the matching `mln_webgpu`/`mln_gfx` additions (shader attribute tables, polyline building) | circle/fill/line drawables render; the M3 render tests pass |
+| `layers` (M3) | `mln_renderer::{buckets,layers}` for circle, fill, line (+ raster), paint property binders, their tweakers; the matching `mln_webgpu`/`mln_gfx` additions (shader attribute tables, polyline building) | circle/fill/line drawables render; the M3 render tests pass (finished: circle 63/63, line 51/51, within, feature state, debug tile borders) |
 | `text` (second wave, replaces `render`) | `mln_text`, `//difftest/text` | HBShaper on HarfRust + skrifa, shaping difftest exact over HarfBuzz's 146 test fonts; glyph PBFs; rasterization (finished) |
 | `tile` (third wave, replaces `runner`) | `//vendor/{protozero,vector-tile}`, `mln_tile` (MVT path), `//difftest/tile` | MVT decoding identical to C++ on every fixture tile (finished; also ported wagyu) |
 | `geometry` (third wave, replaces `expression`) | `//vendor/{earcut,geojson-vt,supercluster,kdbush,polylabel,cheap-ruler,shelf-pack}` (wagyu went to `tile`), `//difftest/geometry` | the vendored geometry libraries, exact |

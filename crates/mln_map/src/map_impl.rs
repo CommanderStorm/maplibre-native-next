@@ -302,6 +302,7 @@ impl MapImpl {
                 time_point,
                 transform_state: self.transform.borrow().get_state().clone(),
                 glyph_url: style_impl.get_glyph_url().to_owned(),
+                font_faces: style_impl.get_font_faces(),
                 sprite_loaded: style_impl.are_sprites_loaded(),
                 transition_options: style_impl.get_transition_options(),
                 light: style_impl.get_light_impl(),

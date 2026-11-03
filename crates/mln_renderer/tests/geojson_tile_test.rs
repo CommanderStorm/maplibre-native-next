@@ -117,6 +117,7 @@ impl TileObserver for StubTileObserver {
     }
 }
 
+// gtest: GeoJSONTile.SynchronousUpdate
 #[test]
 fn synchronous_update() {
     let test = GeoJSONTileTest::new();
@@ -131,6 +132,7 @@ fn synchronous_update() {
     assert!(tile.is_renderable());
 }
 
+// gtest: GeoJSONTile.Issue7648
 #[test]
 fn issue_7648() {
     let test = GeoJSONTileTest::new();
@@ -177,6 +179,7 @@ fn issue_7648() {
 
 // Tests that tiles remain renderable if they have been renderable and then
 // had an error sent to them, e.g. when revalidating/refreshing the request.
+// gtest: GeoJSONTile.Issue9927
 #[test]
 fn issue_9927() {
     let test = GeoJSONTileTest::new();

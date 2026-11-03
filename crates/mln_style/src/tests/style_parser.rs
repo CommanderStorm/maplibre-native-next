@@ -15,28 +15,6 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(base).join("maplibre+/test/fixtures/style_parser")
 }
 
-/// TEST_P(StyleParserTest, ParseStyle) fixtures that need code the port does
-/// not have yet, with the reason.
-// TODO(port): enable these with source conversion (style/conversion/source.cpp
-// and the source types).
-const TODO_FIXTURES: &[(&str, &str)] = &[
-    ("geojson-invalid-data", "expects the GeoJSON source conversion's error"),
-    ("geojson-missing-data", "expects the GeoJSON source conversion's error"),
-    ("image-coordinates", "expects the image source conversion's error"),
-    ("image-url", "expects the image source conversion's error"),
-];
-
-/// Until sources are ported, the parser logs (and skips) every source with
-/// this warning, which no fixture expects. The other messages, from the
-/// layers, are checked as in C++.
-// TODO(port): drop with source conversion.
-fn is_unported_source_warning(message: &super::util::LogMessage) -> bool {
-    message.severity == EventSeverity::Warning
-        && message.event == Event::ParseStyle
-        && message.msg.starts_with("source type '")
-        && message.msg.ends_with("' is not ported yet")
-}
-
 /// `populateNames`: every `<name>.info.json` in the fixture directory.
 fn fixture_names() -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(fixtures_dir())
@@ -50,7 +28,7 @@ fn fixture_names() -> Vec<String> {
     names
 }
 
-/// TEST_P(StyleParserTest, ParseStyle). Returns the failure, if any.
+/// One `StyleParserTest.ParseStyle` instance. Returns the failure, if any.
 fn parse_style_fixture(name: &str) -> Result<(), String> {
     let base = fixtures_dir().join(name);
     let log = FixtureLog::new();
@@ -78,7 +56,7 @@ fn parse_style_fixture(name: &str) -> Result<(), String> {
                 }
             }
         }
-        let unchecked: Vec<_> = log.unchecked().into_iter().filter(|m| !is_unported_source_warning(m)).collect();
+        let unchecked = log.unchecked();
         if !unchecked.is_empty() {
             return Err(format!("Unchecked Log Messages ({name}/{property_name}): {unchecked:?}"));
         }
@@ -86,28 +64,24 @@ fn parse_style_fixture(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// TEST_P(StyleParserTest, ParseStyle), instantiated over every fixture.
+// gtest: StyleParserTest.ParseStyle
 #[test]
 fn parse_style() {
     let names = fixture_names();
     assert!(names.len() > 0);
     let mut failures = Vec::new();
-    let mut passed = 0;
     for name in &names {
-        if TODO_FIXTURES.iter().any(|(n, _)| n == name) {
-            continue;
-        }
-        match parse_style_fixture(name) {
-            Ok(()) => passed += 1,
-            Err(failure) => failures.push(failure),
+        if let Err(failure) = parse_style_fixture(name) {
+            failures.push(failure);
         }
     }
-    eprintln!("ParseStyle: {passed} fixtures pass, {} skipped (TODO)", TODO_FIXTURES.len());
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+// gtest: StyleParser.SpriteAsString
 #[test]
 fn sprite_as_string() {
-    // TEST(StyleParser, SpriteAsString)
     let mut parser = Parser::default();
     parser
         .parse(
@@ -123,9 +97,9 @@ fn sprite_as_string() {
     assert_eq!("default", result[0].id);
 }
 
+// gtest: StyleParser.SpriteAsArrayEmpty
 #[test]
 fn sprite_as_array_empty() {
-    // TEST(StyleParser, SpriteAsArrayEmpty)
     let mut parser = Parser::default();
     parser
         .parse(
@@ -138,9 +112,9 @@ fn sprite_as_array_empty() {
     assert_eq!(0, parser.sprites.len());
 }
 
+// gtest: StyleParser.SpriteAsArraySingle
 #[test]
 fn sprite_as_array_single() {
-    // TEST(StyleParser, SpriteAsArraySingle)
     let mut parser = Parser::default();
     parser
         .parse(
@@ -159,9 +133,9 @@ fn sprite_as_array_single() {
     assert_eq!("default", result[0].id);
 }
 
+// gtest: StyleParser.SpriteAsArrayMultiple
 #[test]
 fn sprite_as_array_multiple() {
-    // TEST(StyleParser, SpriteAsArrayMultiple)
     let mut parser = Parser::default();
     parser
         .parse(
@@ -185,9 +159,9 @@ fn sprite_as_array_multiple() {
     assert_eq!("hiking", result[1].id);
 }
 
+// gtest: StyleParser.FontStacks
 #[test]
 fn font_stacks() {
-    // TEST(StyleParser, FontStacks)
     let mut parser = Parser::default();
     let _ = parser.parse(&std::fs::read_to_string(fixtures_dir().join("font_stacks.json")).unwrap());
     let expected: BTreeSet<FontStack> = [vec!["a"], vec!["a", "b"], vec!["a", "b", "c"]]
@@ -218,16 +192,16 @@ fn arial_helvetica() -> BTreeSet<FontStack> {
     [vec!["Arial".to_owned()], vec!["Helvetica".to_owned()]].into_iter().collect()
 }
 
+// gtest: StyleParser.FontStacksNoTextField
 #[test]
 fn font_stacks_no_text_field() {
-    // TEST(StyleParser, FontStacksNoTextField)
     let result = symbol_font_stacks(r#"{"text-font": ["a"]}"#);
     assert_eq!(0, result.len());
 }
 
+// gtest: StyleParser.FontStacksCaseExpression
 #[test]
 fn font_stacks_case_expression() {
-    // TEST(StyleParser, FontStacksCaseExpression)
     let result = symbol_font_stacks(
         r#"{
                 "text-field": "a",
@@ -237,9 +211,9 @@ fn font_stacks_case_expression() {
     assert_eq!(arial_helvetica(), result);
 }
 
+// gtest: StyleParser.FontStacksMatchExpression
 #[test]
 fn font_stacks_match_expression() {
-    // TEST(StyleParser, FontStacksMatchExpression)
     let result = symbol_font_stacks(
         r#"{
                 "text-field": "a",
@@ -249,9 +223,9 @@ fn font_stacks_match_expression() {
     assert_eq!(arial_helvetica(), result);
 }
 
+// gtest: StyleParser.FontStacksStepExpression
 #[test]
 fn font_stacks_step_expression() {
-    // TEST(StyleParser, FontStacksStepExpression)
     let result = symbol_font_stacks(
         r#"{
                 "text-field": "a",
@@ -261,9 +235,9 @@ fn font_stacks_step_expression() {
     assert_eq!(arial_helvetica(), result);
 }
 
+// gtest: StyleParser.FontStacksGetExpression
 #[test]
 fn font_stacks_get_expression() {
-    // TEST(StyleParser, FontStacksGetExpression)
     // Invalid style, but not currently validated.
     let result = symbol_font_stacks(
         r#"{
@@ -274,9 +248,9 @@ fn font_stacks_get_expression() {
     assert_eq!(0, result.len());
 }
 
+// gtest: StyleParser.ZoomCurve
 #[test]
 fn zoom_curve() {
-    // TEST(StyleParser, ZoomCurve)
     use crate::expression::dsl::{interpolate, linear, literal, zoom};
     use crate::expression::find_zoom_curve_checked;
     use mln_expression::value::Value;

@@ -17,6 +17,7 @@ fn parse_semiliteral(json: &str, ctx: &mut ParsingContext, property: bool) -> Pa
     }
 }
 
+// gtest: Semiliteral.ConstantFolding
 #[test]
 fn constant_folding() {
     let mut ctx = ParsingContext::new();
@@ -29,6 +30,7 @@ fn constant_folding() {
     );
 }
 
+// gtest: Semiliteral.Invalid
 #[test]
 fn invalid() {
     for json in [
@@ -54,6 +56,7 @@ fn invalid() {
     }
 }
 
+// gtest: Semiliteral.FirstError
 #[test]
 fn first_error() {
     let mut errors = ParsingContext::new();

@@ -15,6 +15,8 @@ pub mod parser;
 pub mod render_test;
 pub mod runner;
 pub mod std_random;
+pub mod test_runner_common;
+pub mod watchdog;
 
 pub use render_test::run_render_tests;
 

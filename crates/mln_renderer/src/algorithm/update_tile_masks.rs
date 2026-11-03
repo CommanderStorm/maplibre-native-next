@@ -143,6 +143,7 @@ mod tests {
         }
     }
 
+    // gtest: UpdateTileMasks.NoChildren
     #[test]
     fn no_children() {
         validate(vec![(u(0, 0, 0), vec![c(0, 0, 0)])]);
@@ -151,6 +152,7 @@ mod tests {
         validate(vec![(u(1, 0, 0), vec![c(0, 0, 0)]), (u(2, 2, 3), vec![c(0, 0, 0)])]);
     }
 
+    // gtest: UpdateTileMasks.ParentAndFourChildren
     #[test]
     fn parent_and_four_children() {
         validate(vec![
@@ -165,6 +167,7 @@ mod tests {
         ]);
     }
 
+    // gtest: UpdateTileMasks.OneChild
     #[test]
     fn one_child() {
         validate(vec![
@@ -175,6 +178,7 @@ mod tests {
         ]);
     }
 
+    // gtest: UpdateTileMasks.Complex
     #[test]
     fn complex() {
         validate(vec![

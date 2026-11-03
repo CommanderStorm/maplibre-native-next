@@ -11,9 +11,12 @@ rust_library(
     ),
     visibility = ["//visibility:public"],
     deps = [
+        "//crates/mln_actor",
         "//crates/mln_platform_default_image",
         "//crates/mln_storage",
         "//crates/mln_util",
+        "//vendor/csscolorparser",
+        "//vendor/geojson",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "//vendor/pixelmatch",
         "@next_crates//:regex",
@@ -25,6 +28,7 @@ rust_library(
 TEST_DATA = [
     "manifests/linux-wgpu.json",
     "ignores/rust-port.json",
+    "@maplibre//metrics:expectations-platform-macos",
     "@maplibre//metrics:render-test-files",
 ]
 
@@ -91,10 +95,14 @@ rust_library(
         ":render_test",
         ":render_test_style",
         "//crates/mln_actor",
+        "//crates/mln_conversion",
         "//crates/mln_gfx",
         "//crates/mln_map",
         "//crates/mln_platform_default",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_renderer",
         "//crates/mln_storage",
+        "//crates/mln_style",
         "//crates/mln_util",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "@next_crates//:serde_json",

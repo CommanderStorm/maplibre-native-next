@@ -76,10 +76,8 @@ fn parses_our_manifest() {
         "render-tests/background-color/transition".to_string(),
         "https://github.com/mapbox/mapbox-gl-native/issues/10619".to_string()
     )));
-    assert!(ignores.contains(&(
-        "render-tests/fill-color/default".to_string(),
-        "TODO(port): beyond M1".to_string()
-    )));
+    // The port's own ignore file is read last (its entries come and go).
+    assert!(ignores.iter().any(|(id, _)| id.starts_with("query-tests/") || id.starts_with("render-tests/")));
     // M1 tests are not ignored by the port.
     assert!(!ignores.iter().any(|(id, _)| id == "render-tests/background-color/default"));
 
@@ -98,6 +96,10 @@ fn parses_our_manifest() {
         default.expectations,
         vec![
             format!("{INTEGRATION}/render-tests/background-color/default/"),
+            // platform-macos first: the runner checks the paths from the last
+            // one, so a platform-linux baseline wins where both exist.
+            "../maplibre+/metrics/expectations/platform-macos/render-tests/background-color/default/"
+                .to_string(),
             "../maplibre+/metrics/expectations/platform-linux/render-tests/background-color/default/"
                 .to_string(),
         ]

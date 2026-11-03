@@ -1,7 +1,8 @@
 // Ports test/tile/vector_tile.test.cpp.
 //
-// TODO(port): VectorTile.setError, VectorTile.onError, VectorTile.Issue8542
-// (they need VectorMVTTile, TileParameters and the renderer).
+// VectorTile.setError, VectorTile.onError and VectorTile.Issue8542 need
+// VectorMVTTile, TileParameters and the renderer: they are in
+// crates/mln_renderer/tests/vector_tile_test.rs.
 
 use crate::{VectorMLTTileData, VectorMVTTileData};
 use maplibre_native_base::Identifier;
@@ -17,6 +18,7 @@ fn read_file(path: &str) -> Vec<u8> {
     std::fs::read(PathBuf::from(base).join("maplibre+").join(path)).unwrap()
 }
 
+// gtest: VectorTileData.ParseResults
 #[test]
 fn parse_results() {
     let data = VectorMVTTileData::new(Arc::new(read_file("test/fixtures/map/issue12432/0-0-0.mvt")));
@@ -52,6 +54,7 @@ fn parse_results() {
     assert_eq!(feature.get_value("invalid"), None);
 }
 
+// gtest: VectorTileData.MLTParseResults
 #[test]
 fn mlt_parse_results() {
     struct SubCase {

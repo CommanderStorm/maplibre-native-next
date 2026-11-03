@@ -6,9 +6,6 @@
 // `SymbolFeature`s (see symbol_feature.rs), so it can wait for glyphs and
 // images across worker messages.
 //
-// TODO(port): font faces (complex scripts shaped with HarfBuzz: every
-// character is a FontPBF glyph here; `getCharGlyphIDType` without faces),
-// so `finalizeSymbols` has nothing to do.
 
 use crate::bucket::{Bucket, BucketPtr, get_retain_feature_id};
 use crate::bucket_parameters::BucketParameters;
@@ -67,6 +64,36 @@ fn has_text_font(layout: &SymbolLayoutProperties::PossiblyEvaluated) -> bool {
 }
 fn has_icon_image(layout: &SymbolLayoutProperties::PossiblyEvaluated) -> bool {
     layout.get::<IconImage>().constant().is_none_or(|t| !t.empty())
+}
+
+/// `getCharGlyphIDType(ch, stack, faces, lastCharType)`.
+fn get_char_glyph_id_type(
+    ch: u16,
+    stack: &[String],
+    faces: &Option<Arc<mln_text::glyph::FontFaces>>,
+    last_char_type: GlyphIDType,
+) -> GlyphIDType {
+    let Some(faces) = faces else {
+        return GlyphIDType::FontPBF;
+    };
+
+    if i18n::is_variation_selector1(ch) {
+        return last_char_type;
+    }
+
+    for name in stack {
+        for face in faces.iter() {
+            if &face.name == name {
+                for range in &face.ranges {
+                    if u32::from(ch) >= range.0 && u32::from(ch) <= range.1 {
+                        return face.type_;
+                    }
+                }
+            }
+        }
+    }
+
+    GlyphIDType::FontPBF
 }
 
 /// `sectionOptionsToValue(options)`.
@@ -383,22 +410,72 @@ impl SymbolLayout {
                     let u16_string = apply_arabic_shaping(&u8string.encode_utf16().collect::<Vec<u16>>());
                     // `while (*u16Char)`: the text ends at the first NUL.
                     let end = u16_string.iter().position(|&c| c == 0).unwrap_or(u16_string.len());
-                    let sub_string = &u16_string[..end];
+                    let chars = &u16_string[..end];
                     let section_scale = section.font_scale.unwrap_or(1.0);
                     let section_font_stack = section.font_stack.clone().unwrap_or_else(|| base_font_stack.clone());
+                    let font_faces = &layout_parameters.font_faces;
 
-                    // Without font faces every character is a FontPBF glyph
-                    // (getCharGlyphIDType), so the section is one substring.
+                    let mut sub_string: Vec<u16> = Vec::new();
+                    // `*u16Char` of an empty string is the terminating NUL.
+                    let mut sub_string_type = get_char_glyph_id_type(
+                        chars.first().copied().unwrap_or(0),
+                        &section_font_stack,
+                        font_faces,
+                        GlyphIDType::FontPBF,
+                    );
+
+                    for &ch in chars {
+                        let ch_type = get_char_glyph_id_type(ch, &section_font_stack, font_faces, sub_string_type);
+                        if ch_type != sub_string_type {
+                            if !sub_string.is_empty() {
+                                formatted_text.add_text_section(
+                                    &sub_string,
+                                    section_scale,
+                                    &section_font_stack,
+                                    sub_string_type,
+                                    false,
+                                    section.text_color,
+                                );
+                                section_table.insert(formatted_text.get_sections().len() - 1, section_index);
+                                if sub_string_type != GlyphIDType::FontPBF {
+                                    layout_parameters
+                                        .glyph_dependencies
+                                        .shapes
+                                        .entry(section_font_stack.clone())
+                                        .or_default()
+                                        .entry(sub_string_type)
+                                        .or_default()
+                                        .insert(sub_string.clone());
+                                }
+                            }
+
+                            sub_string.clear();
+                            sub_string_type = ch_type;
+                        }
+
+                        sub_string.push(ch);
+                    }
+
                     if !sub_string.is_empty() {
                         formatted_text.add_text_section(
-                            sub_string,
+                            &sub_string,
                             section_scale,
                             &section_font_stack,
-                            GlyphIDType::FontPBF,
+                            sub_string_type,
                             true,
                             section.text_color,
                         );
                         section_table.insert(formatted_text.get_sections().len() - 1, section_index);
+                        if sub_string_type != GlyphIDType::FontPBF {
+                            layout_parameters
+                                .glyph_dependencies
+                                .shapes
+                                .entry(section_font_stack.clone())
+                                .or_default()
+                                .entry(sub_string_type)
+                                .or_default()
+                                .insert(sub_string.clone());
+                        }
                     }
                 }
 
@@ -998,9 +1075,11 @@ impl SymbolLayout {
             }
         };
         if needs_segment {
+            // text-conformance: C++ `triangles.elements()` counts indices
+            // (three per triangle), not triangles.
             let mut segment = mln_gfx::shaders::segment::SegmentBase::with_lengths(
                 buffer.attribute_data.len(),
-                buffer.triangles.len() / 3,
+                buffer.triangles.len(),
                 0,
                 0,
             );
@@ -1134,11 +1213,9 @@ impl SymbolLayout {
                         .last()
                         .is_none_or(|last| last.vertex_length + VERTEX_LENGTH > u16::MAX as usize)
                     {
-                        let index_offset = if feature.along_line {
-                            collision_buffer.indices.len() / 3
-                        } else {
-                            collision_buffer.indices.len() / 2
-                        };
+                        // text-conformance: C++ `triangles/lines.elements()`
+                        // counts indices, not primitives.
+                        let index_offset = collision_buffer.indices.len();
                         collision_buffer.segments.push(mln_gfx::shaders::segment::SegmentBase::new(
                             collision_buffer.vertices.len(),
                             index_offset,
@@ -1216,9 +1293,79 @@ impl Layout for SymbolLayout {
     }
 
     /// `finalizeSymbols(HBShapeResults&)`.
-    fn finalize_symbols(&mut self, _results: &mut HBShapeResults) {
-        // TODO(port): font faces (HarfBuzz-shaped sections). Without them no
-        // section needs shaping.
+    fn finalize_symbols(&mut self, results: &mut HBShapeResults) {
+        for feature in self.features.iter_mut() {
+            if feature.geometry.is_empty() {
+                continue;
+            }
+
+            let Some(formatted_text) = &feature.formatted_text else {
+                continue;
+            };
+            if !formatted_text.has_need_hb_shape_text() || formatted_text.hb_shaped() {
+                continue;
+            }
+
+            let mut shaped_string = TaggedString::default();
+
+            let sections = formatted_text.get_sections();
+            let style_text = formatted_text.get_styled_text();
+
+            let mut sub_string: Vec<u16> = Vec::new();
+            let mut section_index = style_text.1.first().copied().unwrap_or(0);
+
+            let mut apply_sub_string = |sub_string: &[u16], section_index: u8, shaped_string: &mut TaggedString| {
+                if sub_string.is_empty() {
+                    return;
+                }
+                let section = &sections[section_index as usize];
+                if section.type_ == GlyphIDType::FontPBF {
+                    shaped_string.add_text_section(
+                        sub_string,
+                        section.scale,
+                        &section.font_stack,
+                        section.type_,
+                        section.key_section,
+                        section.text_color,
+                    );
+                } else {
+                    let result = results
+                        .entry(section.font_stack.clone())
+                        .or_default()
+                        .entry(section.type_)
+                        .or_default()
+                        .entry(sub_string.to_vec())
+                        .or_default();
+
+                    shaped_string.add_text_section_with_adjusts(
+                        &result.str_,
+                        section.scale,
+                        &section.font_stack,
+                        section.type_,
+                        &Some(result.adjusts.clone()),
+                        section.key_section,
+                        section.text_color,
+                    );
+                }
+            };
+
+            for (ch, sec) in style_text.0.iter().zip(style_text.1.iter()) {
+                if section_index != *sec {
+                    apply_sub_string(&sub_string, section_index, &mut shaped_string);
+
+                    sub_string.clear();
+                    section_index = *sec;
+                }
+
+                sub_string.push(*ch);
+            }
+
+            apply_sub_string(&sub_string, section_index, &mut shaped_string);
+
+            shaped_string.set_hb_shaped(true);
+            feature.formatted_text = Some(shaped_string);
+        }
+
         self.need_finalize_symbols_val = false;
     }
 

@@ -40,6 +40,8 @@ pub const LINE_LAYER_SSBO_COUNT: usize = DRAWABLE_RESERVED_UBO_COUNT;
 
 /// `ClippingMask` UBO (`idClippingMaskUBO = idDrawableReservedVertexOnlyUBO`).
 pub const ID_CLIPPING_MASK_UBO: usize = ID_DRAWABLE_RESERVED_VERTEX_ONLY_UBO;
+/// `idDebugUBO = getEnumValue(drawableReservedUBOCount, ...)` (layers: debug).
+pub const ID_DEBUG_UBO: usize = DRAWABLE_RESERVED_UBO_COUNT;
 
 // fill/color-relief/fill-extrusion reserve one more SSBO, so the max of the
 // layer SSBO counts is FILL_LAYER_SSBO_COUNT.
@@ -75,6 +77,8 @@ pub const ID_FILL_IMAGE_TEXTURE: usize = 0;
 pub const FILL_TEXTURE_COUNT: usize = 1;
 pub const ID_LINE_IMAGE_TEXTURE: usize = 0;
 pub const ID_LINE_DASH_TEXTURE: usize = 1;
+/// layers: debug
+pub const ID_DEBUG_OVERLAY_TEXTURE: usize = 0;
 pub const LINE_TEXTURE_COUNT: usize = 2;
 pub const MAX_TEXTURE_COUNT_PER_SHADER: usize = 3;
 
@@ -82,6 +86,8 @@ pub const MAX_TEXTURE_COUNT_PER_SHADER: usize = 3;
 pub const ID_BACKGROUND_POS_VERTEX_ATTRIBUTE: usize = 0;
 pub const BACKGROUND_VERTEX_ATTRIBUTE_COUNT: usize = 1;
 pub const ID_CLIPPING_MASK_POS_VERTEX_ATTRIBUTE: usize = 0;
+/// layers: debug
+pub const ID_DEBUG_POS_VERTEX_ATTRIBUTE: usize = 0;
 
 pub const ID_CIRCLE_POS_VERTEX_ATTRIBUTE: usize = 0;
 // Data driven

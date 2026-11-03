@@ -409,6 +409,11 @@ shader_source!(
     &[]
 );
 
+// layers: debug (src/mln/shaders/webgpu/debug.cpp)
+const DEBUG_ATTRIBUTES: &[AttributeInfo] = &[attr(5, Short2, ID_DEBUG_POS_VERTEX_ATTRIBUTE)];
+const DEBUG_TEXTURES: &[TextureInfo] = &[tex(0, ID_DEBUG_OVERLAY_TEXTURE)];
+shader_source!(DEBUG_SHADER, DEBUG_SHADER, "DebugShader", DEBUG_ATTRIBUTES, DEBUG_TEXTURES);
+
 /// `ShaderSource<shader_id, WebGPU>`, or `None` for types not ported yet.
 pub fn shader_source(shader_id: BuiltIn) -> Option<&'static ShaderSource> {
     match shader_id {
@@ -441,6 +446,7 @@ pub fn shader_source(shader_id: BuiltIn) -> Option<&'static ShaderSource> {
         BuiltIn::SymbolTextAndIconShader => Some(&SYMBOL_TEXT_AND_ICON_SHADER),
         BuiltIn::CollisionBoxShader => Some(&COLLISION_BOX_SHADER),
         BuiltIn::CollisionCircleShader => Some(&COLLISION_CIRCLE_SHADER),
+        BuiltIn::DebugShader => Some(&DEBUG_SHADER), // layers: debug
         _ => None,
     }
 }

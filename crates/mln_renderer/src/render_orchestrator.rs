@@ -8,9 +8,9 @@
 // the renderer, so that half is `OrchestratorSourceObserver`, an `Rc` that
 // shares the orchestrator's observer.
 //
-// Not yet ported (TODO(port) at each use): the glyph and image managers
-// beyond the loaded flag, the light, symbol placement, queries, feature
-// state, render targets, debug layer groups.
+// Not yet ported (TODO(port) at each use): annotations, glyph eviction,
+// image-manager memory trimming, DynamicFeatureIndex (location indicator),
+// shape-annotation and feature-extension queries, debug layer groups.
 
 use crate::change_request::{ChangeRequest, UniqueChangeRequestVec};
 use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlas, DynamicTextureAtlasPtr};
@@ -205,7 +205,10 @@ pub struct RenderOrchestrator {
     // conformance: renderLight.
     render_light: crate::render_light::RenderLight,
 
-    // TODO(port): crossTileSymbolIndex, placementController,
+    // symbols:
+    cross_tile_symbol_index: crate::text::cross_tile_symbol_index::CrossTileSymbolIndex,
+    placement_controller: crate::text::placement::PlacementController,
+    // TODO(port):
     // layersNeedPlacement, filteredLayersForSource.
     background_layer_as_color: bool,
     context_lost: bool,
@@ -227,6 +230,9 @@ pub struct RenderOrchestrator {
     /// The `layerTweakers` (weak pointers) each C++ LayerGroupBase holds,
     /// keyed by the layer group's id (see change_request.rs).
     layer_group_tweakers: HashMap<SimpleIdentity, Vec<Weak<RefCell<dyn LayerTweaker>>>>,
+
+    /// `RenderItem::DebugLayerGroupMap debugLayerGroups` (layers: debug).
+    debug_layer_groups: crate::render_tree::DebugLayerGroupMap,
 
     // dem-heatmap: `std::vector<RenderTargetPtr> renderTargets`.
     render_targets: Vec<crate::render_target::RenderTargetPtr>,
@@ -256,6 +262,8 @@ impl RenderOrchestrator {
             transform_state: TransformState::default(),
             glyph_manager,
             image_manager,
+            cross_tile_symbol_index: Default::default(),
+            placement_controller: crate::text::placement::PlacementController::new(),
             dynamic_texture_atlas: Arc::new(DynamicTextureAtlas::new()),
             line_atlas: Rc::new(RefCell::new(LineAtlas::new())),
             pattern_atlas: Rc::new(RefCell::new(PatternAtlas::new())),
@@ -276,6 +284,7 @@ impl RenderOrchestrator {
             global_state: None,
             layer_groups_by_layer_index: BTreeMap::new(),
             layer_group_tweakers: HashMap::new(),
+            debug_layer_groups: BTreeMap::new(), // layers: debug
             render_targets: Vec::new(), // dem-heatmap
             pending_changes: Vec::new(),
         }
@@ -361,7 +370,7 @@ impl RenderOrchestrator {
         evaluation_parameters.global_state_changed = global_state_changed;
         evaluation_parameters.changed_global_state_keys = changed_global_state_keys.clone();
 
-        // TODO(port): annotationManager in TileParameters; glyphManager->setFontFaces.
+        // TODO(port): annotationManager in TileParameters.
         let mut tile_parameters = TileParameters {
             pixel_ratio: update_parameters.pixel_ratio,
             debug_options: update_parameters.debug_options,
@@ -384,6 +393,7 @@ impl RenderOrchestrator {
         };
 
         self.glyph_manager.set_url(&update_parameters.glyph_url);
+        self.glyph_manager.set_font_faces(update_parameters.font_faces.clone());
 
         // Update light. (conformance)
         let light_changed = !Arc::ptr_eq(&self.render_light.impl_, &update_parameters.light);
@@ -699,6 +709,7 @@ impl RenderOrchestrator {
             }
         }
 
+        let mut layers_need_placement: Vec<RenderLayerPtr> = Vec::new();
         let mut opaque_pass_cut_off_estimation = layer_render_items.len();
         for render_item in layer_render_items.values() {
             let mut render_layer = render_item.layer.borrow_mut();
@@ -715,7 +726,7 @@ impl RenderOrchestrator {
                 state: &update_parameters.transform_state,
             });
             if render_layer.needs_placement() {
-                // TODO(port): layersNeedPlacement.emplace_back(renderLayer).
+                layers_need_placement.push(render_item.layer.clone());
             }
             if render_tree_parameters.opaque_pass_cut_off == 0 {
                 opaque_pass_cut_off_estimation -= 1;
@@ -725,21 +736,76 @@ impl RenderOrchestrator {
             }
         }
 
-        // Symbol placement.
-        // TODO(port): crossTileSymbolIndex.addLayer for layersNeedPlacement.
+        // Symbol placement. (symbols)
+        use crate::text::cross_tile_symbol_index::AddLayerResult;
+        use crate::text::placement::Placement;
+        let mut symbol_buckets_changed = false;
+        let mut symbol_buckets_added = false;
+        let mut used_symbol_layers: BTreeSet<String> = BTreeSet::new();
+        let longitude = update_parameters
+            .transform_state
+            .get_lat_lng(mln_util::geo::WrapMode::Unwrapped)
+            .longitude() as f32;
+        for layer in layers_need_placement.iter().rev() {
+            let layer = layer.borrow();
+            let result = self.cross_tile_symbol_index.add_layer(&*layer, longitude);
+            if is_map_mode_continuous {
+                used_symbol_layers.insert(layer.get_id().to_owned());
+                symbol_buckets_added = symbol_buckets_added || result.contains(AddLayerResult::BUCKETS_ADDED);
+                symbol_buckets_changed = symbol_buckets_changed || result != AddLayerResult::NO_CHANGES;
+            }
+        }
+
         if is_map_mode_continuous {
-            // TODO(port): placementController (placementIsRecent,
-            // Placement::create, placeLayers, updateFadingTiles) and
-            // symbolFadeChange from the placement. No layer needs placement
-            // until symbols exist, so placement is a no-op apart from the
-            // fade change.
-            render_tree_parameters.placement_changed = false;
-            render_tree_parameters.symbol_fade_change = 1.0;
+            let tilted_view = update_parameters.transform_state.get_pitch() != 0.0;
+            let mut placement_update_period_override: Option<Duration> = None;
+            if symbol_buckets_added && !tilted_view {
+                // If the view is not tilted, we want *the new* symbols to
+                // show up faster, however simple setting `placementChanged`
+                // to `true` would initiate placement too often as new
+                // buckets usually come from several rendered tiles in a row
+                // within a short period of time. Instead, we squeeze
+                // placement update period to coalesce buckets updates from
+                // several tiles. On contrary, with the tilted view it's more
+                // important to make placement rarely for performance reasons
+                // and as the new symbols are normally "far away" and the
+                // user is not that interested to see them ASAP.
+                placement_update_period_override = Some(Duration::from_millis(30));
+            }
+
+            render_tree_parameters.placement_changed = !self.placement_controller.placement_is_recent(
+                update_parameters.time_point,
+                update_parameters.transform_state.get_zoom() as f32,
+                placement_update_period_override,
+            );
+            symbol_buckets_changed |= render_tree_parameters.placement_changed;
+            if render_tree_parameters.placement_changed {
+                let mut placement = Placement::create(
+                    update_parameters.clone(),
+                    Some(self.placement_controller.get_placement().clone()),
+                );
+                placement.place_layers(&layers_need_placement);
+                self.placement_controller.set_placement(Rc::new(placement));
+                self.cross_tile_symbol_index.prune_unused_layers(&used_symbol_layers);
+                for source in self.render_sources.values_mut() {
+                    source.update_fading_tiles();
+                }
+            } else {
+                self.placement_controller.set_placement_stale();
+            }
+            render_tree_parameters.symbol_fade_change =
+                self.placement_controller.get_placement().symbol_fade_change(update_parameters.time_point);
             render_tree_parameters.needs_repaint = self.has_transitions(update_parameters.time_point);
         } else {
-            // layersNeedPlacement is always empty (see needs_placement).
-            render_tree_parameters.placement_changed = false;
-            // TODO(port): crossTileSymbolIndex.reset().
+            render_tree_parameters.placement_changed = !layers_need_placement.is_empty();
+            symbol_buckets_changed = render_tree_parameters.placement_changed;
+            if render_tree_parameters.placement_changed {
+                let mut placement = Placement::create(update_parameters.clone(), None);
+                placement.collect_placed_symbol_data(self.placed_symbol_data_collected);
+                placement.place_layers(&layers_need_placement);
+                self.placement_controller.set_placement(Rc::new(placement));
+            }
+            self.cross_tile_symbol_index.reset();
             render_tree_parameters.symbol_fade_change = 1.0;
             render_tree_parameters.needs_repaint = false;
         }
@@ -757,12 +823,19 @@ impl RenderOrchestrator {
             }
         }
 
-        Some(RenderTree::new(
+        let mut render_tree = RenderTree::new(
             render_tree_parameters,
             layer_render_items,
             source_render_items,
             start_time,
-        ))
+        );
+        // symbols: layersNeedPlacement, placement, updateSymbolOpacities.
+        render_tree.set_placement(
+            layers_need_placement,
+            self.placement_controller.get_placement().clone(),
+            symbol_buckets_changed,
+        );
+        Some(render_tree)
     }
 
     pub fn has_transitions(&self, _time_point: TimePoint) -> bool {
@@ -777,7 +850,9 @@ impl RenderOrchestrator {
             }
         }
 
-        // TODO(port): placementController.hasTransitions(timePoint).
+        if self.placement_controller.has_transitions(_time_point) {
+            return true;
+        }
 
         for source in self.render_sources.values() {
             if source.has_fading_tiles() {
@@ -821,14 +896,14 @@ impl RenderOrchestrator {
         }
         self.add_changes(&mut changes);
 
-        // TODO(port): debugLayerGroups.clear().
+        self.debug_layer_groups.clear(); // layers: debug
         self.render_sources.clear();
         self.render_layers.clear();
         // C++ keeps orderedLayers here and rebuilds it on the next
         // createRenderTree (the layer diff then reports additions).
         self.ordered_layers.clear();
 
-        // TODO(port): crossTileSymbolIndex.reset().
+        self.cross_tile_symbol_index.reset();
         if !self.line_atlas.borrow().is_empty() {
             self.line_atlas = Rc::new(RefCell::new(LineAtlas::new()));
         }
@@ -930,6 +1005,25 @@ impl RenderOrchestrator {
         for group in self.layer_groups().into_iter().rev() {
             f(&mut *group.borrow_mut());
         }
+    }
+
+    /// `updateDebugLayerGroups(renderTree, parameters)` (layers: debug).
+    pub fn update_debug_layer_groups(&mut self, render_tree: &RenderTree, parameters: &PaintParameters<'_>) {
+        let mut tweakers: crate::render_tree::DebugLayerTweakers = Vec::new();
+        for item in render_tree.get_source_render_items() {
+            item.update_debug_drawables(&mut self.debug_layer_groups, parameters, &mut tweakers);
+        }
+        // `layerGroup->addLayerTweaker(tweaker)`
+        for (layer_group, tweaker) in tweakers {
+            let id = layer_group.borrow().get_id();
+            self.layer_group_tweakers.entry(id).or_default().push(tweaker);
+        }
+    }
+
+    /// The debug layer groups, in `DebugType` order (`visitDebugLayerGroups`)
+    /// (layers: debug).
+    pub fn debug_layer_groups(&self) -> Vec<LayerGroupBasePtr> {
+        self.debug_layer_groups.values().cloned().collect()
     }
 
     /// `LayerGroupBase::runTweakers(renderTree, parameters)`: runs the live
@@ -1066,20 +1160,62 @@ impl RenderOrchestrator {
     /// `queryRenderedSymbols(resultsByLayer, geometry, layers, options)`.
     fn query_rendered_symbols(
         &self,
-        _results_by_layer: &mut crate::geometry::feature_index::QueryResults,
-        _geometry: &[mln_util::geo::ScreenCoordinate],
+        results_by_layer: &mut crate::geometry::feature_index::QueryResults,
+        geometry: &[mln_util::geo::ScreenCoordinate],
         layers: &crate::geometry::feature_index::QueryLayers<'_>,
-        _options: &crate::query::RenderedQueryOptions,
+        options: &crate::query::RenderedQueryOptions,
     ) {
-        let has_cross_tile_index = layers.values().any(|layer| {
-            layer.base().base_impl.get_type_info().cross_tile_index == layer_type_info::CrossTileIndex::Required
-        });
-        if !has_cross_tile_index {
+        let cross_tile_symbol_index_layers: crate::geometry::feature_index::QueryLayers<'_> = layers
+            .iter()
+            .filter(|(_, layer)| {
+                layer.base().base_impl.get_type_info().cross_tile_index == layer_type_info::CrossTileIndex::Required
+            })
+            .map(|(id, layer)| (id.clone(), *layer))
+            .collect();
+
+        if cross_tile_symbol_index_layers.is_empty() {
             return;
         }
-        // TODO(port): placement.getCollisionIndex().queryRenderedSymbols(geometry),
-        // the per-bucket RetainedQueryData sorted by tile, and
-        // FeatureIndex::lookupSymbolFeatures (symbol placement).
+        let placement = self.placement_controller.get_placement();
+        let mut rendered_symbols = placement.get_collision_index().query_rendered_symbols(&geometry.to_vec());
+        let mut bucket_query_data = Vec::with_capacity(rendered_symbols.len());
+        for bucket_instance_id in rendered_symbols.keys() {
+            // C++ `getQueryData` throws for an unknown bucket (uncaught).
+            match placement.get_query_data(*bucket_instance_id) {
+                Ok(query_data) => bucket_query_data.push(query_data),
+                Err(e) => Log::error(Event::General, e),
+            }
+        }
+        // Although symbol query is global, symbol results are only sortable within
+        // a bucket For a predictable global sort renderItems, we sort the buckets
+        // based on their corresponding tile position
+        bucket_query_data.sort_by(|a, b| {
+            (a.tile_id.canonical.z, a.tile_id.canonical.y, a.tile_id.wrap, a.tile_id.canonical.x).cmp(&(
+                b.tile_id.canonical.z,
+                b.tile_id.canonical.y,
+                b.tile_id.wrap,
+                b.tile_id.canonical.x,
+            ))
+        });
+
+        for query_data in bucket_query_data {
+            let Some(feature_index) = &query_data.feature_index else {
+                continue;
+            };
+            let symbol_features = rendered_symbols.remove(&query_data.bucket_instance_id).unwrap_or_default();
+            let bucket_symbols = feature_index.lookup_symbol_features(
+                &symbol_features,
+                options,
+                self.global_state.as_deref(),
+                &cross_tile_symbol_index_layers,
+                &query_data.tile_id,
+                &query_data.feature_sort_order.borrow().clone(),
+            );
+
+            for (layer_id, features) in bucket_symbols {
+                results_by_layer.entry(layer_id).or_default().extend(features);
+            }
+        }
     }
 
     /// `queryRenderedFeatures(geometry, options, layers)`.
@@ -1144,6 +1280,11 @@ impl RenderOrchestrator {
         }
 
         result
+    }
+
+    /// `getPlacedSymbolsData()` (a copy: the placement is shared).
+    pub fn get_placed_symbols_data(&self) -> Vec<crate::text::placement::PlacedSymbolData> {
+        self.placement_controller.get_placement().get_placed_symbols_data().to_vec()
     }
 
     /// `querySourceFeatures(sourceID, options)`.

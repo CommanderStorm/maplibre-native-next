@@ -297,6 +297,7 @@ mod tests {
         signed_area(ring)
     }
 
+    // gtest: GeometryTileData.classifyRings1
     #[test]
     fn classify_rings1() {
         let polygons = classify_rings(&collection(&[&[(0, 0), (0, 40), (40, 40), (40, 0), (0, 0)]]));
@@ -307,6 +308,7 @@ mod tests {
         assert_eq!(polygons[0].len(), 1);
     }
 
+    // gtest: GeometryTileData.classifyRings2
     #[test]
     fn classify_rings2() {
         let polygons = classify_rings(&collection(&[
@@ -320,6 +322,7 @@ mod tests {
         assert_eq!(polygons[0].len(), 2);
     }
 
+    // gtest: GeometryTileData.limitHoles1
     #[test]
     fn limit_holes1() {
         let mut polygon = collection(&[
@@ -338,6 +341,7 @@ mod tests {
         assert_eq!(polygon[1][0].x, 10);
     }
 
+    // gtest: GeometryTileData.limitHoles2
     #[test]
     fn limit_holes2() {
         let mut polygon = collection(&[
@@ -356,6 +360,7 @@ mod tests {
         assert_eq!(polygon[1][0].x, 10);
     }
 
+    // gtest: GeometryTileData.limitHoles3
     #[test]
     fn limit_holes3() {
         // real world polygon with interior rings with negative areas

@@ -3,12 +3,13 @@
 // MLN_USE_SYMBOL_INSTANCING off), plus gfx/symbol_drawable_data.hpp.
 //
 // C++ drawables share the bucket's vertex vectors and see placement's
-// changes through them (`updateModified`). Here a drawable gets copies, so
-// when the bucket's vertex data changes (placement, sorting: the bucket's
-// `version`) the tile's drawables are re-created.
+// changes through them (`updateModified`). Here a drawable gets copies of
+// the vectors; when placement, sorting or feature state change the bucket
+// (its per-kind change counters), `update` replaces just those attributes
+// (opacity, dynamic positions, binders) and the triangle indices of the
+// tile's existing drawables, as C++ `updateTileDrawable` does.
 //
-// TODO(port): captureRenderedFeatures (queries), placementData
-// (placement).
+// TODO(port): captureRenderedFeatures (queries).
 
 use super::collision_layer_tweaker::{CollisionDrawableData, CollisionLayerTweaker};
 use super::symbol_layer_tweaker::SymbolLayerTweaker;
@@ -91,6 +92,29 @@ pub struct SymbolDrawableData {
     pub placement: SymbolPlacementType,
     pub text_fit: IconTextFitType,
     pub is_offset: bool,
+    /// The bucket segment the drawable draws (`sortFeaturesByKey`), or all
+    /// of them.
+    pub segment: Option<usize>,
+}
+
+/// The bucket change counters a tile's drawables reflect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TileVersions {
+    opacity: u32,
+    dynamic: u32,
+    sort: u32,
+    binder: u32,
+}
+
+impl TileVersions {
+    fn of(bucket: &SymbolBucket) -> Self {
+        TileVersions {
+            opacity: bucket.opacity_version.load(Ordering::SeqCst),
+            dynamic: bucket.dynamic_version.load(Ordering::SeqCst),
+            sort: bucket.sort_version.load(Ordering::SeqCst),
+            binder: bucket.binder_version.load(Ordering::SeqCst),
+        }
+    }
 }
 
 /// `iconPropertyValues(evaluated, layout)`.
@@ -137,6 +161,18 @@ fn update_tile_attributes(
     attribs: &mut VertexAttributeArray,
     properties_as_uniforms: &mut StringIDSetsPair,
 ) {
+    set_binder_attributes(is_text, paint_props, evaluated, attribs, properties_as_uniforms);
+    set_static_and_dynamic_attributes(buffer, attribs);
+}
+
+/// The data-driven paint property half of `updateTileAttributes`.
+fn set_binder_attributes(
+    is_text: bool,
+    paint_props: &PaintProperties,
+    evaluated: &SymbolPaintProperties::PossiblyEvaluated,
+    attribs: &mut VertexAttributeArray,
+    properties_as_uniforms: &mut StringIDSetsPair,
+) {
     let mut id = ID_SYMBOL_OPACITY_ATTRIBUTE;
     let pau = properties_as_uniforms;
     if is_text {
@@ -158,7 +194,17 @@ fn update_tile_attributes(
         read_data_driven_paint_property(attribs, &b.icon_halo_width, ib, &shared, &["a_halo_width"], evaluated.get::<IconHaloWidth>().is_constant(), pau, &mut id);
         read_data_driven_paint_property(attribs, &b.icon_halo_blur, ib, &shared, &["a_halo_blur"], evaluated.get::<IconHaloBlur>().is_constant(), pau, &mut id);
     }
+}
 
+/// The vertex-buffer half of `updateTileAttributes`.
+fn set_static_and_dynamic_attributes(buffer: &Buffer, attribs: &mut VertexAttributeArray) {
+    set_layout_attributes(buffer, attribs);
+    set_projected_pos_attribute(buffer, attribs);
+    set_fade_opacity_attribute(buffer, attribs);
+}
+
+/// The static half of `updateTileAttributes`: the layout vertices.
+fn set_layout_attributes(buffer: &Buffer, attribs: &mut VertexAttributeArray) {
     let layout_size = std::mem::size_of::<crate::buckets::symbol_bucket::SymbolLayoutVertex>() as u32;
     let layout_data = shared_vertices(&buffer.attribute_data);
     if let Some(attr) = attribs.set(ID_SYMBOL_POS_OFFSET_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
@@ -171,6 +217,10 @@ fn update_tile_attributes(
         attr.set_shared_raw_data(Some(layout_data), 16, 0, layout_size, AttributeDataType::Short4);
     }
 
+}
+
+/// `updateTileAttributes`: the dynamic layout vertices (placement).
+fn set_projected_pos_attribute(buffer: &Buffer, attribs: &mut VertexAttributeArray) {
     if let Some(attr) = attribs.set(ID_SYMBOL_PROJECTED_POS_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
         attr.set_shared_raw_data(
             Some(shared_vertices(&buffer.dynamic_attribute_data)),
@@ -180,6 +230,10 @@ fn update_tile_attributes(
             AttributeDataType::Float3,
         );
     }
+}
+
+/// `updateTileAttributes`: the opacity vertices (placement).
+fn set_fade_opacity_attribute(buffer: &Buffer, attribs: &mut VertexAttributeArray) {
     if let Some(attr) = attribs.set(ID_SYMBOL_FADE_OPACITY_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
         attr.set_shared_raw_data(
             Some(shared_vertices(&buffer.opacity_attribute_data)),
@@ -188,6 +242,87 @@ fn update_tile_attributes(
             std::mem::size_of::<crate::buckets::symbol_bucket::SymbolOpacityVertex>() as u32,
             AttributeDataType::Float,
         );
+    }
+}
+
+/// Which of a tile's drawable inputs changed since they were built.
+#[derive(Clone, Copy, Debug)]
+struct DrawableRefresh {
+    opacity: bool,
+    dynamic: bool,
+    sort: bool,
+    binders: bool,
+}
+
+/// `updateTileDrawable(drawable, bucket, paintProps, evaluated)`: replaces
+/// the attributes (and indices) of an existing drawable that placement,
+/// sorting or feature state changed. Halo and fill drawables share their
+/// attribute array, which is refreshed once (`refreshed_attributes`).
+fn update_tile_drawable(
+    drawable: &mut dyn mln_gfx::Drawable,
+    bucket: &SymbolBucket,
+    layer_id: &str,
+    evaluated: &SymbolPaintProperties::PossiblyEvaluated,
+    refresh: DrawableRefresh,
+    refreshed_attributes: &mut Vec<*const ()>,
+) {
+    let Some(mut draw_data) = drawable.get_data().and_then(|d| d.downcast_ref::<SymbolDrawableData>()).copied() else {
+        return;
+    };
+    let is_text = draw_data.symbol_type == SymbolType::Text;
+    let sdf_icons = draw_data.symbol_type == SymbolType::IconSDF;
+
+    let state = bucket.state();
+
+    // This property can be set after the initial appearance of the tile, as
+    // part of the layout process.
+    if draw_data.bucket_variable_placement != state.has_variable_placement {
+        draw_data.bucket_variable_placement = state.has_variable_placement;
+        drawable.set_data(Some(Box::new(draw_data)));
+    }
+
+    if !(refresh.opacity || refresh.dynamic || refresh.sort || refresh.binders) {
+        return;
+    }
+
+    let buffer = if is_text {
+        &state.text
+    } else if sdf_icons {
+        &state.sdf_icon
+    } else {
+        &state.icon
+    };
+
+    if let Some(attrs) = drawable.get_vertex_attributes().cloned() {
+        let key = Rc::as_ptr(&attrs) as *const ();
+        if !refreshed_attributes.contains(&key) {
+            refreshed_attributes.push(key);
+            let mut attrs = attrs.borrow_mut();
+            if refresh.dynamic {
+                set_projected_pos_attribute(buffer, &mut attrs);
+            }
+            if refresh.opacity {
+                set_fade_opacity_attribute(buffer, &mut attrs);
+            }
+            if refresh.binders {
+                if let Some(paint_props) = bucket.paint_properties.get(layer_id) {
+                    let paint_props = paint_props.read().unwrap_or_else(|e| e.into_inner());
+                    let mut properties_as_uniforms = StringIDSetsPair::default();
+                    set_binder_attributes(is_text, &paint_props, evaluated, &mut attrs, &mut properties_as_uniforms);
+                }
+            }
+        }
+    }
+
+    if refresh.sort && !buffer.triangles.is_empty() {
+        let segments: Vec<mln_gfx::drawable::UniqueDrawSegment> = match draw_data.segment {
+            Some(i) => buffer.segments.get(i).map(|s| vec![s]).unwrap_or_default(),
+            None => buffer.segments.iter().collect(),
+        }
+        .into_iter()
+        .map(|segment| Box::new(mln_gfx::drawable::DrawSegment::new(DrawMode::Triangles(), segment.copy())))
+        .collect();
+        drawable.set_index_data(Some(Rc::new(RefCell::new(IndexVectorBase::new(buffer.triangles.clone())))), segments);
     }
 }
 
@@ -240,7 +375,7 @@ pub struct RenderSymbolLayer {
     symbol_text_and_icon_group: Option<ShaderGroupPtr>,
 
     /// The bucket version each tile's drawables were built from.
-    tile_bucket_versions: HashMap<OverscaledTileID, u32>,
+    tile_bucket_versions: HashMap<OverscaledTileID, TileVersions>,
 
     collision_box_group: Option<ShaderGroupPtr>,
     collision_circle_group: Option<ShaderGroupPtr>,
@@ -565,7 +700,55 @@ impl RenderLayer for RenderSymbolLayer {
             self.add_render_passes_from_tiles();
         }
 
-        // TODO(port): placementData (placement).
+        self.base.placement_data.clear();
+
+        let Some(render_tiles) = self.base.render_tiles.clone() else {
+            return;
+        };
+        let owner = render_tiles.owner().clone();
+        for render_tile in render_tiles.iter() {
+            let Some(bucket_ptr) = render_tile.get_bucket(&*self.base.base_impl) else {
+                continue;
+            };
+            let Some(bucket) = (**bucket_ptr).downcast_ref::<SymbolBucket>() else {
+                continue;
+            };
+            if bucket.bucket_leader_id != self.get_id() {
+                continue;
+            }
+            // Only place this layer if it's the "group leader" for the bucket
+            let Some(tile_index) = owner.iter().position(|t| std::ptr::eq(t, render_tile)) else {
+                continue;
+            };
+            let feature_index = render_tile.get_feature_index();
+
+            if bucket.sort_key_ranges.is_empty() {
+                self.base.placement_data.push(crate::render_layer::BucketPlacementData {
+                    bucket: bucket_ptr.clone(),
+                    tile_owner: owner.clone(),
+                    tile_index,
+                    feature_index,
+                    source_id: self.base.base_impl.source.clone(),
+                    sort_key_range: None,
+                });
+            } else {
+                for sort_key_range in &bucket.sort_key_ranges {
+                    let layer_data = crate::render_layer::BucketPlacementData {
+                        bucket: bucket_ptr.clone(),
+                        tile_owner: owner.clone(),
+                        tile_index,
+                        feature_index: feature_index.clone(),
+                        source_id: self.base.base_impl.source.clone(),
+                        sort_key_range: Some(*sort_key_range),
+                    };
+                    // std::upper_bound by sort key
+                    let sort_position = self.base.placement_data.partition_point(|lhs| {
+                        !(sort_key_range.sort_key < lhs.sort_key_range.expect("sort key range").sort_key)
+                    });
+                    self.base.placement_data.insert(sort_position, layer_data);
+                }
+            }
+        }
     }
 
     fn update(
@@ -678,30 +861,45 @@ impl RenderLayer for RenderSymbolLayer {
             };
 
             let prev_bucket_id = self.get_render_tile_bucket_id(&tile_id);
-            let version = bucket.version.load(Ordering::SeqCst);
-            if (prev_bucket_id != SimpleIdentity::EMPTY && prev_bucket_id != bucket.base.bucket_id)
-                || self.tile_bucket_versions.get(&tile_id).is_some_and(|v| *v != version)
-            {
-                // This tile was previously set up from a different bucket
-                // (or the bucket's vertex data changed), drop and re-create
-                // any drawables for it.
+            if prev_bucket_id != SimpleIdentity::EMPTY && prev_bucket_id != bucket.base.bucket_id {
+                // This tile was previously set up from a different bucket,
+                // drop and re-create any drawables for it.
                 self.remove_tile_all(passes, &tile_id);
+                self.tile_bucket_versions.remove(&tile_id);
             }
             self.set_render_tile_bucket_id(&tile_id, bucket.base.bucket_id);
-            self.tile_bucket_versions.insert(tile_id, version);
+            let current_versions = TileVersions::of(bucket);
+            let seen_versions = self.tile_bucket_versions.insert(tile_id, current_versions);
+            // What changed since the drawables were built or last refreshed
+            // (unknown: refresh everything).
+            let refresh = match seen_versions {
+                Some(seen) => DrawableRefresh {
+                    opacity: seen.opacity != current_versions.opacity,
+                    dynamic: seen.dynamic != current_versions.dynamic,
+                    sort: seen.sort != current_versions.sort,
+                    binders: seen.binder != current_versions.binder,
+                },
+                None => DrawableRefresh { opacity: true, dynamic: true, sort: true, binders: true },
+            };
 
             debug_assert!(bucket.paint_properties.contains_key(self.get_id()));
             if !bucket.paint_properties.contains_key(self.get_id()) {
                 continue;
             }
 
-            // If we already have drawables for this tile, update them.
-            let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
-                // This drawable was produced on a previous style/bucket, and
-                // should not be updated.
-                super::drawable_has_layer_tweaker(drawable, &layer_tweaker)
-            };
             let evaluated = get_evaluated::<SymbolLayerProperties>(&render_data.layer_properties);
+            // If we already have drawables for this tile, update them.
+            let layer_id = self.get_id().to_owned();
+            let mut refreshed_attributes: Vec<*const ()> = Vec::new();
+            let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
+                if !super::drawable_has_layer_tweaker(drawable, &layer_tweaker) {
+                    // This drawable was produced on a previous style/bucket,
+                    // and should not be updated.
+                    return false;
+                }
+                update_tile_drawable(drawable, bucket, &layer_id, evaluated, refresh, &mut refreshed_attributes);
+                true
+            };
             if self.update_tile(passes, &tile_id, update_existing) {
                 // re-create collision drawables
                 if let Some(group) = &self.collision_tile_layer_group {
@@ -960,6 +1158,7 @@ impl RenderLayer for RenderSymbolLayer {
                         placement: *bucket_layout.get::<SymbolPlacement>(),
                         text_fit: *bucket_layout.get::<IconTextFit>(),
                         is_offset,
+                        segment: group.segment,
                     })));
 
                     tile_layer_group.add_drawable(passes, &tile_id, drawable);

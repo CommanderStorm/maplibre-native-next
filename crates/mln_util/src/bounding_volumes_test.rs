@@ -3,6 +3,7 @@
 use super::*;
 use std::f64::consts::PI;
 
+// gtest: BoundingVolumes.CreateAabb
 #[test]
 fn create_aabb() {
     let aabb = AABB::new([0.0, 0.0, 0.0], [2.0, 4.0, 6.0]);
@@ -11,6 +12,7 @@ fn create_aabb() {
     assert_eq!(aabb.max, [2.0, 4.0, 6.0]);
 }
 
+// gtest: BoundingVolumes.AabbEquality
 #[test]
 fn aabb_equality() {
     let aabb0 = AABB::new([-4.23, 1.01, 2.0], [-1.0, 1.02, 100.0]);
@@ -21,6 +23,7 @@ fn aabb_equality() {
     assert_ne!(aabb0, aabb2);
 }
 
+// gtest: BoundingVolumes.CreateAabbQuadrants
 #[test]
 fn create_aabb_quadrants() {
     let aabb = AABB::new([0.0, 0.0, 0.0], [2.0, 4.0, 16.0]);
@@ -36,6 +39,7 @@ fn create_aabb_quadrants() {
     assert_eq!(aabb.quadrant(3), quadrant3);
 }
 
+// gtest: BoundingVolumes.AabbDistanceToPoint
 #[test]
 fn aabb_distance_to_point() {
     let aabb = AABB::new([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]);
@@ -46,6 +50,7 @@ fn aabb_distance_to_point() {
     assert_eq!(aabb.distance_xyz(&[-2.0, -2.0, -4.0]), [1.0, 1.0, 3.0]);
 }
 
+// gtest: BoundingVolumes.AabbAabbIntersection
 #[test]
 fn aabb_aabb_intersection() {
     let aabb0 = AABB::new([1.0, 0.0, 0.0], [3.0, 2.0, 1.0]);
@@ -61,6 +66,7 @@ fn aabb_aabb_intersection() {
     assert!(!aabb3.intersects(&aabb2));
 }
 
+// gtest: BoundingVolumes.CreateFrustumFromProjectionMatrix
 #[test]
 fn create_frustum_from_projection_matrix() {
     let mut proj_matrix: Mat4 = [0.0; 16];
@@ -139,6 +145,7 @@ fn create_test_frustum(
     Frustum::from_inv_proj_matrix(&inv_proj, 1.0, 0.0, false)
 }
 
+// gtest: BoundingVolumes.AabbFullyInsideFrustum
 #[test]
 fn aabb_fully_inside_frustum() {
     let frustum = create_test_frustum(PI / 2.0, 1.0, 0.1, 100.0, -5.0, 0.0);
@@ -154,6 +161,7 @@ fn aabb_fully_inside_frustum() {
     assert_eq!(frustum.intersects(&aabb_array[2]), IntersectionResult::Contains);
 }
 
+// gtest: BoundingVolumes.AabbIntersectsFrustum
 #[test]
 fn aabb_intersects_frustum() {
     let frustum = create_test_frustum(PI / 2.0, 1.0, 0.1, 100.0, -5.0, 0.0);
@@ -167,6 +175,7 @@ fn aabb_intersects_frustum() {
     assert_eq!(frustum.intersects(&aabb_array[1]), IntersectionResult::Intersects);
 }
 
+// gtest: BoundingVolumes.AabbIntersectsFrustumEdgeCase
 #[test]
 fn aabb_intersects_frustum_edge_case() {
     let frustum = create_test_frustum(PI / 2.0, 1.0, 0.1, 100.0, -5.0, PI / 4.0);

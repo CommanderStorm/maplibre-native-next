@@ -94,6 +94,44 @@ pub fn remove_layer(style: &mut Style, layer_name: &str) -> bool {
     style.remove_layer(layer_name).is_some()
 }
 
+/// `addSource`: `convertJSON<std::unique_ptr<Source>>(json, error,
+/// sourceName)`, then `style.addSource(source)` (which throws, uncaught, on
+/// a duplicate id).
+pub fn add_source(style: &mut Style, source_name: &str, json: &str) -> Result<(), MapError> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(value) => value,
+        Err(e) => return Err(MapError::Conversion(e.to_string())),
+    };
+    let mut error = mln_conversion::Error::default();
+    let Some(source) =
+        mln_style::conversion::source::convert_source(&Convertible::from(&value), &mut error, source_name)
+    else {
+        return Err(MapError::Conversion(error.message));
+    };
+    style.add_source(source).map_err(|e| MapError::Exception(e.to_string()))
+}
+
+/// `setLight` (conformance): `convert<style::Light>(json)`, then
+/// `style.setLight(std::make_unique<Light>(impl))`.
+pub fn set_light(style: &mut Style, json: &str) -> Result<(), MapError> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(value) => value,
+        Err(e) => return Err(MapError::Conversion(e.to_string())),
+    };
+    let mut error = mln_conversion::Error::default();
+    let Some(light) = mln_style::conversion::convert::<mln_style::light::Light>(&Convertible::from(&value), &mut error)
+    else {
+        return Err(MapError::Conversion(error.message));
+    };
+    style.set_light(light);
+    Ok(())
+}
+
+/// `removeSource`: `bool(style.removeSource(sourceName))`.
+pub fn remove_source(style: &mut Style, source_name: &str) -> bool {
+    style.remove_source(source_name).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

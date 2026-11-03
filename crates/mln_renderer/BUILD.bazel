@@ -117,3 +117,48 @@ rust_test(
         "//crates/mln_util",
     ],
 )
+
+# gtests-data: the test/tile gtests that need the renderer's tiles or
+# mln_map's Transform (tests/tile/main.rs lists them).
+rust_test(
+    name = "tile_test",
+    srcs = glob(["tests/tile/*.rs"]),
+    crate_root = "tests/tile/main.rs",
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_map_types",
+        "//crates/mln_storage",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+# gtests-data: the test/text gtests that need mln_renderer (GlyphManager,
+# SymbolLayout) or mln_expression's Formatted (tests/text/main.rs lists them).
+rust_test(
+    name = "text_test",
+    srcs = glob(["tests/text/*.rs"]),
+    crate_root = "tests/text/main.rs",
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_actor",
+        "//crates/mln_expression",
+        "//crates/mln_storage",
+        "//crates/mln_text",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+# gtests-data: test/gl/*.test.cpp except bucket.test.cpp, which are
+# OpenGL-backend-only (all ignored with that reason).
+rust_test(
+    name = "gl_test",
+    srcs = glob(["tests/gl/*.rs"]),
+    crate_root = "tests/gl/main.rs",
+)

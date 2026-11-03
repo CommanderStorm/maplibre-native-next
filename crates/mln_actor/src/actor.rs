@@ -12,12 +12,20 @@
 // `close()` (from `Drop`) waits for a running message, as the C++
 // receiving mutex does, and drops the object afterwards. `abandon()` stops
 // pushes without waiting.
+//
+// gtests-core: closing from inside one of the actor's own messages (C++:
+// the recursive receiving mutex lets an actor destroy itself, see
+// test/actor/actor.test.cpp DestructionAllowedInReceiveOnSameThread) does
+// not wait: it closes the queue, and `receive()` drops the object once that
+// message returns (C++ destroys it during the message, which Rust's `&mut O`
+// borrow rules out).
 
 use crate::scheduler::{SchedulerPtr, TaggedScheduler, WeakScheduler};
 use mln_util::identity::SimpleIdentity;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::thread::ThreadId;
 
 /// A message to a pool actor's object.
 pub type PoolMessage<O> = Box<dyn FnOnce(&mut O) + Send + 'static>;
@@ -34,6 +42,9 @@ pub struct PoolMailbox<O: Send + 'static> {
     /// The pushing mutex and the queue mutex.
     queue: Mutex<Queue<O>>,
     abandoned: AtomicBool,
+    /// gtests-core: the thread running a message, for `close()` from inside
+    /// a message.
+    receiving_thread: Mutex<Option<ThreadId>>,
     scheduler: WeakScheduler,
     scheduler_tag: Option<SimpleIdentity>,
     weak_self: Weak<PoolMailbox<O>>,
@@ -77,7 +88,17 @@ impl<O: Send + 'static> PoolMailbox<O> {
             (message, queue.messages.is_empty())
         };
 
+        *self.receiving_thread.lock().unwrap() = Some(std::thread::current().id());
         message(target);
+        *self.receiving_thread.lock().unwrap() = None;
+        // gtests-core: the message closed the mailbox (its actor was dropped
+        // from inside it): drop the object now, outside the lock.
+        if self.queue.lock().unwrap().closed {
+            let closed_object = object.take();
+            drop(object);
+            drop(closed_object);
+            return;
+        }
         drop(object);
 
         // If there are more messages in the queue and the scheduler is still
@@ -112,6 +133,14 @@ impl<O: Send + 'static> PoolMailbox<O> {
     /// afterwards. Returns the object.
     fn close(&self) -> Option<O> {
         self.abandon();
+        if *self.receiving_thread.lock().unwrap() == Some(std::thread::current().id()) {
+            // gtests-core: inside one of our own messages; `receive()` drops
+            // the object when it returns.
+            let mut queue = self.queue.lock().unwrap();
+            queue.closed = true;
+            queue.messages.clear();
+            return None;
+        }
         let mut object = self.object.lock().unwrap();
         let mut queue = self.queue.lock().unwrap();
         queue.closed = true;
@@ -142,6 +171,18 @@ impl<O: Send + 'static> PoolActorRef<O> {
             mailbox.push(Box::new(f));
         }
     }
+
+    /// `ask(fn, args...)` (gtests-core): the returned receiver is the C++
+    /// `std::future`. If the actor is gone (or closes before the message
+    /// runs), the message is dropped and `recv()` fails, as `get()` throws
+    /// `broken_promise` in C++.
+    pub fn ask<R: Send + 'static>(&self, f: impl FnOnce(&mut O) -> R + Send + 'static) -> mpsc::Receiver<R> {
+        let (promise, future) = mpsc::sync_channel(1);
+        self.invoke(move |object: &mut O| {
+            let _ = promise.send(f(object));
+        });
+        future
+    }
 }
 
 /// `Actor<O>`: owns the object; messages run on `scheduler`'s threads.
@@ -171,6 +212,7 @@ impl<O: Send + 'static> Actor<O> {
                 closed: false,
             }),
             abandoned: AtomicBool::new(false),
+            receiving_thread: Mutex::new(None),
             scheduler: Arc::downgrade(&scheduler),
             scheduler_tag: tag,
             weak_self: weak_self.clone(),

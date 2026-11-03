@@ -88,6 +88,12 @@ pub struct SurfaceState {
     last_configured_size: Cell<Size>,
     consecutive_errors: Cell<i32>,
     enable_vsync: bool,
+    /// symbols (user report: the window froze while hidden): the vsync'ed
+    /// present mode. FIFO blocks in acquire/present on Wayland while the
+    /// window is not visible (no frame callbacks), which stalls the whole
+    /// event loop; MAILBOX is vsync'ed without blocking, so it is used when
+    /// the surface supports it (DEVIATIONS.md).
+    vsync_present_mode: wgpu::PresentMode,
     /// What `glfwGetFramebufferSize` returns in C++.
     framebuffer_size: Cell<Size>,
     /// `static auto lastSwapTime` in `swap()`.
@@ -105,7 +111,7 @@ impl SurfaceState {
             width: size.width,
             height: size.height,
             // Use Immediate mode (no vsync) in benchmark mode, Fifo (vsync) otherwise
-            present_mode: if self.enable_vsync { wgpu::PresentMode::Fifo } else { wgpu::PresentMode::Immediate },
+            present_mode: if self.enable_vsync { self.vsync_present_mode } else { wgpu::PresentMode::Immediate },
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![self.swap_chain_format],
@@ -509,6 +515,11 @@ impl SurfaceBackend {
             last_configured_size: Cell::new(Size::default()),
             consecutive_errors: Cell::new(0),
             enable_vsync: cap_frame_rate,
+            vsync_present_mode: if capabilities.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                wgpu::PresentMode::Mailbox
+            } else {
+                wgpu::PresentMode::Fifo
+            },
             framebuffer_size: Cell::new(framebuffer_size),
             last_swap_time: Cell::new(Instant::now()),
             readback_requested: Cell::new(false),

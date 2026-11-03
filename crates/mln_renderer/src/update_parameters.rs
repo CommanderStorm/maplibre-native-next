@@ -18,7 +18,8 @@ pub struct UpdateParameters {
     pub transform_state: TransformState,
 
     pub glyph_url: String,
-    // TODO(port): std::shared_ptr<FontFaces> fontFaces (text, M5).
+    /// symbols: `std::shared_ptr<FontFaces> fontFaces`.
+    pub font_faces: Option<std::sync::Arc<mln_text::glyph::FontFaces>>,
     pub sprite_loaded: bool,
     pub transition_options: TransitionOptions,
     pub light: Immutable<light::Impl>,

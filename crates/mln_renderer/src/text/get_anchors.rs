@@ -260,6 +260,7 @@ mod tests {
         Anchor::new(x, y, angle, Some(segment))
     }
 
+    // gtest: getAnchors.NonContinuedLineShortLabels
     #[test]
     fn non_continued_line_short_labels() {
         let anchors = get_anchors(
@@ -283,6 +284,7 @@ mod tests {
         assert_eq!(anchors, expected_anchors);
     }
 
+    // gtest: getAnchors.NonContinuedLineLongLabels
     #[test]
     fn non_continued_line_long_labels() {
         let anchors = get_anchors(
@@ -306,6 +308,7 @@ mod tests {
         assert_eq!(anchors, expected_anchors);
     }
 
+    // gtest: getAnchors.ContinuedLineShortLabels
     #[test]
     fn continued_line_short_labels() {
         let anchors = get_anchors(
@@ -329,6 +332,7 @@ mod tests {
         assert_eq!(anchors, expected_anchors);
     }
 
+    // gtest: getAnchors.ContinuedLineLongLabels
     #[test]
     fn continued_line_long_labels() {
         let anchors = get_anchors(
@@ -352,6 +356,7 @@ mod tests {
         assert_eq!(anchors, expected_anchors);
     }
 
+    // gtest: getAnchors.OverscaledAnchorsInParent
     #[test]
     fn overscaled_anchors_in_parent() {
         let anchors = get_anchors(
@@ -383,6 +388,7 @@ mod tests {
         }
     }
 
+    // gtest: getAnchors.UseMidpointForShortLine
     #[test]
     fn use_midpoint_for_short_line() {
         let short_line: GeometryCoordinates = vec![Point::new(1, 1), Point::new(1, 3)];
@@ -403,6 +409,7 @@ mod tests {
         assert_eq!(anchors, expected_anchors);
     }
 
+    // gtest: getAnchors.GetCenterAnchor
     #[test]
     fn get_center_anchor_test() {
         let line: GeometryCoordinates = vec![Point::new(1, 1), Point::new(1, 3), Point::new(3, 6), Point::new(4, 7)];
@@ -411,6 +418,7 @@ mod tests {
         assert_eq!(anchor_.unwrap(), anchor(2.0, 4.0, 0.982793748, 1));
     }
 
+    // gtest: getAnchors.GetCenterAnchorOutsideTileBounds
     #[test]
     fn get_center_anchor_outside_tile_bounds() {
         let line: GeometryCoordinates = vec![Point::new(-10, -10), Point::new(5, 5)];
@@ -419,6 +427,7 @@ mod tests {
         assert_eq!(anchor_.unwrap(), anchor(-3.0, -3.0, 0.785398185, 0));
     }
 
+    // gtest: getAnchors.GetCenterAnchorFailMaxAngle
     #[test]
     fn get_center_anchor_fail_max_angle() {
         let line: GeometryCoordinates = vec![Point::new(1, 1), Point::new(1, 3), Point::new(3, 3)];

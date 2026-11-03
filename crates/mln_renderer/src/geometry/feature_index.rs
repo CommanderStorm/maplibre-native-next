@@ -473,3 +473,45 @@ impl FeatureIndex {
         self.bucket_layer_ids.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translate_query_geometry() {
+        let query: GeometryCoordinates = vec![Point::new(10, 10), Point::new(20, 20)];
+        assert_eq!(
+            FeatureIndex::translate_query_geometry(&query, &[0.0, 0.0], TranslateAnchorType::Map, 0.0, 8.0),
+            None
+        );
+        assert_eq!(
+            FeatureIndex::translate_query_geometry(&query, &[1.0, -2.0], TranslateAnchorType::Map, 1.0, 8.0),
+            Some(vec![Point::new(2, 26), Point::new(12, 36)])
+        );
+        // Viewport anchor: the translation is rotated by -bearing.
+        assert_eq!(
+            FeatureIndex::translate_query_geometry(
+                &query,
+                &[1.0, 0.0],
+                TranslateAnchorType::Viewport,
+                std::f32::consts::FRAC_PI_2,
+                8.0
+            ),
+            Some(vec![Point::new(10, 18), Point::new(20, 28)])
+        );
+    }
+
+    #[test]
+    fn insert_records_leaders_and_skips_rings_outside_the_tile() {
+        let mut index = FeatureIndex::new(None);
+        index.set_bucket_layer_ids("a", &["a".to_owned(), "b".to_owned()]);
+        let inside = GeometryCollection::from(vec![vec![Point::new(10, 10)]]);
+        let outside = GeometryCollection::from(vec![vec![Point::new(9000, 10)]]);
+        index.insert(&inside, 0, "layer", "a");
+        index.insert(&outside, 1, "layer", "a");
+        assert_eq!(index.bucket_layer_ids()["a"], vec!["a".to_owned(), "b".to_owned()]);
+        let found = index.grid.query(&BBox::new(Point::new(0.0, 0.0), Point::new(8192.0, 8192.0)));
+        assert_eq!(found.iter().map(|f| f.index).collect::<Vec<_>>(), vec![0]);
+    }
+}

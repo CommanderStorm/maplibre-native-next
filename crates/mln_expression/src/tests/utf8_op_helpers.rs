@@ -4,6 +4,7 @@ use crate::utf8_op_helpers::{
     get_unicode_character_offset_on_validated_utf8, unicode_length_on_validated_utf8,
 };
 
+// gtest: Utf8OpHelpers.unicodeLengthOnValidatedUtf8
 #[test]
 fn unicode_length_on_validated_utf8_test() {
     assert_eq!(unicode_length_on_validated_utf8(""), 0);
@@ -14,6 +15,7 @@ fn unicode_length_on_validated_utf8_test() {
     assert_eq!(unicode_length_on_validated_utf8("aöオ𝄆オöa"), 7);
 }
 
+// gtest: Utf8OpHelpers.getUnicodeCharacterOffsetOnValidatedUtf8
 #[test]
 fn get_unicode_character_offset_on_validated_utf8_test() {
     // edge case: empty string

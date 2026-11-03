@@ -16,11 +16,13 @@ rust_library(
         "//crates/mln_sprite",
         "//crates/mln_storage",
         "//crates/mln_style_types",
+        "//crates/mln_text",
         "//crates/mln_tile_id",
         "//crates/mln_util",
         "//vendor/geojson",
         "//vendor/geojson-vt:geojson_vt",
         "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/rapidjson",
         "//vendor/supercluster",
         "@next_crates//:serde_json",
     ],
@@ -29,7 +31,7 @@ rust_library(
 rust_test(
     name = "mln_style_test",
     crate = ":mln_style",
-    deps = ["//vendor/rapidjson"],
+    deps = ["//crates/mln_tile"],
     data = [
         "@maplibre//metrics:render-test-files",
         "@maplibre//test:fixtures",

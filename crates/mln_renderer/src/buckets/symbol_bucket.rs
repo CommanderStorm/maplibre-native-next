@@ -410,6 +410,15 @@ pub struct SymbolBucket {
     /// Bumped whenever the vertex data changes after the bucket is shared
     /// (placement, sorting), so drawables can refresh their attributes.
     pub version: AtomicU32,
+    /// What changed (the C++ shared vectors' `updateModified`): the
+    /// opacity vertices (placement), the dynamic vertices (line labels,
+    /// variable anchors), the triangle order (sortFeatures) and the paint
+    /// property binders (feature state). RenderSymbolLayer refreshes only
+    /// those in its drawables.
+    pub opacity_version: AtomicU32,
+    pub dynamic_version: AtomicU32,
+    pub sort_version: AtomicU32,
+    pub binder_version: AtomicU32,
 
     state: Mutex<SymbolBucketState>,
 }
@@ -467,6 +476,10 @@ impl SymbolBucket {
             placement_modes,
             has_format_section_overrides: OnceLock::new(),
             version: AtomicU32::new(0),
+            opacity_version: AtomicU32::new(0),
+            dynamic_version: AtomicU32::new(0),
+            sort_version: AtomicU32::new(0),
+            binder_version: AtomicU32::new(0),
             state: Mutex::new(SymbolBucketState {
                 sorted_angle: f32::MAX,
                 symbol_instances,
@@ -553,6 +566,7 @@ impl SymbolBucket {
 
         state.sort_uploaded = false;
         self.base.uploaded.store(false, Ordering::SeqCst);
+        self.sort_version.fetch_add(1, Ordering::SeqCst);
         self.bump_version();
 
         let state = &mut *state;
@@ -615,10 +629,12 @@ impl SymbolBucket {
         if update_opacities {
             state.placement_changes_uploaded = false;
             self.base.uploaded.store(false, Ordering::SeqCst);
+            self.opacity_version.fetch_add(1, Ordering::SeqCst);
         }
         if dynamic_updated {
             state.dynamic_uploaded = false;
             self.base.uploaded.store(false, Ordering::SeqCst);
+            self.dynamic_version.fetch_add(1, Ordering::SeqCst);
         }
         if !self.base.uploaded.load(Ordering::SeqCst) {
             state.text.update_modified();
@@ -774,11 +790,11 @@ impl Bucket for SymbolBucket {
             || self.has_icon_collision_circle_data()
             || self.has_text_collision_circle_data()
     }
-}
 
-impl SymbolBucket {
     /// `update(states, layer, layerID, imagePositions)` (feature state).
-    pub fn update(
+    /// text-conformance: this is the `Bucket` override (it was an inherent
+    /// method, so GeometryTile's `bucket.update` hit the no-op default).
+    fn update(
         &self,
         states: &FeatureStates,
         layer: &dyn GeometryTileLayer,
@@ -790,6 +806,7 @@ impl SymbolBucket {
             binders.icon_binders.update_vertex_vectors(states, layer, image_positions);
             binders.text_binders.update_vertex_vectors(states, layer, image_positions);
             self.base.uploaded.store(false, Ordering::SeqCst);
+            self.binder_version.fetch_add(1, Ordering::SeqCst);
             self.bump_version();
         }
     }

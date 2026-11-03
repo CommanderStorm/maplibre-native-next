@@ -276,6 +276,7 @@ mod tests {
     use super::*;
 
     // Ports TEST(Image, Resize) from test/util/image.test.cpp.
+    // gtest: Image.Resize
     #[test]
     fn resize() {
         let mut image = AlphaImage::new(Size::new(0, 0));
@@ -294,6 +295,7 @@ mod tests {
     }
 
     // Ports TEST(Image, Copy) from test/util/image.test.cpp.
+    // gtest: Image.Copy
     #[test]
     fn copy() {
         let src5 = PremultipliedImage::new(Size::new(5, 5));
@@ -330,6 +332,7 @@ mod tests {
 
     // Ports TEST(Image, Move): a Rust move leaves nothing behind to inspect;
     // `std::mem::take` is the equivalent of the C++ moved-from state.
+    // gtest: Image.Move
     #[test]
     fn move_() {
         let mut rgba = UnassociatedImage::new(Size::new(1, 1));

@@ -6,13 +6,14 @@
 // both are only changed by the TilePyramid between frames.
 
 use crate::bucket::BucketPtr;
+use crate::buckets::debug_bucket::DebugBucket; // layers: debug
 use crate::render_layer::LayerRenderData;
 use crate::render_source::SourcePrepareParameters;
 use crate::tile::tile::Tile;
 use crate::tile_render_data::{TileAtlasTextures, TileRenderData};
 use maplibre_native_base::Point;
 use mln_gfx::UploadPass;
-use mln_map_types::TransformState;
+use mln_map_types::{MapDebugOptions, TransformState};
 use mln_style::layer;
 use mln_style_types::TranslateAnchorType;
 use mln_style_types::image::ImagePosition;
@@ -34,7 +35,8 @@ pub struct RenderTile {
     pub id: UnwrappedTileID,
     pub matrix: Mat4,
     pub near_clipped_matrix: Mat4,
-    // TODO(port): std::unique_ptr<DebugBucket> debugBucket (debug overlays).
+    /// layers: debug
+    pub debug_bucket: Option<Box<DebugBucket>>,
 
     /// `tile.id`.
     tile_id: OverscaledTileID,
@@ -57,6 +59,7 @@ impl RenderTile {
             tile_hold_for_fade: tile.hold_for_fade(),
             render_data: None,
             needs_rendering: false,
+            debug_bucket: None, // layers: debug
         }
     }
 
@@ -159,6 +162,11 @@ impl RenderTile {
         self.render_data().get_bucket(impl_)
     }
 
+    /// symbols: the feature index of the tile's layout result.
+    pub fn get_feature_index(&self) -> Option<std::sync::Arc<crate::geometry::feature_index::FeatureIndex>> {
+        self.render_data.as_ref().and_then(|data| data.get_feature_index())
+    }
+
     pub fn get_layer_render_data(&self, impl_: &dyn layer::Impl) -> Option<&LayerRenderData> {
         self.render_data().get_layer_render_data(impl_)
     }
@@ -178,7 +186,10 @@ impl RenderTile {
     pub fn upload(&self, upload_pass: &dyn UploadPass) {
         self.render_data().upload(upload_pass);
 
-        // TODO(port): debugBucket->upload(uploadPass).
+        // layers: debug
+        if let Some(debug_bucket) = &self.debug_bucket {
+            debug_bucket.upload(upload_pass);
+        }
     }
 
     /// `prepare(const SourcePrepareParameters&)`; `tile` is the tile this
@@ -190,8 +201,31 @@ impl RenderTile {
 
         self.needs_rendering = tile.base().used_by_rendered_layers.get();
 
-        // TODO(port): the DebugBucket for MapDebugOptions other than NoDebug
-        // (debug overlays).
+        // layers: debug
+        let tile_base = tile.base();
+        let needs_debug_bucket = match &self.debug_bucket {
+            None => true,
+            Some(debug_bucket) => {
+                debug_bucket.renderable != tile.is_renderable()
+                    || debug_bucket.complete != tile.is_complete()
+                    || debug_bucket.modified != tile_base.modified.get()
+                    || debug_bucket.expires != tile_base.expires.get()
+                    || debug_bucket.debug_mode != parameters.debug_options
+            }
+        };
+        if parameters.debug_options != MapDebugOptions::NO_DEBUG && needs_debug_bucket {
+            self.debug_bucket = Some(Box::new(DebugBucket::new(
+                &tile.id(),
+                tile.is_renderable(),
+                tile.is_complete(),
+                tile_base.modified.get(),
+                tile_base.expires.get(),
+                parameters.debug_options,
+                parameters.source_name.clone(),
+            )));
+        } else if parameters.debug_options == MapDebugOptions::NO_DEBUG {
+            self.debug_bucket = None;
+        }
 
         // Calculate two matrices for this tile: matrix is the standard tile
         // matrix; nearClippedMatrix has near plane moved further, to enhance

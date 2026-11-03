@@ -1,6 +1,6 @@
 // Ports test/style/expression/global_state.test.cpp (minus the tests on
 // PropertyExpression, PropertyValue, Filter, ColorRampPropertyValue and
-// FormatSectionOverride, which are mln_style / renderer types).
+// FormatSectionOverride, which are mln_style / renderer types; see below).
 
 use crate::expression::{
     Dependency, EvaluationContext, Expression, GlobalStateMap, Kind, collect_global_state_refs,
@@ -27,6 +27,7 @@ fn state(entries: &[(&str, MbglValue)]) -> GlobalStateMap {
     entries.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
 }
 
+// gtest: GlobalStateExpression.Parse
 #[test]
 fn parse() {
     let expr = parse_expression(r#"["global-state", "showLabels"]"#, None).unwrap();
@@ -36,6 +37,7 @@ fn parse() {
     assert!(expr.has(Dependency::GLOBAL_STATE));
 }
 
+// gtest: GlobalStateExpression.ParseErrors
 #[test]
 fn parse_errors() {
     // Missing argument.
@@ -50,6 +52,7 @@ fn parse_errors() {
     assert!(parse_expression(r#"["global-state", ["literal", "a"]]"#, None).is_none());
 }
 
+// gtest: GlobalStateExpression.IsNotConstant
 #[test]
 fn is_not_constant() {
     let expr = parse_expression(r#"["global-state", "showLabels"]"#, None).unwrap();
@@ -61,6 +64,7 @@ fn is_not_constant() {
     assert!(!is_runtime_constant(&*expr));
 }
 
+// gtest: GlobalStateExpression.Evaluate
 #[test]
 fn evaluate() {
     let expr = parse_expression(r#"["global-state", "size"]"#, None).unwrap();
@@ -78,6 +82,7 @@ fn evaluate() {
     assert_eq!(Value::Null, expr.evaluate(&EvaluationContext::default()).unwrap());
 }
 
+// gtest: GlobalStateExpression.EvaluateArray
 #[test]
 fn evaluate_array() {
     let expr = parse_expression(r#"["global-state", "categories"]"#, None).unwrap();
@@ -97,6 +102,7 @@ fn evaluate_array() {
     assert_eq!(Value::String("hotel".into()), array[1]);
 }
 
+// gtest: GlobalStateExpression.EvaluateInComposition
 #[test]
 fn evaluate_in_composition() {
     let expr = parse_expression(
@@ -119,11 +125,12 @@ fn evaluate_in_composition() {
     assert_eq!(Value::Number(5.0), expr.evaluate(&EvaluationContext::default()).unwrap());
 }
 
-// TODO(port): PropertyExpressionCapturesGlobalState,
-// PropertyValueConversionKeepsExpression, Filter, ColorRamp,
-// FormatSectionOverrideUsesCapturedState, PropertyExpressionGlobalStateRefs
-// (mln_style / renderer types).
+// PropertyExpressionCapturesGlobalState, PropertyValueConversionKeepsExpression,
+// Filter, ColorRamp and PropertyExpressionGlobalStateRefs are in mln_style's
+// tests (expression_global_state.rs), FormatSectionOverrideUsesCapturedState
+// in mln_renderer's (format_section_override_test.rs).
 
+// gtest: GlobalStateExpression.CollectGlobalStateRefs
 #[test]
 fn collect_global_state_refs_() {
     let expr = parse_expression(
@@ -143,6 +150,7 @@ fn collect_global_state_refs_() {
     assert!(refs.is_empty());
 }
 
+// gtest: GlobalStateExpression.GlobalStateRefsIntersect
 #[test]
 fn global_state_refs_intersect_() {
     let refs = BTreeSet::from(["a".to_owned(), "b".to_owned()]);
@@ -156,6 +164,7 @@ fn global_state_refs_intersect_() {
     assert!(global_state_refs_intersect(Some(&refs), None));
 }
 
+// gtest: GlobalStateExpression.Serialize
 #[test]
 fn serialize() {
     let expr = parse_expression(r#"["global-state", "showLabels"]"#, None).unwrap();

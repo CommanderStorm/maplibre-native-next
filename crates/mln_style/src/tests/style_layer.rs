@@ -67,9 +67,9 @@ fn parse_filter(expression: &str) -> Filter {
     convert::<Filter>(&Convertible::from(&json), &mut error).expect("filter")
 }
 
+// gtest: Layer.BackgroundProperties
 #[test]
 fn background_properties() {
-    // TEST(Layer, BackgroundProperties)
     let mut layer = BackgroundLayer::new("background");
     assert_eq!("background", layer.get_type_info().type_);
 
@@ -85,9 +85,9 @@ fn background_properties() {
     assert_eq!(*layer.get_background_pattern(), pattern());
 }
 
+// gtest: Layer.CircleProperties
 #[test]
 fn circle_properties() {
-    // TEST(Layer, CircleProperties)
     let mut layer = CircleLayer::new("circle", "source");
     assert_eq!("circle", layer.get_type_info().type_);
 
@@ -112,9 +112,9 @@ fn circle_properties() {
     assert_eq!(*layer.get_circle_translate_anchor(), c(TRANSLATE_ANCHOR));
 }
 
+// gtest: Layer.FillProperties
 #[test]
 fn fill_properties() {
-    // TEST(Layer, FillProperties)
     let mut layer = FillLayer::new("fill", "source");
     assert_eq!("fill", layer.get_type_info().type_);
 
@@ -142,9 +142,9 @@ fn fill_properties() {
     assert_eq!(*layer.get_fill_translate_anchor(), c(TRANSLATE_ANCHOR));
 }
 
+// gtest: Layer.LineProperties
 #[test]
 fn line_properties() {
-    // TEST(Layer, LineProperties)
     let mut layer = LineLayer::new("line", "source");
     assert_eq!("line", layer.get_type_info().type_);
 
@@ -195,9 +195,9 @@ fn line_properties() {
     assert_eq!(*layer.get_line_pattern(), pattern());
 }
 
+// gtest: Layer.RasterProperties
 #[test]
 fn raster_properties() {
-    // TEST(Layer, RasterProperties)
     let mut layer = RasterLayer::new("raster", "source");
     assert_eq!("raster", layer.get_type_info().type_);
 
@@ -225,6 +225,7 @@ fn raster_properties() {
     assert_eq!(*layer.get_raster_fade_duration(), c(DURATION));
 }
 
+// gtest: Layer.Observer
 #[test]
 fn observer() {
     // TEST(Layer, Observer). C++ counts `StubLayerObserver::layerChanged`
@@ -280,9 +281,9 @@ fn fixture(path: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
+// gtest: Layer.DuplicateLayer
 #[test]
 fn duplicate_layer() {
-    // TEST(Layer, DuplicateLayer)
     // Setup style
     let mut style = StyleImpl::new(1.0);
     style.load_json(&fixture("test/fixtures/resources/style-unused-sources.json"));
@@ -300,9 +301,20 @@ fn duplicate_layer() {
     }
 }
 
-// TODO(port): TEST(Layer, IncompatibleLayer) needs the vector source of
-// style-unused-sources.json (source conversion is not ported; without the
-// source, `addLayer` has nothing to check the raster layer against).
+// gtest: Layer.IncompatibleLayer
+#[test]
+fn incompatible_layer() {
+    // Setup style
+    let mut style = StyleImpl::new(1.0);
+    style.load_json(&fixture("test/fixtures/resources/style-unused-sources.json"));
+
+    // Try to add duplicate
+    match style.add_layer(Box::new(RasterLayer::new("raster", "unusedsource")), None) {
+        Ok(_) => panic!("Should not have been allowed to add an incompatible layer to the source"),
+        // Expected
+        Err(e) => assert_eq!("Layer 'raster' is not compatible with source 'unusedsource'", e.to_string()),
+    }
+}
 
 /// The text-field values `testHasOverrides` sets, in its order.
 #[derive(Clone, Copy, Debug)]
@@ -383,6 +395,7 @@ impl FormattedCase {
     }
 }
 
+// gtest: Layer.SymbolLayerOverrides
 #[test]
 fn symbol_layer_overrides() {
     // TEST(Layer, SymbolLayerOverrides). The C++ Mock*Properties are

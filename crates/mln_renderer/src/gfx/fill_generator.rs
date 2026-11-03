@@ -117,7 +117,7 @@ pub fn generate_fill_and_outline_buffers(
         line_vertices,
         LineBucket::layout_vertex,
         line_segments,
-        SegmentBase::new,
+        &SegmentBase::new,
         get_segment,
         line_indexes,
     );

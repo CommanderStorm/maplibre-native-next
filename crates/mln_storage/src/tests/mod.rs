@@ -1,13 +1,33 @@
 // Ported gtests (test/storage/*.test.cpp) and test helpers.
 
 mod database_file_source;
+mod http_file_source;
+mod http_server;
 mod main_resource_loader;
 mod offline_database;
 mod online_file_source;
 
+use crate::AsyncRequest;
 use mln_util::logging::{Event, EventSeverity, Log, Observer};
+use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+/// A `std::unique_ptr<AsyncRequest>` that a request's own callback can reset.
+pub type Req = Rc<RefCell<Option<Box<dyn AsyncRequest>>>>;
+
+pub fn req() -> Req {
+    Rc::new(RefCell::new(None))
+}
+
+/// Serializes the tests that use process-wide state (NetworkStatus, the
+/// FileSourceManager's shared file sources): gtest runs one test at a time,
+/// the Rust harness runs them in parallel.
+pub fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// A path in the runfiles tree of the C++ repository (`maplibre+`).
 pub fn cpp_path(relative: &str) -> PathBuf {

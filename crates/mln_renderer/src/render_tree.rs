@@ -6,24 +6,51 @@
 // `std::set<LayerRenderItem>` (ordered and deduplicated by `index`) is a
 // `BTreeMap<u32, LayerRenderItem>`.
 
+use crate::layer_tweaker::LayerTweaker; // layers: debug
 use crate::paint_parameters::{PaintParameters, TransformParameters};
 use crate::render_layer::RenderLayerPtr;
 use crate::render_pass::RenderPass;
-use mln_gfx::UploadPass;
+use mln_gfx::{LayerGroupBasePtr, UploadPass}; // layers: debug
 use mln_map_types::{MapDebugOptions, MapMode, TransformState};
 use mln_util::chrono::TimePoint;
 use mln_util::Color;
+use std::cell::RefCell; // layers: debug
 use std::collections::BTreeMap;
+use std::rc::Weak; // layers: debug
+
+/// `RenderItem::DebugType` (layers: debug).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DebugType {
+    TextOutline,
+    Text,
+    Border,
+}
+
+/// `RenderItem::DebugLayerGroupMap` (layers: debug).
+pub type DebugLayerGroupMap = BTreeMap<DebugType, LayerGroupBasePtr>;
+
+/// The `layerGroup->addLayerTweaker(tweaker)` calls of
+/// `updateDebugDrawables`: Rust layer groups keep no tweaker list (see
+/// layer_group.rs), the orchestrator registers these (layers: debug).
+pub type DebugLayerTweakers = Vec<(LayerGroupBasePtr, Weak<RefCell<dyn LayerTweaker>>)>;
 
 /// `RenderItem`: the render items of sources (`sourceRenderItems`). The
 /// layer render items are the concrete `LayerRenderItem`.
-// TODO(port): `updateDebugDrawables(DebugLayerGroupMap&, PaintParameters&)`
-// (debug overlays).
 pub trait RenderItem {
     fn upload(&self, upload_pass: &dyn UploadPass);
     fn render(&self, _parameters: &mut PaintParameters<'_>) {}
     fn has_render_pass(&self, pass: RenderPass) -> bool;
     fn get_name(&self) -> &str;
+    /// `updateDebugDrawables(DebugLayerGroupMap&, PaintParameters&)`; a
+    /// no-op for the items that have none (LayerRenderItem, the image
+    /// source) (layers: debug).
+    fn update_debug_drawables(
+        &self,
+        _debug_layer_groups: &mut DebugLayerGroupMap,
+        _parameters: &PaintParameters<'_>,
+        _tweakers: &mut DebugLayerTweakers,
+    ) {
+    }
 }
 
 /// `LayerRenderItem`.
@@ -92,8 +119,10 @@ pub struct RenderTree {
     parameters: Box<RenderTreeParameters>,
     pub(crate) layer_render_items: BTreeMap<u32, LayerRenderItem>,
     source_render_items: Vec<Box<dyn RenderItem>>,
-    // TODO(port): layersNeedPlacement, placement, updateSymbolOpacities
-    // (symbols).
+    // symbols:
+    layers_need_placement: Vec<crate::render_layer::RenderLayerPtr>,
+    placement: Option<std::rc::Rc<crate::text::placement::Placement>>,
+    update_symbol_opacities: bool,
     start_time: std::time::Instant,
 }
 
@@ -108,14 +137,38 @@ impl RenderTree {
             parameters,
             layer_render_items,
             source_render_items,
+            layers_need_placement: Vec::new(),
+            placement: None,
+            update_symbol_opacities: false,
             start_time,
         }
+    }
+
+    /// symbols: the placement half of the C++ `RenderTreeImpl` constructor.
+    pub(crate) fn set_placement(
+        &mut self,
+        layers_need_placement: Vec<crate::render_layer::RenderLayerPtr>,
+        placement: std::rc::Rc<crate::text::placement::Placement>,
+        update_symbol_opacities: bool,
+    ) {
+        self.layers_need_placement = layers_need_placement;
+        self.placement = Some(placement);
+        self.update_symbol_opacities = update_symbol_opacities;
     }
 
     /// `prepare()`: updates the symbol buckets of the layers that need
     /// placement.
     pub fn prepare(&mut self) {
-        // TODO(port): placement->updateLayerBuckets for layersNeedPlacement.
+        let Some(placement) = &self.placement else {
+            return;
+        };
+        for layer in self.layers_need_placement.iter().rev() {
+            placement.update_layer_buckets(
+                &*layer.borrow(),
+                &self.parameters.transform_params.state,
+                self.update_symbol_opacities,
+            );
+        }
     }
 
     pub fn get_layer_render_item_map(&self) -> &BTreeMap<u32, LayerRenderItem> {

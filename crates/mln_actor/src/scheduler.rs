@@ -6,16 +6,20 @@
 // schedulers that other threads post to live in an `Arc` (a RunLoop's
 // `RunLoopHandle`, a `ThreadPool`).
 //
-// TODO(port): `GetSequenced`, `runOnRenderThread`/`runRenderJobs`,
-// `setExceptionHandler`.
+// TODO(port): `runOnRenderThread`/`runRenderJobs`. (gtests-core added
+// `GetSequenced` and `setExceptionHandler`.)
 
 use crate::local_object::LocalObject;
-use crate::thread_pool::ThreadPool;
+use crate::thread_pool::{SequencedScheduler, ThreadPool};
 use mln_util::identity::SimpleIdentity;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex, Weak};
 
 pub type Task = Box<dyn FnOnce() + Send + 'static>;
+
+/// `std::function<void(const std::exception_ptr)>`: gets the payload of a
+/// task that panicked (gtests-core).
+pub type ExceptionHandler = Box<dyn Fn(Box<dyn std::any::Any + Send>) + Send + Sync>;
 
 /// A `Scheduler` is responsible for coordinating the processing of messages
 /// by one or more actors via their mailboxes.
@@ -37,6 +41,11 @@ pub trait Scheduler {
     fn wait_for_empty_tagged(&self, _tag: SimpleIdentity) {
         self.wait_for_empty();
     }
+
+    /// `setExceptionHandler(handler)` (gtests-core): called when a task on a
+    /// thread this scheduler controls panics (only thread pools call it, as
+    /// in C++).
+    fn set_exception_handler(&self, _handler: ExceptionHandler) {}
 }
 
 pub type SchedulerPtr = Arc<dyn Scheduler + Send + Sync>;
@@ -78,6 +87,33 @@ pub fn get_background() -> SchedulerPtr {
     let scheduler = Arc::new(ThreadPool::new());
     *weak = Some(Arc::downgrade(&scheduler));
     scheduler
+}
+
+/// `Scheduler::GetSequenced()` (gtests-core): one of 10 process-wide
+/// single-thread schedulers, round robin, each created on first use and
+/// kept alive by its users.
+pub fn get_sequenced() -> SchedulerPtr {
+    const SCHEDULERS_COUNT: usize = 10;
+    struct State {
+        weaks: Vec<Option<Weak<SequencedScheduler>>>,
+        last_used_index: usize,
+    }
+    static STATE: Mutex<State> = Mutex::new(State {
+        weaks: Vec::new(),
+        last_used_index: 0,
+    });
+    let mut state = STATE.lock().unwrap();
+    if state.weaks.is_empty() {
+        state.weaks.resize(SCHEDULERS_COUNT, None);
+    }
+    state.last_used_index = (state.last_used_index + 1) % SCHEDULERS_COUNT;
+    let index = state.last_used_index;
+    if let Some(scheduler) = state.weaks[index].as_ref().and_then(Weak::upgrade) {
+        return scheduler;
+    }
+    let result = Arc::new(SequencedScheduler::new());
+    state.weaks[index] = Some(Arc::downgrade(&result));
+    result
 }
 
 /// `Scheduler::bindOnce(fn)`: a function that, when called, schedules `fn`

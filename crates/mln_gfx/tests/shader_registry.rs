@@ -89,6 +89,7 @@ fn same(a: &Option<ShaderProgramBasePtr>, b: &ShaderProgramBasePtr) -> bool {
 }
 
 /// Ensure we can register a gfx::Shader-based type with a registry object
+// gtest: ShaderRegistry.RegisterShader
 #[test]
 fn register_shader() {
     let registry = ShaderRegistry::new();
@@ -110,6 +111,7 @@ fn register_shader() {
 }
 
 /// Validate replacing a shader by name with a different instance
+// gtest: ShaderRegistry.ReplaceShaderType
 #[test]
 fn replace_shader_type() {
     let registry = ShaderRegistry::new();
@@ -140,6 +142,7 @@ fn replace_shader_type() {
 }
 
 /// Validate shader type info and downcasting are functioning
+// gtest: ShaderRegistry.ShaderRTTI
 #[test]
 fn shader_rtti() {
     let program1 = StubProgram::new(STUB_PROGRAM_1, 10);
@@ -150,6 +153,7 @@ fn shader_rtti() {
 }
 
 /// Register the same type under different names
+// gtest: ShaderRegistry.MultiRegister
 #[test]
 fn multi_register() {
     let registry = ShaderRegistry::new();
@@ -176,6 +180,7 @@ fn populate(group: &dyn ShaderGroup, to: &mut Option<ShaderProgramBasePtr>, name
 }
 
 /// Test fetching
+// gtest: ShaderRegistry.RegistryFetch
 #[test]
 fn registry_fetch() {
     let registry = ShaderRegistry::new();
@@ -193,6 +198,7 @@ fn registry_fetch() {
 }
 
 /// Replace a manually named shader
+// gtest: ShaderRegistry.NamedReplace
 #[test]
 fn named_replace() {
     let registry = ShaderRegistry::new();

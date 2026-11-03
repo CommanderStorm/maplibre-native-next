@@ -82,6 +82,25 @@ impl Drop for FixtureLog {
     }
 }
 
+/// `mln::util::read_file(path)` for a path relative to the C++ repository
+/// (read in place from the runfiles tree, `maplibre+`).
+pub fn read_file(relative: &str) -> String {
+    let base = std::env::var("TEST_SRCDIR")
+        .or_else(|_| std::env::var("RUNFILES_DIR"))
+        .expect("TEST_SRCDIR");
+    let path = std::path::PathBuf::from(base).join("maplibre+").join(relative);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// `mln::util::read_file(path)` as bytes.
+pub fn read_file_bytes(relative: &str) -> Vec<u8> {
+    let base = std::env::var("TEST_SRCDIR")
+        .or_else(|_| std::env::var("RUNFILES_DIR"))
+        .expect("TEST_SRCDIR");
+    let path = std::path::PathBuf::from(base).join("maplibre+").join(relative);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
 /// `convertJSON<T>(json, error, args...)` (style/conversion/json.hpp).
 pub fn parse_json(json: &str) -> serde_json::Value {
     serde_json::from_str(json).expect("test JSON must parse")
@@ -104,12 +123,12 @@ pub fn value_to_json(value: &maplibre_native_base::Value) -> serde_json::Value {
     }
 }
 
-/// Ports test/include/mln/test/stub_geometry_tile_feature.hpp (the
-/// property-map constructor).
+/// Ports test/include/mln/test/stub_geometry_tile_feature.hpp.
 pub struct StubGeometryTileFeature {
     pub properties: maplibre_native_base::PropertyMap,
     pub id: maplibre_native_base::Identifier,
     pub type_: mln_util::geometry::FeatureType,
+    pub geometry: mln_tile_id::geometry_tile_data::GeometryCollection,
 }
 
 impl StubGeometryTileFeature {
@@ -118,6 +137,20 @@ impl StubGeometryTileFeature {
             properties,
             id: maplibre_native_base::Identifier::Null,
             type_: mln_util::geometry::FeatureType::Point,
+            geometry: Default::default(),
+        }
+    }
+
+    /// `StubGeometryTileFeature(FeatureType, GeometryCollection)`.
+    pub fn with_geometry(
+        type_: mln_util::geometry::FeatureType,
+        geometry: mln_tile_id::geometry_tile_data::GeometryCollection,
+    ) -> Self {
+        StubGeometryTileFeature {
+            properties: Default::default(),
+            id: maplibre_native_base::Identifier::Null,
+            type_,
+            geometry,
         }
     }
 
@@ -127,7 +160,12 @@ impl StubGeometryTileFeature {
         type_: mln_util::geometry::FeatureType,
         properties: maplibre_native_base::PropertyMap,
     ) -> Self {
-        StubGeometryTileFeature { properties, id, type_ }
+        StubGeometryTileFeature {
+            properties,
+            id,
+            type_,
+            geometry: Default::default(),
+        }
     }
 }
 
@@ -146,6 +184,10 @@ impl mln_tile_id::geometry_tile_data::GeometryTileFeature for StubGeometryTileFe
 
     fn get_id(&self) -> maplibre_native_base::Identifier {
         self.id.clone()
+    }
+
+    fn get_geometries(&self) -> &mln_tile_id::geometry_tile_data::GeometryCollection {
+        &self.geometry
     }
 }
 

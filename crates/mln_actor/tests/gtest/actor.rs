@@ -1,0 +1,417 @@
+// Ports test/actor/actor.test.cpp.
+
+use crate::{get, wait_for};
+use mln_actor::actor::{Actor, PoolActorRef};
+use mln_actor::scheduler::{self, Scheduler, SchedulerPtr, Task};
+use mln_actor::{AspiringActor, EstablishedActor, RunLoop};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
+
+// gtest: Actor.Construction
+#[test]
+fn construction() {
+    struct TestActor;
+    let mut constructed = false;
+    let _test = Actor::new(scheduler::get_background(), |_self: PoolActorRef<TestActor>| {
+        constructed = true;
+        TestActor
+    });
+    assert!(constructed);
+}
+
+// gtest: Actor.Destruction
+#[test]
+fn destruction() {
+    struct TestActor {
+        destructed: Arc<AtomicBool>,
+    }
+    impl Drop for TestActor {
+        fn drop(&mut self) {
+            self.destructed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let destructed = Arc::new(AtomicBool::new(false));
+    {
+        let d = destructed.clone();
+        let _test = Actor::new(scheduler::get_background(), move |_| TestActor { destructed: d });
+    }
+    assert!(destructed.load(Ordering::SeqCst));
+}
+
+// gtest: Actor.DestructionBlocksOnReceive
+#[test]
+fn destruction_blocks_on_receive() {
+    // Destruction blocks until the actor is not receiving.
+    struct TestActor {
+        promise: mpsc::Sender<()>,
+        future: mpsc::Receiver<()>,
+        waited: AtomicBool,
+    }
+    impl TestActor {
+        fn wait(&mut self) {
+            self.promise.send(()).unwrap();
+            get(&self.future);
+            std::thread::sleep(Duration::from_millis(1));
+            self.waited.store(true, Ordering::SeqCst);
+        }
+    }
+    impl Drop for TestActor {
+        fn drop(&mut self) {
+            assert!(self.waited.load(Ordering::SeqCst));
+        }
+    }
+
+    let (entered_promise, entered_future) = mpsc::channel();
+    let (exiting_promise, exiting_future) = mpsc::channel();
+
+    let test = Actor::new(scheduler::get_background(), move |_| TestActor {
+        promise: entered_promise,
+        future: exiting_future,
+        waited: AtomicBool::new(false),
+    });
+
+    test.self_ref().invoke(TestActor::wait);
+    get(&entered_future);
+    exiting_promise.send(()).unwrap();
+    drop(test);
+}
+
+// gtest: Actor.DestructionBlocksOnSend
+#[test]
+fn destruction_blocks_on_send() {
+    // Destruction blocks until the actor is not being sent a message.
+    struct TestScheduler {
+        promise: Mutex<mpsc::Sender<()>>,
+        future: Mutex<mpsc::Receiver<()>>,
+        waited: AtomicBool,
+    }
+    impl Drop for TestScheduler {
+        fn drop(&mut self) {
+            assert!(self.waited.load(Ordering::SeqCst));
+        }
+    }
+    impl Scheduler for TestScheduler {
+        fn wait_for_empty(&self) {
+            unreachable!();
+        }
+        fn schedule(&self, _task: Task) {
+            self.promise.lock().unwrap().send(()).unwrap();
+            get(&self.future.lock().unwrap());
+            std::thread::sleep(Duration::from_millis(1));
+            self.waited.store(true, Ordering::SeqCst);
+        }
+    }
+
+    struct TestActor;
+    impl TestActor {
+        fn message(&mut self) {}
+    }
+
+    let (entered_promise, entered_future) = mpsc::channel();
+    let (exiting_promise, exiting_future) = mpsc::channel();
+
+    // C++ `Actor(Scheduler&)` does not retain the scheduler; the port's
+    // `Actor` always does (an `Arc`), so the scheduler goes away when its
+    // last user (here: the sending thread) lets go of it.
+    let scheduler: SchedulerPtr = Arc::new(TestScheduler {
+        promise: Mutex::new(entered_promise),
+        future: Mutex::new(exiting_future),
+        waited: AtomicBool::new(false),
+    });
+    let actor = Actor::new(scheduler.clone(), |_| TestActor);
+
+    let actor_ref = actor.self_ref();
+    let thread = std::thread::spawn(move || actor_ref.invoke(TestActor::message));
+
+    get(&entered_future);
+    exiting_promise.send(()).unwrap();
+
+    drop(actor);
+    drop(scheduler);
+    thread.join().expect("~TestScheduler: waited");
+}
+
+// gtest: Actor.DestructionAllowedInReceiveOnSameThread
+#[test]
+fn destruction_allowed_in_receive_on_same_thread() {
+    // Destruction doesn't block if occurring on the same
+    // thread as receive(). This prevents deadlocks and
+    // allows for self-closing actors
+    struct TestActor;
+    impl TestActor {
+        fn call_me_back(&mut self, callback: impl FnOnce()) {
+            callback();
+        }
+    }
+
+    let (callback_fired_promise, callback_fired_future) = mpsc::channel();
+
+    let retainer: SchedulerPtr = scheduler::get_background();
+    let test = Arc::new(Mutex::new(Some(Actor::new(retainer.clone(), |_| TestActor))));
+
+    // Callback (triggered while mutex is locked in Mailbox::receive())
+    let slot = test.clone();
+    let self_ref = test.lock().unwrap().as_ref().unwrap().self_ref();
+    self_ref.invoke(move |actor: &mut TestActor| {
+        actor.call_me_back(|| {
+            // Destroy the Actor/Mailbox in the same thread
+            let actor = slot.lock().unwrap().take();
+            drop(actor);
+            callback_fired_promise.send(()).unwrap();
+        })
+    });
+
+    let status = wait_for(&callback_fired_future, Duration::from_secs(1));
+    assert!(status.is_some());
+}
+
+// gtest: Actor.SelfDestructionDoesntCrashWaitingReceivingThreads
+#[test]
+fn self_destruction_doesnt_crash_waiting_receiving_threads() {
+    // Ensures destruction doesn't cause waiting threads to
+    // crash when a actor closes it's own mailbox from a
+    // callback
+    struct TestActor;
+    impl TestActor {
+        fn call_me_back(&mut self, callback: impl FnOnce()) {
+            callback();
+        }
+    }
+
+    let (actor_closed_promise, actor_closed_future) = mpsc::channel();
+
+    let closing_actor = Arc::new(Mutex::new(Some(Actor::new(scheduler::get_background(), |_| TestActor))));
+    let waiting_actor = Actor::new(scheduler::get_background(), |_| TestActor);
+
+    let waiting_message_processed = Arc::new(AtomicBool::new(false));
+
+    let closing_ref = closing_actor.lock().unwrap().as_ref().unwrap().self_ref();
+    let waiting_ref = waiting_actor.self_ref();
+    let slot = closing_actor.clone();
+    let processed = waiting_message_processed.clone();
+    let queued_ok = Arc::new(AtomicBool::new(false));
+    let queued_ok_in = queued_ok.clone();
+
+    // Callback (triggered while mutex is locked in Mailbox::receive())
+    closing_ref.clone().invoke(move |actor: &mut TestActor| {
+        actor.call_me_back(move || {
+            // Queue up another message from another thread
+            let (message_queued_promise, message_queued_future) = mpsc::channel();
+            waiting_ref.invoke(move |actor: &mut TestActor| {
+                actor.call_me_back(move || {
+                    // This will be waiting on the mutex in
+                    // Mailbox::receive(), holding a lock on the weak_ptr so
+                    // the mailbox is not destroyed
+                    closing_ref.invoke(move |actor: &mut TestActor| {
+                        actor.call_me_back(|| processed.store(true, Ordering::SeqCst))
+                    });
+                    message_queued_promise.send(()).unwrap();
+                })
+            });
+
+            // Wait for the message to be queued
+            queued_ok_in.store(
+                wait_for(&message_queued_future, Duration::from_secs(1)).is_some(),
+                Ordering::SeqCst,
+            );
+
+            // Destroy the Actor/Mailbox in the same thread
+            let actor = slot.lock().unwrap().take();
+            drop(actor);
+            actor_closed_promise.send(()).unwrap();
+        })
+    });
+
+    let status = wait_for(&actor_closed_future, Duration::from_secs(1));
+    assert!(status.is_some());
+    assert!(queued_ok.load(Ordering::SeqCst));
+    assert!(!waiting_message_processed.load(Ordering::SeqCst));
+    drop(waiting_actor);
+}
+
+// gtest: Actor.OrderedMailbox
+#[test]
+fn ordered_mailbox() {
+    // Messages are processed in order.
+    struct TestActor {
+        last: i32,
+        promise: mpsc::Sender<bool>,
+        in_order: bool,
+    }
+    impl TestActor {
+        fn receive(&mut self, i: i32) {
+            self.in_order &= i == self.last + 1;
+            self.last = i;
+        }
+        fn end(&mut self) {
+            self.promise.send(self.in_order).unwrap();
+        }
+    }
+
+    let (ended_promise, ended_future) = mpsc::channel();
+    let test = Actor::new(scheduler::get_background(), move |_| TestActor {
+        last: 0,
+        promise: ended_promise,
+        in_order: true,
+    });
+
+    for i in 1..=10 {
+        test.self_ref().invoke(move |a: &mut TestActor| a.receive(i));
+    }
+
+    test.self_ref().invoke(TestActor::end);
+    assert!(get(&ended_future), "EXPECT_EQ(i, last + 1)");
+}
+
+// gtest: Actor.NonConcurrentMailbox
+#[test]
+fn non_concurrent_mailbox() {
+    // An individual actor is never itself concurrent.
+    struct TestActor {
+        last: i32,
+        promise: mpsc::Sender<bool>,
+        in_order: bool,
+    }
+    impl TestActor {
+        fn receive(&mut self, i: i32) {
+            self.in_order &= i == self.last + 1;
+            self.last = i;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        fn end(&mut self) {
+            self.promise.send(self.in_order).unwrap();
+        }
+    }
+
+    let (ended_promise, ended_future) = mpsc::channel();
+    let test = Actor::new(scheduler::get_background(), move |_| TestActor {
+        last: 0,
+        promise: ended_promise,
+        in_order: true,
+    });
+
+    for i in 1..=10 {
+        test.self_ref().invoke(move |a: &mut TestActor| a.receive(i));
+    }
+
+    test.self_ref().invoke(TestActor::end);
+    assert!(get(&ended_future), "EXPECT_EQ(i, last + 1)");
+}
+
+// gtest: Actor.Ask
+#[test]
+fn ask() {
+    // Asking for a result
+    struct TestActor;
+    impl TestActor {
+        fn double_it(&mut self, i: i32) -> i32 {
+            i * 2
+        }
+    }
+
+    let test = Actor::new(scheduler::get_background(), |_| TestActor);
+
+    let result = test.self_ref().ask(|a: &mut TestActor| a.double_it(1));
+    let status = wait_for(&result, Duration::from_secs(1));
+    assert_eq!(Some(2), status);
+}
+
+// gtest: Actor.AskVoid
+#[test]
+fn ask_void() {
+    // Ask waits for void methods
+    struct TestActor {
+        executed: Arc<AtomicBool>,
+    }
+    impl TestActor {
+        fn do_it(&mut self) {
+            self.executed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let executed = Arc::new(AtomicBool::new(false));
+    let e = executed.clone();
+    let actor = Actor::new(scheduler::get_background(), move |_| TestActor { executed: e });
+
+    get(&actor.self_ref().ask(TestActor::do_it));
+    assert!(executed.load(Ordering::SeqCst));
+}
+
+// gtest: Actor.NoSelfActorRef
+#[test]
+fn no_self_actor_ref() {
+    // Not all actors need a reference to self
+
+    // Trivially constructable
+    struct Trivial;
+    let _trivial = Actor::new(scheduler::get_background(), |_| Trivial);
+
+    // With arguments
+    struct WithArguments {
+        promise: mpsc::Sender<()>,
+    }
+    impl WithArguments {
+        fn receive(&mut self) {
+            self.promise.send(()).unwrap();
+        }
+    }
+
+    let (promise, future) = mpsc::channel();
+    let with_arguments = Actor::new(scheduler::get_background(), move |_| WithArguments { promise });
+    with_arguments.self_ref().invoke(WithArguments::receive);
+    get(&future);
+}
+
+// gtest: Actor.TwoPhaseConstruction
+#[test]
+fn two_phase_construction() {
+    // This test mimics, in simplified form, the approach used by the
+    // Thread<Object> to construct its actor in two parts so that the
+    // Thread<Object> instance can be created without waiting for the target
+    // thread to be up and running.
+    struct TestActor {
+        destroyed: Arc<AtomicBool>,
+    }
+    impl Drop for TestActor {
+        fn drop(&mut self) {
+            self.destroyed.store(true, Ordering::SeqCst);
+        }
+    }
+    impl TestActor {
+        fn call_me(&self, p: mpsc::Sender<()>) {
+            p.send(()).unwrap();
+        }
+        fn stop(&self) {
+            RunLoop::get().stop();
+        }
+    }
+
+    let parent = AspiringActor::<TestActor>::new();
+
+    let destroyed = Arc::new(AtomicBool::new(false));
+
+    let (queue_executed, queue_executed_future) = mpsc::channel();
+
+    parent.self_ref().invoke(move |a: &TestActor| a.call_me(queue_executed));
+    parent.self_ref().invoke(TestActor::stop);
+
+    std::thread::scope(|s| {
+        let captured = destroyed.clone();
+        let parent = &parent;
+        let thread = s.spawn(move || {
+            let run_loop = RunLoop::new();
+            let _test = EstablishedActor::new(&scheduler::get_current(), parent, move |_| TestActor {
+                destroyed: captured,
+            });
+            run_loop.run();
+        });
+
+        // should not hang
+        get(&queue_executed_future);
+        thread.join().unwrap();
+    });
+
+    assert!(destroyed.load(Ordering::SeqCst));
+}

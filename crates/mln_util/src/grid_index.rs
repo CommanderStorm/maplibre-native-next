@@ -408,6 +408,7 @@ mod tests {
         BCircle::new(Point::new(x, y), r)
     }
 
+    // gtest: GridIndex.IndexesFeatures
     #[test]
     fn indexes_features() {
         let mut grid: GridIndex<i16> = GridIndex::new(100.0, 100.0, 10);
@@ -422,6 +423,7 @@ mod tests {
         assert_eq!(grid.query(&bbox(-1000.0, -1000.0, 1000.0, 1000.0)), vec![0, 1, 2]);
     }
 
+    // gtest: GridIndex.DuplicateKeys
     #[test]
     fn duplicate_keys() {
         let mut grid: GridIndex<i16> = GridIndex::new(100.0, 100.0, 10);
@@ -433,6 +435,7 @@ mod tests {
         assert_eq!(grid.query(&bbox(0.0, 0.0, 30.0, 30.0)), vec![KEY, KEY, KEY]);
     }
 
+    // gtest: GridIndex.CircleCircle
     #[test]
     fn circle_circle() {
         let mut grid: GridIndex<i16> = GridIndex::new(100.0, 100.0, 10);
@@ -446,6 +449,7 @@ mod tests {
         assert!(grid.hit_test_circle(&bcircle(80.0, 60.0, 10.0), None));
     }
 
+    // gtest: GridIndex.CircleBox
     #[test]
     fn circle_box() {
         let mut grid: GridIndex<i16> = GridIndex::new(100.0, 100.0, 10);
@@ -458,6 +462,7 @@ mod tests {
         assert_eq!(grid.query(&bbox(0.0, 80.0, 20.0, 100.0)), vec![2]);
     }
 
+    // gtest: GridIndex.IndexesFeaturesOverflow
     #[test]
     fn indexes_features_overflow() {
         let mut grid: GridIndex<i16> = GridIndex::new(5000.0, 5000.0, 25);

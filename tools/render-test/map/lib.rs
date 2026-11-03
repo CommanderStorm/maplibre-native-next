@@ -9,7 +9,7 @@ use mln_map::{BoundOptions, Map, MapLoadError, MapObserver, MapOptions, Projecti
 use mln_platform_default::HeadlessFrontend;
 use mln_util::image::PremultipliedImage;
 use render_test::metadata::{MapMode, TestMetadata};
-use render_test::runner::{CameraOptions, ImplFactory, MapError, ResourceOptions, TestRunnerImpl};
+use render_test::runner::{CameraOptions, ImplFactory, MapError, QueryGeometry, ResourceOptions, TestRunnerImpl};
 use render_test_style as style_ops;
 use mln_storage::{ClientOptions, FileSource, FileSourceManager, FileSourceType};
 use std::cell::Cell;
@@ -140,6 +140,67 @@ impl TestRunnerImpl for Impl {
         self.frontend.render(&mut self.map).map(|result| result.image)
     }
 
+    // query: tile mode.
+    fn default_camera(&mut self) -> Result<CameraOptions, MapError> {
+        let camera = style_ops::default_camera(&self.map.get_style());
+        Ok(CameraOptions {
+            center: camera.center,
+            center_altitude: camera.center_altitude,
+            zoom: camera.zoom,
+            bearing: camera.bearing,
+            pitch: camera.pitch,
+            roll: camera.roll,
+        })
+    }
+
+    fn tile_cover_for_camera(
+        &mut self,
+        camera: &CameraOptions,
+        zoom: u8,
+    ) -> Result<Vec<render_test::runner::TileId>, MapError> {
+        let camera = mln_map::CameraOptions::default()
+            .with_center(camera.center)
+            .with_center_altitude(camera.center_altitude)
+            .with_zoom(camera.zoom)
+            .with_bearing(camera.bearing)
+            .with_pitch(camera.pitch)
+            .with_roll(camera.roll);
+        let bounds = self.map.lat_lng_bounds_for_camera(&camera);
+        Ok(mln_renderer::util::tile_cover::tile_cover_bounds(&bounds, zoom)
+            .into_iter()
+            .map(|id| render_test::runner::TileId {
+                z: id.canonical.z,
+                x: id.canonical.x,
+                y: id.canonical.y,
+                wrap: id.wrap,
+            })
+            .collect())
+    }
+
+    fn collect_placed_symbol_data(&mut self, enable: bool) {
+        self.frontend.with_renderer(|renderer| renderer.collect_placed_symbol_data(enable));
+    }
+
+    fn get_placed_symbols_data(&mut self) -> Vec<render_test::runner::PlacedSymbol> {
+        let to_box = |b: &mln_util::grid_index::BBox| [b.min.x, b.min.y, b.max.x, b.max.y];
+        self.frontend.with_renderer(|renderer| {
+            renderer
+                .get_placed_symbols_data()
+                .iter()
+                .map(|data| render_test::runner::PlacedSymbol {
+                    key: data.key.clone(),
+                    text_collision_box: data.text_collision_box.as_ref().map(to_box),
+                    icon_collision_box: data.icon_collision_box.as_ref().map(to_box),
+                    text_placed: data.text_placed,
+                    icon_placed: data.icon_placed,
+                    intersects_tile_border: data.intersects_tile_border,
+                    viewport_padding: data.viewport_padding,
+                    layer: data.layer.clone(),
+                })
+                .collect()
+        })
+    }
+
     fn jump_to(&mut self, camera: &CameraOptions) -> Result<(), MapError> {
         let camera = mln_map::CameraOptions::default()
             .with_center(camera.center)
@@ -237,9 +298,150 @@ impl TestRunnerImpl for Impl {
         Ok(true)
     }
 
-    // TODO(port): add_source/remove_source, add_image/remove_image (file
-    // source), sleep, setTileLod*: the trait's NotPorted defaults until the
-    // APIs exist.
+    // query
+    fn query_rendered_features(
+        &mut self,
+        geometry: &QueryGeometry,
+        options: &render_test::metadata::RenderedQueryOptions,
+    ) -> Result<Vec<mln_util::feature::Feature>, MapError> {
+        // The parser's `convert<style::Filter>(filter)` (C++ asserts it
+        // converts).
+        let filter = match &options.filter {
+            Some(json) => {
+                let mut error = mln_conversion::Error::default();
+                match mln_style::conversion::convert::<mln_style::filter::Filter>(
+                    &mln_conversion::Convertible::from(json),
+                    &mut error,
+                ) {
+                    Some(filter) => Some(filter),
+                    None => return Err(MapError::Conversion(error.message)),
+                }
+            }
+            None => None,
+        };
+        let options = mln_renderer::query::RenderedQueryOptions::new(options.layer_ids.clone(), filter);
+        Ok(self.frontend.with_renderer(|renderer| match geometry {
+            QueryGeometry::Point(point) => renderer.query_rendered_features_at_point(point, &options),
+            QueryGeometry::Box(screen_box) => {
+                renderer.query_rendered_features_in_box(&screen_box.min, &screen_box.max, &options)
+            }
+        }))
+    }
+
+    // conformance: setTileLod* (Map::setTileLod*, glfw ported them).
+    fn set_tile_lod_min_radius(&mut self, value: f64) -> Result<(), MapError> {
+        self.map.set_tile_lod_min_radius(value);
+        Ok(())
+    }
+
+    fn set_tile_lod_scale(&mut self, value: f64) -> Result<(), MapError> {
+        self.map.set_tile_lod_scale(value);
+        Ok(())
+    }
+
+    fn set_tile_lod_pitch_threshold(&mut self, value: f64) -> Result<(), MapError> {
+        self.map.set_tile_lod_pitch_threshold(value);
+        Ok(())
+    }
+
+    fn set_tile_lod_zoom_shift(&mut self, value: f64) -> Result<(), MapError> {
+        self.map.set_tile_lod_zoom_shift(value);
+        Ok(())
+    }
+
+    fn set_tile_lod_mode(&mut self, mode: render_test::parser::TileLodMode) -> Result<(), MapError> {
+        self.map.set_tile_lod_mode(match mode {
+            render_test::parser::TileLodMode::Default => mln_map::TileLodMode::Default,
+            render_test::parser::TileLodMode::Distance => mln_map::TileLodMode::Distance,
+        });
+        Ok(())
+    }
+
+    // query: the remaining runner operations.
+    fn set_light(&mut self, json: &str) -> Result<(), MapError> {
+        style_ops::set_light(&mut self.map.get_style_mut(), json)
+    }
+
+    fn add_source(&mut self, id: &str, json: &str) -> Result<(), MapError> {
+        style_ops::add_source(&mut self.map.get_style_mut(), id, json)
+    }
+
+    fn remove_source(&mut self, id: &str) -> Result<bool, MapError> {
+        Ok(style_ops::remove_source(&mut self.map.get_style_mut(), id))
+    }
+
+    fn add_image(&mut self, name: &str, image_path: &str, pixel_ratio: f32, sdf: bool) -> Result<(), MapError> {
+        // `ctx.getFileSource().request(Resource::image("mapbox://render-tests/" +
+        // imagePath), ...)`, running the run loop until it completes.
+        let Some(file_source) = &self.file_source else {
+            return Err(MapError::LoadFailed);
+        };
+        let maybe_image: Rc<std::cell::RefCell<Option<Vec<u8>>>> = Rc::default();
+        let request_completed = Rc::new(Cell::new(false));
+        let _req = {
+            let maybe_image = maybe_image.clone();
+            let request_completed = request_completed.clone();
+            file_source.request(
+                &mln_storage::Resource::image(&format!("mapbox://render-tests/{image_path}")),
+                Box::new(move |response: mln_storage::Response| {
+                    if let Some(data) = &response.data {
+                        *maybe_image.borrow_mut() = Some(data.to_vec());
+                    }
+                    request_completed.set(true);
+                }),
+            )
+        };
+
+        while !request_completed.get() {
+            RunLoop::get().run_once();
+        }
+
+        let Some(bytes) = maybe_image.borrow_mut().take() else {
+            return Err(MapError::LoadFailed);
+        };
+
+        // C++ `decodeImage` and the `style::Image` constructor throw (not
+        // caught by the runner).
+        let image = mln_platform_default_image::decode_image(&bytes).map_err(MapError::Exception)?;
+        let image = mln_style::image::Impl::new(
+            name.to_string(),
+            image,
+            pixel_ratio,
+            sdf,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+        )
+        .map_err(|e| MapError::Exception(e.to_string()))?;
+        self.map.get_style_mut().add_image(Arc::new(image));
+        Ok(())
+    }
+
+    fn remove_image(&mut self, name: &str) -> Result<(), MapError> {
+        self.map.get_style_mut().remove_image(name);
+        Ok(())
+    }
+
+    fn sleep(&mut self, duration: std::time::Duration) -> Result<(), MapError> {
+        // util::Timer sleepTimer; sleepTimer.start(duration, zero, ...);
+        // while (sleeping) RunLoop::Get()->runOnce();
+        let sleeping = Rc::new(Cell::new(true));
+        let sleep_timer = mln_actor::Timer::new();
+        {
+            let sleeping = sleeping.clone();
+            sleep_timer.start(
+                mln_util::chrono::Duration::from_millis(duration.as_millis() as i64),
+                mln_util::chrono::Duration::zero(),
+                move || sleeping.set(false),
+            );
+        }
+        while sleeping.get() {
+            RunLoop::get().run_once();
+        }
+        Ok(())
+    }
 }
 
 /// The factory `TestRunner::run` uses for `maps[key]`. Creates the thread's

@@ -176,6 +176,7 @@ mod tests {
         img
     }
 
+    // gtest: DEMData.ConstructorMapbox
     #[test]
     fn constructor_mapbox() {
         let image = fake_image(Size::new(16, 16));
@@ -186,6 +187,7 @@ mod tests {
         assert_eq!(demdata.get_image().bytes(), 18 * 18 * 4);
     }
 
+    // gtest: DEMData.ConstructorTerrarium
     #[test]
     fn constructor_terrarium() {
         let image = fake_image(Size::new(16, 16));
@@ -202,6 +204,7 @@ mod tests {
         assert_eq!(DEMData::new(&image, RasterEncoding::Mapbox).unwrap_err(), "raster-dem tiles must be square.");
     }
 
+    // gtest: DEMData.InitialBackfill
     #[test]
     fn initial_backfill() {
         let image1 = fake_image(Size::new(4, 4));
@@ -242,6 +245,7 @@ mod tests {
         assert_eq!(dem1.get(4, -1), dem1.get(3, 0));
     }
 
+    // gtest: DEMData.BackfillNeighbor
     #[test]
     fn backfill_neighbor() {
         let image1 = fake_image(Size::new(4, 4));

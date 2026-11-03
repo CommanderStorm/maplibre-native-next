@@ -33,16 +33,16 @@ fn assert_float_eq(expected: f32, actual: f32) {
     assert!(diff <= 4, "expected {expected}, got {actual}");
 }
 
+// gtest: TransitioningPropertyValue.EvaluateDefaultValue
 #[test]
 fn evaluate_default_value() {
-    // TEST(TransitioningPropertyValue, EvaluateDefaultValue)
     let property = Transitioning::<PropertyValue<f32>>::default();
     assert_eq!(0.0_f32, evaluate(&property, Duration::zero()));
 }
 
+// gtest: TransitioningPropertyValue.EvaluateUntransitionedConstant
 #[test]
 fn evaluate_untransitioned_constant() {
-    // TEST(TransitioningPropertyValue, EvaluateUntransitionedConstant)
     let property = Transitioning::with_prior(
         PropertyValue::Constant(1.0_f32),
         Transitioning::default(),
@@ -53,9 +53,9 @@ fn evaluate_untransitioned_constant() {
     assert_eq!(1.0_f32, evaluate(&property, Duration::zero()));
 }
 
+// gtest: TransitioningPropertyValue.EvaluateTransitionedConstantWithoutDelay
 #[test]
 fn evaluate_transitioned_constant_without_delay() {
-    // TEST(TransitioningPropertyValue, EvaluateTransitionedConstantWithoutDelay)
     let mut transition = TransitionOptions::default();
     transition.duration = Some(milliseconds(1000));
 
@@ -73,9 +73,9 @@ fn evaluate_transitioned_constant_without_delay() {
     assert_float_eq(1.0, evaluate(&t1, milliseconds(1500)));
 }
 
+// gtest: TransitioningPropertyValue.EvaluateTransitionedConstantWithDelay
 #[test]
 fn evaluate_transitioned_constant_with_delay() {
-    // TEST(TransitioningPropertyValue, EvaluateTransitionedConstantWithDelay)
     let mut transition = TransitionOptions::default();
     transition.delay = Some(milliseconds(1000));
     transition.duration = Some(milliseconds(1000));
@@ -114,9 +114,9 @@ fn evaluate_data_expression(
     property.evaluate(&evaluator, parameters.now)
 }
 
+// gtest: TransitioningDataDrivenPropertyValue.Evaluate
 #[test]
 fn transitioning_data_driven_property_value_evaluate() {
-    // TEST(TransitioningDataDrivenPropertyValue, Evaluate)
     let mut transition = TransitionOptions::default();
     transition.delay = Some(milliseconds(1000));
     transition.duration = Some(milliseconds(1000));

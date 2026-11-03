@@ -73,6 +73,7 @@ mod tests {
     use mln_util::size::Size;
 
     // TEST(Image, PNGRoundTrip)
+    // gtest: Image.PNGRoundTrip
     #[test]
     fn png_round_trip() {
         let mut rgba = PremultipliedImage::new(Size::new(1, 1));
@@ -83,6 +84,7 @@ mod tests {
     }
 
     // TEST(Image, PNGRoundTripAlpha)
+    // gtest: Image.PNGRoundTripAlpha
     #[test]
     fn png_round_trip_alpha() {
         let mut rgba = PremultipliedImage::new(Size::new(1, 1));

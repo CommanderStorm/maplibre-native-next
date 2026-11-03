@@ -11,10 +11,9 @@
 // the ranges a request waits for and notifies when it becomes unique; the
 // port does the same with `Rc::strong_count`.
 //
-// TODO(port): font faces (complex scripts shaped with HarfBuzz from the
-// style's "font-faces": `getHBShaper`, `hbShaping`, `loadHBShaper`,
-// `getFontFaceURL`, `Resource::fontFace` requests). Only FontPBF glyph
-// ranges are requested; the worker's HBShapeRequests stay empty.
+// Font faces (MLN_TEXT_SHAPING_HARFBUZZ): the style's "font-faces" are
+// fetched as font files (`Resource::fontFace`) and shaped with
+// mln_text's HBShaper (HarfRust).
 
 use mln_storage::{AsyncRequest, FileSource, Resource, Response};
 use mln_text::glyph::{
@@ -23,6 +22,8 @@ use mln_text::glyph::{
 };
 use mln_text::glyph_pbf::parse_glyph_pbf;
 use mln_text::local_glyph_rasterizer::{DefaultLocalGlyphRasterizer, LocalGlyphRasterizer};
+use mln_text::glyph::FontFaces;
+use mln_text::{FreeTypeLibrary, HBShapeAdjust, HBShaper};
 use mln_text::tagged_string::font_stack_hash;
 use mln_util::exception::{ExceptionPtr, RuntimeError};
 use mln_util::font_stack::FontStack;
@@ -88,6 +89,11 @@ pub struct GlyphManager {
     entries: RefCell<HashMap<FontStack, Entry>>,
     observer: RefCell<Rc<dyn GlyphManagerObserver>>,
     local_glyph_rasterizer: Box<dyn LocalGlyphRasterizer>,
+
+    // Shaping objects
+    font_faces: RefCell<Option<Arc<FontFaces>>>,
+    ft_library: FreeTypeLibrary,
+    hb_shapers: RefCell<BTreeMap<FontStack, BTreeMap<GlyphIDType, Rc<HBShaper>>>>,
 }
 
 impl GlyphManager {
@@ -101,6 +107,9 @@ impl GlyphManager {
             entries: RefCell::new(HashMap::new()),
             observer: RefCell::new(Rc::new(NullObserver)),
             local_glyph_rasterizer,
+            font_faces: RefCell::new(None),
+            ft_library: FreeTypeLibrary::new(),
+            hb_shapers: RefCell::new(BTreeMap::new()),
         })
     }
 
@@ -195,12 +204,15 @@ impl GlyphManager {
         let resource = if range.type_ == GlyphIDType::FontPBF {
             Resource::glyphs(&self.glyph_url.borrow(), font_stack, (range.first, range.second))
         } else {
-            // TODO(port): font faces (Resource::fontFace(getFontFaceURL(type))).
-            mln_util::logging::Log::error(
-                mln_util::logging::Event::Style,
-                "Try download a glyph doesn't in current faces",
-            );
-            return;
+            let url = self.get_font_face_url(range.type_);
+            if url.is_empty() {
+                // C++ logs and requests an empty Resource.
+                mln_util::logging::Log::error(
+                    mln_util::logging::Event::Style,
+                    "Try download a glyph doesn't in current faces",
+                );
+            }
+            Resource::font_face(&url)
         };
 
         let observer = self.observer.borrow().clone();
@@ -261,8 +273,12 @@ impl GlyphManager {
                         }
                     }
                 } else {
-                    // TODO(port): loadHBShaper (font faces).
-                    Vec::new()
+                    let data: &[u8] = res.data.as_deref().map(|d| d.as_slice()).unwrap_or(&[]);
+                    if self.load_hb_shaper(font_stack, range.type_, data) {
+                        vec![Glyph { id: GlyphID::with_type(0, range.type_), ..Glyph::default() }]
+                    } else {
+                        Vec::new()
+                    }
                 };
 
                 for glyph in glyphs {
@@ -350,14 +366,80 @@ impl GlyphManager {
         self.entries.borrow_mut().retain(|font_stack, _| keep.contains(font_stack));
     }
 
-    /// `getGlyph(fontStack, glyphID)` (FontPBF glyphs; TODO(port): font faces).
+    /// `getGlyph(fontStack, glyphID)`.
     pub fn get_glyph(&self, font_stack: &FontStack, glyph_id: GlyphID) -> Immutable<Glyph> {
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(font_stack.clone()).or_default();
         if let Some(glyph) = entry.glyphs.get(&glyph_id) {
             return glyph.clone();
         }
+
+        if glyph_id.type_ != GlyphIDType::FontPBF {
+            if let Some(shaper) = self.get_hb_shaper(font_stack, glyph_id.type_) {
+                let mut glyph = shaper.rasterize_glyph(&glyph_id);
+                glyph.bitmap = transform_raster_to_sdf(&glyph.bitmap, 8.0, 0.25);
+                let glyph = Arc::new(glyph);
+                entry.glyphs.insert(glyph_id, glyph.clone());
+                return glyph;
+            }
+        }
+
         Arc::new(Glyph::default())
+    }
+
+    /// `setFontFaces(faces)`.
+    pub fn set_font_faces(&self, faces: Option<Arc<FontFaces>>) {
+        *self.font_faces.borrow_mut() = faces;
+    }
+
+    /// `getFontFaces()`.
+    pub fn get_font_faces(&self) -> Option<Arc<FontFaces>> {
+        self.font_faces.borrow().clone()
+    }
+
+    /// `getHBShaper(fontStack, type)`.
+    pub fn get_hb_shaper(&self, font_stack: &FontStack, type_: GlyphIDType) -> Option<Rc<HBShaper>> {
+        self.hb_shapers.borrow().get(font_stack).and_then(|shapers| shapers.get(&type_)).cloned()
+    }
+
+    /// `loadHBShaper(fontStack, type, data)`.
+    fn load_hb_shaper(&self, font_stack: &FontStack, type_: GlyphIDType, data: &[u8]) -> bool {
+        let shaper = HBShaper::new(type_, data, &self.ft_library);
+        if !shaper.valid() {
+            return false;
+        }
+        self.hb_shapers
+            .borrow_mut()
+            .entry(font_stack.clone())
+            .or_default()
+            .insert(type_, Rc::new(shaper));
+        true
+    }
+
+    /// `hbShaping(text, font, type, glyphIDs, adjusts)`.
+    pub fn hb_shaping(
+        &self,
+        text: &[u16],
+        font: &FontStack,
+        type_: GlyphIDType,
+        glyph_ids: &mut Vec<GlyphID>,
+        adjusts: &mut Vec<HBShapeAdjust>,
+    ) {
+        if let Some(shaper) = self.get_hb_shaper(font, type_) {
+            shaper.create_complex_glyph_ids(text, glyph_ids, adjusts);
+        }
+    }
+
+    /// `getFontFaceURL(type)`.
+    pub fn get_font_face_url(&self, type_: GlyphIDType) -> String {
+        if let Some(faces) = &*self.font_faces.borrow() {
+            for face in faces.iter() {
+                if face.type_ == type_ {
+                    return face.url.clone();
+                }
+            }
+        }
+        String::new()
     }
 
     /// The glyph ids a requestor asked for (helper for tests).

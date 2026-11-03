@@ -40,6 +40,7 @@ mod tests {
     use crate::size::Size;
 
     // Ports TEST(Image, Premultiply) from test/util/image.test.cpp.
+    // gtest: Image.Premultiply
     #[test]
     fn premultiply_() {
         let mut rgba = UnassociatedImage::new(Size::new(1, 1));

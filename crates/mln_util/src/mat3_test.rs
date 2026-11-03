@@ -44,6 +44,7 @@ fn length_xy(v: &Vec3f) -> f32 {
     v[0].hypot(v[1])
 }
 
+// gtest: Mat3.TransformMat3fAliased
 #[test]
 fn transform_mat3f_aliased() {
     // The only caller in the tree passes the same vector as both output and input
@@ -69,6 +70,7 @@ fn transform_mat3f_aliased() {
     expect_float_eq!(separate[2], aliased[2]);
 }
 
+// gtest: Mat3.TransformMat3fRotationPreservesLength
 #[test]
 fn transform_mat3f_rotation_preserves_length() {
     // A rotation about z leaves |xy| and z alone. Before the aliasing fix, a quarter turn of

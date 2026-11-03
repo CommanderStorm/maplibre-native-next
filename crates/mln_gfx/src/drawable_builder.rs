@@ -7,9 +7,8 @@
 // (`create_drawable`, `create_segment`, `init`) and provided methods for the
 // rest.
 //
-// TODO(port): addPolyline / addWideVectorPolylineLocal/Global and the
-// polyline/wide-vector setup in flush (Impl::Mode::Polylines/WideVector*),
-// with gfx/polyline_generator, arrive with line layers (M3).
+// TODO(port): addWideVectorPolylineLocal/Global and the wide-vector setup in
+// flush (Impl::Mode::WideVector*): no user on the WebGPU path.
 
 use crate::color_mode::ColorMode;
 use crate::context::Context;
@@ -19,14 +18,17 @@ use crate::drawable::{DrawPriority, Textures, UniqueDrawSegment, UniqueDrawable}
 use crate::drawable_tweaker::DrawableTweakerPtr;
 use crate::gfx_types::{AttributeDataType, DrawModeType};
 use crate::index_vector::{IndexVectorBase, IndexVectorBasePtr};
+use crate::polyline_generator::{PolylineGenerator, PolylineGeneratorOptions};
 use crate::renderer::render_pass::RenderPass;
 use crate::shaders::segment::SegmentBase;
+use crate::shaders::shader_defines::{ID_LINE_DATA_VERTEX_ATTRIBUTE, ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE};
 use crate::shaders::shader_program_base::ShaderProgramBasePtr;
 use crate::texture2d::Texture2DPtr;
 use crate::types::DepthMaskType;
 use crate::vertex_attribute::VertexAttributeArrayPtr;
 use crate::vertex_vector::VertexVector;
 use maplibre_native_base::Point;
+use mln_tile_id::geometry_tile_data::GeometryCoordinates;
 use mln_util::identity::SimpleIdentity;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -49,6 +51,14 @@ pub enum Mode {
 /// `DrawableBuilder::Impl::VT = gfx::detail::VertexType<AttributeType<int16_t, 2>>`
 pub type VT = [i16; 2];
 
+/// `DrawableBuilder::Impl::LineLayoutVertex`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LineLayoutVertex {
+    pub a1: [i16; 2],
+    pub a2: [u8; 4],
+}
+
 /// `DrawableBuilder::Impl`
 pub struct DrawableBuilderImpl {
     pub vertices: VertexVector<VT>,
@@ -63,8 +73,10 @@ pub struct DrawableBuilderImpl {
     pub color_mode: ColorMode,
     pub cull_face_mode: CullFaceMode,
     mode: Mode,
-    // TODO(port): polylineVertices, polylineIndexes, wideVectorVertices,
-    // wideVectorInstanceData, wideVectorIndexes.
+    pub polyline_vertices: Vec<LineLayoutVertex>,
+    pub polyline_indexes: Vec<u16>,
+    // TODO(port): wideVectorVertices, wideVectorInstanceData,
+    // wideVectorIndexes.
 }
 
 impl Default for DrawableBuilderImpl {
@@ -80,6 +92,8 @@ impl Default for DrawableBuilderImpl {
             color_mode: ColorMode::disabled(),
             cull_face_mode: CullFaceMode::disabled(),
             mode: Mode::Custom,
+            polyline_vertices: Vec::new(),
+            polyline_indexes: Vec::new(),
         }
     }
 }
@@ -108,15 +122,43 @@ impl DrawableBuilderImpl {
     }
 
     pub fn vertex_count(&self) -> usize {
-        self.raw_vertices_count.max(self.vertices.elements())
+        self.raw_vertices_count.max(self.vertices.elements()).max(self.polyline_vertices.len())
     }
 
     pub fn clear(&mut self) {
         self.vertices.clear();
         self.raw_vertices.clear();
         self.raw_vertices_count = 0;
+        self.polyline_vertices.clear();
+        self.polyline_indexes.clear();
         self.build_indexes.clear();
         self.segments.clear();
+    }
+
+    /// `layoutVertex(p, e, round, up, dir, linesofar)`.
+    pub fn layout_vertex(p: Point<i16>, e: Point<f64>, round: bool, up: bool, dir: i8, linesofar: i32) -> LineLayoutVertex {
+        // Scale the extrusion vector so that the normal length is this value.
+        // Contains the "texture" normals (-1..1). This is distinct from the
+        // extrude normals for line joins, because the x-value remains 0 for
+        // the texture normal array, while the extrude normal actually moves
+        // the vertex to create the acute/bevelled line join.
+        const EXTRUDE_SCALE: f64 = 63.0;
+        let dir_value: i32 = if dir == 0 { 0 } else if dir < 0 { -1 } else { 1 };
+        LineLayoutVertex {
+            a1: [((p.x as i32 * 2) | round as i32) as i16, ((p.y as i32 * 2) | up as i32) as i16],
+            a2: [
+                // add 128 to store a byte in an unsigned byte
+                ((EXTRUDE_SCALE * e.x).round() + 128.0) as u8,
+                ((EXTRUDE_SCALE * e.y).round() + 128.0) as u8,
+                // Encode the -1/0/1 direction value into the first two bits
+                // of .z of a_data. Combine it with the lower 6 bits of
+                // `linesofar` (shifted by 2 bites to make room for the
+                // direction value). The upper 8 bits of `linesofar` are
+                // placed in the `w` component.
+                ((dir_value + 1) | ((linesofar & 0x3F) << 2)) as u8,
+                (linesofar >> 6) as u8,
+            ],
+        }
     }
 }
 
@@ -199,8 +241,12 @@ pub trait DrawableBuilder {
     fn flush(&mut self, context: &dyn Context) {
         if self.cur_vertex_count() != 0 {
             match self.base().impl_.get_mode() {
-                Mode::Polylines | Mode::WideVectorLocal | Mode::WideVectorGlobal => {
-                    // TODO(port): impl->setupForPolylines / setupForWideVectors
+                Mode::Polylines => {
+                    // setup for polylines
+                    self.setup_for_polylines(context);
+                }
+                Mode::WideVectorLocal | Mode::WideVectorGlobal => {
+                    // TODO(port): impl->setupForWideVectors
                 }
                 _ => {}
             }
@@ -534,6 +580,82 @@ pub trait DrawableBuilder {
         for i in &indexes[index_offset..index_offset + index_length] {
             impl_.build_indexes.push((*i as usize + base_index) as u16);
         }
+    }
+
+    /// Add a polyline. If the last point equals the first it will be
+    /// closed, otherwise open
+    fn add_polyline(&mut self, coordinates: &GeometryCoordinates, options: &PolylineGeneratorOptions) {
+        // mark the current mode
+        if !self.base_mut().impl_.check_and_set_mode(Mode::Polylines) {
+            return;
+        }
+
+        // append polyline (`Impl::addPolyline`); the vectors are moved out
+        // while the generator's segment factory borrows the builder.
+        let impl_ = &mut self.base_mut().impl_;
+        let mut vertices = std::mem::take(&mut impl_.polyline_vertices);
+        let mut segments = std::mem::take(&mut impl_.segments);
+        let mut indexes = std::mem::take(&mut impl_.polyline_indexes);
+        {
+            let create_segment = |vertex_offset: usize, index_offset: usize| {
+                self.create_segment(DrawMode::Triangles(), SegmentBase::new(vertex_offset, index_offset))
+            };
+            fn get_segment(segment: &mut UniqueDrawSegment) -> &mut SegmentBase {
+                segment.get_segment_mut()
+            }
+            let mut generator = PolylineGenerator::new(
+                &mut vertices,
+                DrawableBuilderImpl::layout_vertex,
+                &mut segments,
+                &create_segment,
+                get_segment,
+                &mut indexes,
+            );
+            generator.generate(coordinates, options);
+        }
+        let impl_ = &mut self.base_mut().impl_;
+        impl_.polyline_vertices = vertices;
+        impl_.segments = segments;
+        impl_.polyline_indexes = indexes;
+    }
+
+    /// `Impl::setupForPolylines(context, builder)`.
+    fn setup_for_polylines(&mut self, context: &dyn Context) {
+        // setup vertex attributes
+        self.set_vertex_attr_id(ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE);
+        let count = self.base().impl_.polyline_vertices.len();
+        self.set_raw_vertices(Vec::new(), count, AttributeDataType::Short2);
+
+        let attrs = context.create_vertex_attribute_array();
+        let vertices = std::mem::take(&mut self.base_mut().impl_.polyline_vertices);
+        let verts: crate::vertex_vector::VertexVectorBasePtr = Rc::new(VertexVector::from_vec(vertices));
+
+        {
+            let mut attrs = attrs.borrow_mut();
+            if let Some(attr) = attrs.set(ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+                attr.set_shared_raw_data(
+                    Some(verts.clone()),
+                    0, // offsetof(LineLayoutVertex, a1)
+                    /*vertexOffset=*/ 0,
+                    std::mem::size_of::<LineLayoutVertex>() as u32,
+                    AttributeDataType::Short2,
+                );
+            }
+            if let Some(attr) = attrs.set(ID_LINE_DATA_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+                attr.set_shared_raw_data(
+                    Some(verts),
+                    4, // offsetof(LineLayoutVertex, a2)
+                    /*vertexOffset=*/ 0,
+                    std::mem::size_of::<LineLayoutVertex>() as u32,
+                    AttributeDataType::UByte4,
+                );
+            }
+        }
+
+        self.set_vertex_attributes(Some(attrs));
+
+        let indexes = std::mem::take(&mut self.base_mut().impl_.polyline_indexes);
+        self.base_mut().impl_.shared_indexes = Some(Rc::new(RefCell::new(IndexVectorBase::new(indexes))));
     }
 
     /// return the current vertex count

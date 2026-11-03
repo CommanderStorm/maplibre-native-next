@@ -4,8 +4,10 @@
 // The C++ constructor forwards the object's constructor arguments to the
 // thread; here `make` is a `Send` closure that builds the object on the new
 // thread (it gets the actor's own `ActorRef`, like `O(ActorRef<O>, args...)`).
-// Waiting for the thread to be running (`running.wait()` in C++) happens at
-// the end of the constructor instead of in `pause`/`~Thread`.
+// Waiting for the thread to be running (`running.wait()`) happens in
+// `pause` and `drop`, as in C++ (gtests-core: it used to happen at the end of
+// the constructor, which deadlocks when the object's constructor waits for
+// the caller, test/util/thread.test.cpp InvokeBeforeChildStarts).
 //
 // TODO(port): the thread priority setters (`makeThreadPrioritySetter`,
 // platform settings) and `platform::attachThread`/`detachThread` (no-ops on
@@ -16,14 +18,16 @@ use crate::established_actor::{AspiringActor, EstablishedActor};
 use crate::run_loop::{Priority, RunLoop, RunLoopHandle};
 use crate::scheduler;
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::thread::JoinHandle;
 
 /// `util::Thread<Object>`.
 pub struct Thread<O: 'static> {
     object: AspiringActor<O>,
     thread: Option<JoinHandle<()>>,
-    run_loop: RunLoopHandle,
+    /// `running`: the child's loop, once its object is established.
+    running: Mutex<Option<mpsc::Receiver<RunLoopHandle>>>,
+    run_loop: OnceLock<RunLoopHandle>,
     paused: Mutex<Option<mpsc::Sender<()>>>,
 }
 
@@ -44,13 +48,21 @@ impl<O: 'static> Thread<O> {
                 drop(established_actor);
             })
             .expect("failed to spawn thread");
-        let run_loop = running_rx.recv().expect("thread failed to start");
         Thread {
             object,
             thread: Some(thread),
-            run_loop,
+            running: Mutex::new(Some(running_rx)),
+            run_loop: OnceLock::new(),
             paused: Mutex::new(None),
         }
+    }
+
+    /// `running.wait()`, then the child's `loop`.
+    fn run_loop(&self) -> &RunLoopHandle {
+        self.run_loop.get_or_init(|| {
+            let running = self.running.lock().unwrap().take().expect("running");
+            running.recv().expect("thread failed to start")
+        })
     }
 
     /// `actor()`: a reference to the object on the thread. Messages sent
@@ -66,7 +78,7 @@ impl<O: 'static> Thread<O> {
         assert!(paused.is_none());
         let (paused_tx, paused_rx) = mpsc::channel::<()>();
         let (resumed_tx, resumed_rx) = mpsc::channel::<()>();
-        self.run_loop.invoke_with_priority(Priority::High, move || {
+        self.run_loop().invoke_with_priority(Priority::High, move || {
             let _ = paused_tx.send(());
             let _ = resumed_rx.recv();
         });
@@ -92,11 +104,12 @@ impl<O: 'static> Drop for Thread<O> {
             self.resume();
         }
         let (stoppable_tx, stoppable_rx) = mpsc::channel::<()>();
-        self.run_loop.invoke(move || {
+        let run_loop = self.run_loop().clone();
+        run_loop.invoke(move || {
             let _ = stoppable_tx.send(());
         });
         let _ = stoppable_rx.recv();
-        self.run_loop.stop();
+        run_loop.stop();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }

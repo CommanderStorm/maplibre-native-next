@@ -22,6 +22,7 @@ fn uw(wrap: i16, canonical: CanonicalTileID) -> UnwrappedTileID {
     UnwrappedTileID::with_wrap(wrap, canonical)
 }
 
+// gtest: TileID.Canonical
 #[test]
 fn canonical() {
     let id_0_0_0 = c(0, 0, 0);
@@ -117,6 +118,7 @@ fn canonical() {
     );
 }
 
+// gtest: TileID.Overscaled
 #[test]
 fn overscaled() {
     assert!(o(4, 2, 3) == o(4, 2, 3));
@@ -209,6 +211,7 @@ fn overscaled() {
     assert!(!ow(4, 0, c(4, 2, 3)).is_child_of(&ow(5, 0, c(3, 1, 1))));
 }
 
+// gtest: TileID.Unwrapped
 #[test]
 fn unwrapped() {
     let id_0_0_0 = u(0, 0, 0);

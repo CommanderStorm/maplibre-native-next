@@ -182,7 +182,7 @@ impl RendererImpl {
             let upload_pass = encoder.create_upload_pass("layerGroup-upload", backend.get_default_renderable());
 
             // Update the debug layer groups
-            // TODO(port): orchestrator.updateDebugLayerGroups.
+            orchestrator.update_debug_layer_groups(render_tree, &parameters); // layers: debug
 
             // Tweakers are run in the upload pass so they can set up
             // uniforms.
@@ -192,7 +192,11 @@ impl RendererImpl {
                 parameters.current_layer += 1;
             }
             parameters.current_layer = 0;
-            // TODO(port): visitDebugLayerGroups runTweakers.
+            // layers: debug
+            for layer_group in orchestrator.debug_layer_groups() {
+                orchestrator.run_tweakers(&layer_group, &parameters);
+                parameters.current_layer += 1;
+            }
 
             // Give the layers a chance to upload
             orchestrator.visit_layer_groups(|layer_group| layer_group.upload(&*upload_pass));
@@ -204,7 +208,10 @@ impl RendererImpl {
             }
 
             // Upload the Debug layer group
-            // TODO(port): visitDebugLayerGroups upload.
+            // layers: debug
+            for layer_group in orchestrator.debug_layer_groups() {
+                layer_group.borrow_mut().upload(&*upload_pass);
+            }
         }
 
         let atlas_size = parameters.pattern_atlas.borrow().get_pixel_size();
@@ -324,7 +331,11 @@ impl RendererImpl {
         // drawableDebugOverlays
         // Renders debug overlays.
         parameters.current_layer = 0;
-        // TODO(port): visitDebugLayerGroups render.
+        // layers: debug
+        for layer_group in orchestrator.debug_layer_groups() {
+            layer_group.borrow_mut().render(&mut parameters);
+            parameters.current_layer += 1;
+        }
 
         // Give the layers a chance to do cleanup
         orchestrator.visit_layer_groups(|layer_group| layer_group.post_render(&mut parameters));

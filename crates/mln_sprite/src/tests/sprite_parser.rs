@@ -24,6 +24,7 @@ fn sprite_warning(log: &FixtureLog, msg: &str) -> usize {
     log.count(EventSeverity::Warning, Event::Sprite, -1, msg)
 }
 
+// gtest: Sprite.SpriteImageCreationInvalid
 #[test]
 fn sprite_image_creation_invalid() {
     let log = FixtureLog::new();
@@ -82,6 +83,7 @@ fn sprite_image_creation_invalid() {
     assert_eq!(0, log.unchecked_count());
 }
 
+// gtest: Sprite.SpriteImageCreation1x
 #[test]
 fn sprite_image_creation_1x() {
     let image_1x = read_image("test/fixtures/annotations/emerald.png");
@@ -100,6 +102,7 @@ fn sprite_image_creation_1x() {
     );
 }
 
+// gtest: Sprite.SpriteImageCreation2x
 #[test]
 fn sprite_image_creation_2x() {
     let image_2x = read_image("test/fixtures/annotations/emerald@2x.png");
@@ -112,6 +115,7 @@ fn sprite_image_creation_2x() {
     assert_eq!(&read_image("test/fixtures/annotations/result-spriteimagecreation2x.png"), sprite.get_image());
 }
 
+// gtest: Sprite.SpriteImageCreation1_5x
 #[test]
 fn sprite_image_creation_1_5x() {
     let image_2x = read_image("test/fixtures/annotations/emerald@2x.png");
@@ -137,6 +141,7 @@ fn sprite_image_creation_1_5x() {
     );
 }
 
+// gtest: Sprite.SpriteParsing
 #[test]
 fn sprite_parsing() {
     let image_1x = read_file("test/fixtures/annotations/emerald.png");
@@ -233,6 +238,7 @@ fn sprite_parsing() {
     assert_eq!(read_image("test/fixtures/annotations/result-spriteparsing.png"), sprite.image);
 }
 
+// gtest: Sprite.SpriteParsingInvalidJSON
 #[test]
 fn sprite_parsing_invalid_json() {
     let image_1x = read_file("test/fixtures/annotations/emerald.png");
@@ -260,6 +266,7 @@ fn interstate(extra: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+// gtest: Sprite.SpriteParsingInvalidStretches
 #[test]
 fn sprite_parsing_invalid_stretches() {
     let log = FixtureLog::new();
@@ -294,6 +301,7 @@ fn sprite_parsing_invalid_stretches() {
     assert_eq!(0, log.unchecked_count());
 }
 
+// gtest: Sprite.SpriteParsingInvalidContent
 #[test]
 fn sprite_parsing_invalid_content() {
     let log = FixtureLog::new();
@@ -315,6 +323,7 @@ fn sprite_parsing_invalid_content() {
     assert_eq!(0, log.unchecked_count());
 }
 
+// gtest: Sprite.SpriteParsingStretchAndContent
 #[test]
 fn sprite_parsing_stretch_and_content() {
     let _log = FixtureLog::new();
@@ -353,6 +362,7 @@ fn sprite_parsing_stretch_and_content() {
     );
 }
 
+// gtest: Sprite.SpriteParsingEmptyImage
 #[test]
 fn sprite_parsing_empty_image() {
     let log = FixtureLog::new();
@@ -367,6 +377,7 @@ fn sprite_parsing_empty_image() {
     );
 }
 
+// gtest: Sprite.SpriteParsingSimpleWidthHeight
 #[test]
 fn sprite_parsing_simple_width_height() {
     let _log = FixtureLog::new();
@@ -376,6 +387,7 @@ fn sprite_parsing_simple_width_height() {
     assert_eq!(1, images.len());
 }
 
+// gtest: Sprite.SpriteParsingWidthTooBig
 #[test]
 fn sprite_parsing_width_too_big() {
     let log = FixtureLog::new();
@@ -394,6 +406,7 @@ fn sprite_parsing_width_too_big() {
     );
 }
 
+// gtest: Sprite.SpriteParsingNegativeWidth
 #[test]
 fn sprite_parsing_negative_width() {
     let log = FixtureLog::new();
@@ -412,6 +425,7 @@ fn sprite_parsing_negative_width() {
     );
 }
 
+// gtest: Sprite.SpriteParsingNullRatio
 #[test]
 fn sprite_parsing_null_ratio() {
     let log = FixtureLog::new();
@@ -443,6 +457,7 @@ fn text_fit_json(extra: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+// gtest: Sprite.SpriteParsingTextFit
 #[test]
 fn sprite_parsing_text_fit() {
     let _log = FixtureLog::new();
@@ -460,6 +475,7 @@ fn sprite_parsing_text_fit() {
     assert_eq!(Some(TextFit::Proportional), images[0].text_fit_height);
 }
 
+// gtest: Sprite.SpriteParsingNullTextFit
 #[test]
 fn sprite_parsing_null_text_fit() {
     let _log = FixtureLog::new();
@@ -472,6 +488,7 @@ fn sprite_parsing_null_text_fit() {
     assert_eq!(Some(TextFit::StretchOnly), images[0].text_fit_height);
 }
 
+// gtest: Sprite.SpriteParsingInvalidTextFit
 #[test]
 fn sprite_parsing_invalid_text_fit() {
     let log = FixtureLog::new();

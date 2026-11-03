@@ -120,6 +120,7 @@ fn expect(pairs: &[(char, &'static str)]) -> Vec<GlyphOrientation> {
     pairs.iter().map(|&(c, o)| (c as u32 as u16, o)).collect()
 }
 
+// gtest: Shaping.ZWSP
 #[test]
 fn zwsp() {
     let metrics = GlyphMetrics { width: 18, height: 18, left: 2.0, top: -8.0, advance: 21, ..Default::default() };
@@ -216,6 +217,7 @@ fn zwsp() {
 }
 
 // Regression cases ported from maplibre-gl-js#8205 for maplibre-native#4565.
+// gtest: Shaping.VerticalDigitsBetweenCJKCharacters
 #[test]
 fn vertical_digits_between_cjk_characters() {
     let orientations = get_glyph_orientations(&shape_line_label("반포대로21길"));
@@ -231,6 +233,7 @@ fn vertical_digits_between_cjk_characters() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalTrailingDigits
 #[test]
 fn vertical_trailing_digits() {
     let orientations = get_glyph_orientations(&shape_line_label("身什戰33"));
@@ -238,6 +241,7 @@ fn vertical_trailing_digits() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalDigitsOfAnyLength
 #[test]
 fn vertical_digits_of_any_length() {
     let orientations = get_glyph_orientations(&shape_line_label("国道1234号"));
@@ -253,6 +257,7 @@ fn vertical_digits_of_any_length() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalWhitespaceSeparatedDigit
 #[test]
 fn vertical_whitespace_separated_digit() {
     let orientations = get_glyph_orientations(&shape_line_label("身什戰 1"));
@@ -261,6 +266,7 @@ fn vertical_whitespace_separated_digit() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalSingleUppercaseLetter
 #[test]
 fn vertical_single_uppercase_letter() {
     let orientations = get_glyph_orientations(&shape_line_label("国道A号"));
@@ -268,6 +274,7 @@ fn vertical_single_uppercase_letter() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalDecomposedLatinLetter
 #[test]
 fn vertical_decomposed_latin_letter() {
     let orientations = get_glyph_orientations(&shape_line_label("国道e\u{0301}号"));
@@ -281,6 +288,7 @@ fn vertical_decomposed_latin_letter() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalLowercaseGreekLetter
 #[test]
 fn vertical_lowercase_greek_letter() {
     let orientations = get_glyph_orientations(&shape_line_label("国道α号"));
@@ -288,6 +296,7 @@ fn vertical_lowercase_greek_letter() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalNonLatinUppercaseCode
 #[test]
 fn vertical_non_latin_uppercase_code() {
     let orientations = get_glyph_orientations(&shape_line_label("国道\u{041C}1号"));
@@ -296,6 +305,7 @@ fn vertical_non_latin_uppercase_code() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalComplexScript
 #[test]
 fn vertical_complex_script() {
     let orientations = get_glyph_orientations(&shape_line_label("国道ب号"));
@@ -303,6 +313,7 @@ fn vertical_complex_script() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalProlongedSoundMark
 #[test]
 fn vertical_prolonged_sound_mark() {
     let orientations = get_glyph_orientations(&shape_line_label("札幌タワー"));
@@ -311,6 +322,7 @@ fn vertical_prolonged_sound_mark() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalWaveDashBetweenDigits
 #[test]
 fn vertical_wave_dash_between_digits() {
     let orientations = get_glyph_orientations(&shape_line_label("身什戰1〜2"));
@@ -325,6 +337,7 @@ fn vertical_wave_dash_between_digits() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalLowercaseLatinWord
 #[test]
 fn vertical_lowercase_latin_word() {
     let orientations = get_glyph_orientations(&shape_line_label("two 身什戰"));
@@ -340,6 +353,7 @@ fn vertical_lowercase_latin_word() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalMixedAlphanumericCode
 #[test]
 fn vertical_mixed_alphanumeric_code() {
     let orientations = get_glyph_orientations(&shape_line_label("身什戰A1"));
@@ -347,6 +361,7 @@ fn vertical_mixed_alphanumeric_code() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalLatinWordAdjoiningCJK
 #[test]
 fn vertical_latin_word_adjoining_cjk() {
     let orientations = get_glyph_orientations(&shape_line_label("銀座Ginza通り"));
@@ -364,6 +379,7 @@ fn vertical_latin_word_adjoining_cjk() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalLongUppercaseWord
 #[test]
 fn vertical_long_uppercase_word() {
     let orientations = get_glyph_orientations(&shape_line_label("ヴィラ ISHIKAWA"));
@@ -384,6 +400,7 @@ fn vertical_long_uppercase_word() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalShortUppercaseCode
 #[test]
 fn vertical_short_uppercase_code() {
     let orientations = get_glyph_orientations(&shape_line_label("JR山手線"));
@@ -391,6 +408,7 @@ fn vertical_short_uppercase_code() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalPunctuationBetweenDigits
 #[test]
 fn vertical_punctuation_between_digits() {
     let orientations = get_glyph_orientations(&shape_line_label("国道1-2号"));
@@ -405,6 +423,7 @@ fn vertical_punctuation_between_digits() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalPunctuationInRotatedRun
 #[test]
 fn vertical_punctuation_in_rotated_run() {
     let orientations = get_glyph_orientations(&shape_line_label("国道3.5km"));
@@ -420,6 +439,7 @@ fn vertical_punctuation_in_rotated_run() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalMissingGlyphPreservesIndices
 #[test]
 fn vertical_missing_glyph_preserves_indices() {
     let font_stack: FontStack = vec!["font-stack".to_string()];
@@ -466,6 +486,7 @@ fn vertical_missing_glyph_preserves_indices() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.HorizontalGlyphOrientation
 #[test]
 fn horizontal_glyph_orientation() {
     let orientations = get_glyph_orientations(&shape_line_label_with("身什戰33", WritingModeType::Horizontal, false));
@@ -479,6 +500,7 @@ fn horizontal_glyph_orientation() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.AllowedVerticalGlyphOrientation
 #[test]
 fn allowed_vertical_glyph_orientation() {
     let orientations = get_glyph_orientations(&shape_line_label_with("two 身什戰", WritingModeType::Vertical, true));
@@ -494,6 +516,7 @@ fn allowed_vertical_glyph_orientation() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalThreeCharacterUppercaseCode
 #[test]
 fn vertical_three_character_uppercase_code() {
     let orientations = get_glyph_orientations(&shape_line_label("国道ABC号"));
@@ -508,6 +531,7 @@ fn vertical_three_character_uppercase_code() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalFourCharacterUppercaseWord
 #[test]
 fn vertical_four_character_uppercase_word() {
     let orientations = get_glyph_orientations(&shape_line_label("国道ABCD号"));
@@ -523,6 +547,7 @@ fn vertical_four_character_uppercase_word() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalBengaliDigits
 #[test]
 fn vertical_bengali_digits() {
     let orientations = get_glyph_orientations(&shape_line_label("国道১২号"));
@@ -530,6 +555,7 @@ fn vertical_bengali_digits() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalArabicIndicDigits
 #[test]
 fn vertical_arabic_indic_digits() {
     let orientations = get_glyph_orientations(&shape_line_label("国道١٢号"));
@@ -538,6 +564,7 @@ fn vertical_arabic_indic_digits() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalDigitWithCombiningMark
 #[test]
 fn vertical_digit_with_combining_mark() {
     let orientations = get_glyph_orientations(&shape_line_label("国道1\u{0301}号"));
@@ -551,6 +578,7 @@ fn vertical_digit_with_combining_mark() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalGlyphOrientationRespectsFormattedSections
 #[test]
 fn vertical_glyph_orientation_respects_formatted_sections() {
     let font_stack: FontStack = vec!["font-stack".to_string()];
@@ -564,6 +592,7 @@ fn vertical_glyph_orientation_respects_formatted_sections() {
     assert_eq!(orientations, expected);
 }
 
+// gtest: Shaping.VerticalGlyphOrientationDelimitsInlineImages
 #[test]
 fn vertical_glyph_orientation_delimits_inline_images() {
     let font_stack: FontStack = vec!["font-stack".to_string()];
@@ -603,6 +632,7 @@ fn vertical_glyph_orientation_delimits_inline_images() {
     assert!(shaped_line_label.icons_in_text);
 }
 
+// gtest: Shaping.VerticalGlyphOrientationDelimitsNativeGlyphSections
 #[test]
 fn vertical_glyph_orientation_delimits_native_glyph_sections() {
     let font_stack: FontStack = vec!["font-stack".to_string()];
@@ -673,6 +703,7 @@ fn test_apply_text_fit(
     assert_eq!(icon.bottom(), expected_bottom);
 }
 
+// gtest: Shaping.BreakBeforeLeftParenthesis
 #[test]
 fn break_before_left_parenthesis() {
     let metrics = GlyphMetrics { width: 18, height: 18, left: 2.0, top: -8.0, advance: 21, ..Default::default() };
@@ -721,6 +752,7 @@ fn break_before_left_parenthesis() {
     assert_eq!(glyphs_per_line("oooooooo("), vec![9]);
 }
 
+// gtest: Shaping.applyTextFit
 #[test]
 fn apply_text_fit() {
     let text_size = 4.0f32;

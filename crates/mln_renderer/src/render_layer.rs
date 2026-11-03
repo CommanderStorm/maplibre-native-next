@@ -1,5 +1,5 @@
 // Ports src/mln/renderer/render_layer.hpp and src/mln/renderer/render_layer.cpp
-// (placement data and feature queries arrive with symbols and queries).
+// (feature queries arrive with queries).
 //
 // C++ `RenderLayer` is an abstract class with data members; the data is
 // `RenderLayerBase` and the virtual interface is the `RenderLayer` trait.
@@ -45,6 +45,31 @@ pub struct LayerRenderData {
     pub layer_properties: Immutable<dyn LayerProperties>,
 }
 
+// symbols: `BucketPlacementData`. C++ holds `reference_wrapper`s to the
+// bucket and the render tile; here the bucket is shared and the tile is
+// kept alive by the vector that owns it.
+/// `BucketPlacementData`.
+#[derive(Clone)]
+pub struct BucketPlacementData {
+    pub bucket: BucketPtr,
+    /// The `RenderTile` (`tile`): `tile_owner[tile_index]`.
+    pub tile_owner: Rc<Vec<RenderTile>>,
+    pub tile_index: usize,
+    pub feature_index: Option<Arc<crate::geometry::feature_index::FeatureIndex>>,
+    pub source_id: String,
+    pub sort_key_range: Option<crate::buckets::symbol_bucket::SortKeyRange>,
+}
+
+impl BucketPlacementData {
+    /// `tile`.
+    pub fn tile(&self) -> &RenderTile {
+        &self.tile_owner[self.tile_index]
+    }
+}
+
+/// `LayerPlacementData = std::list<BucketPlacementData>`.
+pub type LayerPlacementData = Vec<BucketPlacementData>;
+
 /// `LayerPrepareParameters`.
 pub struct LayerPrepareParameters<'a> {
     pub source: Option<&'a dyn RenderSource>,
@@ -85,8 +110,9 @@ pub struct RenderLayerBase {
     /// bucket from which they were built (C++ `TinyUnorderedMap`; only
     /// looked up).
     pub render_tile_ids: HashMap<OverscaledTileID, SimpleIdentity>,
-    // TODO(port): placementData (symbols, M5), sourceForState (feature
-    // state), hasRenderFailures.
+    // symbols: `placementData`.
+    pub placement_data: LayerPlacementData,
+    // TODO(port): sourceForState (feature state), hasRenderFailures.
 }
 
 impl RenderLayerBase {
@@ -106,6 +132,7 @@ impl RenderLayerBase {
             render_tiles: None,
             render_tiles_owner: Rc::new(Vec::new()),
             render_tile_ids: HashMap::new(),
+            placement_data: Vec::new(), // symbols
         }
     }
 }
@@ -310,11 +337,13 @@ pub trait RenderLayer {
 
     /// Returns true if the layer has to be placed.
     fn needs_placement(&self) -> bool {
-        // TODO(port): placementData is filled by symbol layers (M5); it is
-        // always empty until then.
-        let placement_data_empty = true;
         self.base().base_impl.get_type_info().cross_tile_index == layer_type_info::CrossTileIndex::Required
-            && !placement_data_empty
+            && !self.base().placement_data.is_empty()
+    }
+
+    // symbols: `getPlacementData()`.
+    fn get_placement_data(&self) -> &LayerPlacementData {
+        &self.base().placement_data
     }
 
     fn get_layer_index(&self) -> i32 {

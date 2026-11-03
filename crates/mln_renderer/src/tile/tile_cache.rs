@@ -192,6 +192,7 @@ mod tests {
         TaggedScheduler::new(scheduler::get_background(), SimpleIdentity::new())
     }
 
+    // gtest: TileCache.Smoke
     #[test]
     fn smoke() {
         let mut cache = TileCache::new(thread_pool(), 1);
@@ -204,6 +205,7 @@ mod tests {
         assert!(!cache.has(&id));
     }
 
+    // gtest: TileCache.Issue15926
     #[test]
     fn issue_15926() {
         let mut cache = TileCache::new(thread_pool(), 2);

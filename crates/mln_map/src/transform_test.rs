@@ -130,6 +130,7 @@ impl CallbackLog {
     }
 }
 
+// gtest: Transform.InvalidZoom
 #[test]
 fn invalid_zoom() {
     let mut transform = new_transform();
@@ -188,6 +189,7 @@ fn invalid_zoom() {
     assert_double_eq(transform.get_state().get_max_zoom(), transform.get_zoom());
 }
 
+// gtest: Transform.InvalidBearing
 #[test]
 fn invalid_bearing() {
     let mut transform = new_transform();
@@ -212,6 +214,7 @@ fn invalid_bearing() {
     assert_double_eq(deg2rad(-2.0), transform.get_bearing());
 }
 
+// gtest: Transform.IntegerZoom
 #[test]
 fn integer_zoom() {
     let mut transform = new_transform();
@@ -235,6 +238,7 @@ fn integer_zoom() {
     check_integer_zoom(20, 20.0);
 }
 
+// gtest: Transform.PerspectiveProjection
 #[test]
 fn perspective_projection() {
     let mut transform = new_transform();
@@ -280,6 +284,7 @@ fn perspective_projection() {
     assert!(p[3] < 0.0);
 }
 
+// gtest: Transform.UnwrappedLatLng
 #[test]
 fn unwrapped_lat_lng() {
     let mut transform = new_transform();
@@ -317,6 +322,7 @@ fn unwrapped_lat_lng() {
     assert_near(wrapped_leftwards.longitude(), -77.0, 1e-8);
 }
 
+// gtest: Transform.ConstrainHeightOnly
 #[test]
 fn constrain_height_only() {
     let mut transform = Transform::new(Rc::new(NullTransformObserver), ConstrainMode::HeightOnly, ViewportMode::Default);
@@ -331,6 +337,7 @@ fn constrain_height_only() {
     assert_near(-LONGITUDE_MAX, transform.get_lat_lng(WrapMode::Wrapped).longitude(), 1e-7);
 }
 
+// gtest: Transform.ConstrainWidthAndHeight
 #[test]
 fn constrain_width_and_height() {
     let mut transform =
@@ -346,6 +353,7 @@ fn constrain_width_and_height() {
     assert_near(-LONGITUDE_MAX, transform.get_lat_lng(WrapMode::Wrapped).longitude(), 1e-6);
 }
 
+// gtest: Transform.Anchor
 #[test]
 fn anchor() {
     let mut transform = new_transform();
@@ -444,6 +452,7 @@ fn anchor() {
     assert_near(anchor_lat_lng.longitude(), transform.get_lat_lng(WrapMode::Wrapped).longitude(), 0.5);
 }
 
+// gtest: Transform.Padding
 #[test]
 fn padding() {
     let mut transform = new_transform();
@@ -484,6 +493,7 @@ fn padding() {
     assert_near(upper_half_center.longitude(), padded_screen_center.longitude(), 1e-10);
 }
 
+// gtest: Transform.MoveBy
 #[test]
 fn move_by() {
     let mut transform = new_transform();
@@ -522,6 +532,7 @@ fn move_by() {
 // On a pitched map a large (fling-sized) pan offset must be reduced so it can
 // never reach the horizon -- otherwise the unprojected pan direction flips and the
 // pan reverses (or lands in the tile-less void). See maplibre-native#3105.
+// gtest: Transform.MoveByPitchedDoesNotCrossHorizon
 #[test]
 fn move_by_pitched_does_not_cross_horizon() {
     let mut transform = new_transform();
@@ -546,6 +557,7 @@ fn move_by_pitched_does_not_cross_horizon() {
     assert!(fling_lat < LATITUDE_MAX, "{fling_lat}"); // but is bounded, not off near the horizon
 }
 
+// gtest: Transform.Antimeridian
 #[test]
 fn antimeridian() {
     let mut transform = new_transform();
@@ -610,6 +622,7 @@ fn antimeridian() {
 
 // A zoom around a point across the antimeridian leaves the center wrapped, as GL JS's setLocationAtPoint does. Bounds
 // across the antimeridian keep it in their range, as easeTo does.
+// gtest: Transform.ZoomAroundAPointAcrossTheAntimeridian
 #[test]
 fn zoom_around_a_point_across_the_antimeridian() {
     for bounded in [false, true] {
@@ -633,6 +646,7 @@ fn zoom_around_a_point_across_the_antimeridian() {
     }
 }
 
+// gtest: Transform.Camera
 #[test]
 fn camera() {
     let mut transform = new_transform();
@@ -724,6 +738,7 @@ fn camera() {
     assert_double_eq(transform.get_lat_lng(WrapMode::Wrapped).longitude(), 0.0);
 }
 
+// gtest: Transform.ProjectionMode
 #[test]
 fn projection_mode() {
     let mut transform = new_transform();
@@ -736,6 +751,7 @@ fn projection_mode() {
     assert_eq!(options.y_skew.unwrap(), 0.0);
 }
 
+// gtest: Transform.IsPanning
 #[test]
 fn is_panning() {
     let mut transform = new_transform();
@@ -762,6 +778,7 @@ fn is_panning() {
     check(&transform);
 }
 
+// gtest: Transform.DefaultTransform
 #[test]
 fn default_transform() {
     #[derive(Default)]
@@ -850,6 +867,7 @@ fn default_transform() {
     assert_near(transform.get_state().get_scale(), 38.1529, 1e-4);
 }
 
+// gtest: Transform.LatLngBounds
 #[test]
 fn lat_lng_bounds() {
     let null_island = LatLng::default();
@@ -1049,6 +1067,7 @@ fn lat_lng_bounds() {
     assert_double_eq(transform.get_lat_lng(WrapMode::Wrapped).longitude(), 120.0);
 }
 
+// gtest: Transform.ConstrainScreenToBounds
 #[test]
 fn constrain_screen_to_bounds() {
     let mut transform = new_transform();
@@ -1107,6 +1126,7 @@ fn constrain_screen_to_bounds() {
     assert_near(transform.get_lat_lng(WrapMode::Wrapped).latitude(), 56.0, 1e-4);
 }
 
+// gtest: Transform.InvalidPitch
 #[test]
 fn invalid_pitch() {
     let mut transform = new_transform();
@@ -1130,6 +1150,7 @@ fn invalid_pitch() {
     assert_double_eq(deg2rad(60.0), transform.get_pitch());
 }
 
+// gtest: Transform.PaddingPreservesMinimumPitch
 #[test]
 fn padding_preserves_minimum_pitch() {
     for size in [1u32, 64u32] {
@@ -1159,6 +1180,7 @@ fn padding_preserves_minimum_pitch() {
     }
 }
 
+// gtest: Transform.MinMaxPitch
 #[test]
 fn min_max_pitch() {
     let mut transform = new_transform();
@@ -1209,6 +1231,7 @@ fn min_max_pitch() {
     assert_double_eq(deg2rad(45.0), transform.get_state().get_min_pitch());
 }
 
+// gtest: Transform.FreeCameraOptionsInvalidSize
 #[test]
 fn free_camera_options_invalid_size() {
     let mut transform = new_transform();
@@ -1229,6 +1252,7 @@ fn free_camera_options_invalid_size() {
     assert_vec3_near_1e5(&updated_position, &[0.0, 0.0, 0.0]);
 }
 
+// gtest: Transform.FreeCameraOptionsNanInput
 #[test]
 fn free_camera_options_nan_input() {
     let mut transform = new_transform();
@@ -1250,6 +1274,7 @@ fn free_camera_options_nan_input() {
     assert_eq!(Quaternion::IDENTITY.m(), transform.get_free_camera_options().orientation.unwrap());
 }
 
+// gtest: Transform.FreeCameraOptionsInvalidZ
 #[test]
 fn free_camera_options_invalid_z() {
     let mut transform = new_transform();
@@ -1268,6 +1293,7 @@ fn free_camera_options_invalid_z() {
     assert!(transform.get_free_camera_options().position.unwrap()[2] <= 1.0);
 }
 
+// gtest: Transform.FreeCameraOptionsHighPitch
 #[test]
 fn free_camera_options_high_pitch() {
     let mut transform = new_transform();
@@ -1290,6 +1316,7 @@ fn free_camera_options_high_pitch() {
     assert_vec3_near_1e5(&transform.get_free_camera_options().position.unwrap(), &[0.1, 0.1, 0.1]);
 }
 
+// gtest: Transform.FreeCameraOptionsInvalidOrientation
 #[test]
 fn free_camera_options_invalid_orientation() {
     // Invalid orientations that cannot be clamped into a valid range
@@ -1325,6 +1352,7 @@ fn free_camera_options_invalid_orientation() {
     }
 }
 
+// gtest: Transform.FreeCameraOptionsSetOrientation
 #[test]
 fn free_camera_options_set_orientation() {
     let mut transform = new_transform();
@@ -1376,6 +1404,7 @@ fn free_camera_options_set_orientation() {
     assert_float_eq(deg2rad(11.0), transform.get_state().get_roll());
 }
 
+// gtest: Transform.FreeCameraOptionsClampToBounds
 #[test]
 fn free_camera_options_clamp_to_bounds() {
     let mut transform = new_transform();
@@ -1402,6 +1431,7 @@ fn free_camera_options_clamp_to_bounds() {
     assert_vec3_near_1e5(&forward, &[0.0, -0.707107, -0.707107]);
 }
 
+// gtest: Transform.FreeCameraOptionsInvalidState
 #[test]
 fn free_camera_options_invalid_state() {
     let transform = new_transform();
@@ -1416,6 +1446,7 @@ fn free_camera_options_invalid_state() {
     assert_vec3_near_1e5(&options.position.unwrap(), &[0.0, 0.0, 0.0]);
 }
 
+// gtest: Transform.FreeCameraOptionsStateSynchronization
 #[test]
 fn free_camera_options_state_synchronization() {
     let mut transform = new_transform();
@@ -1437,6 +1468,7 @@ fn free_camera_options_state_synchronization() {
 
 // TEST(Camera, *) (util::Camera)
 
+// gtest: Camera.SetOrientation
 #[test]
 fn set_orientation() {
     let mut camera = UtilCamera::new();
@@ -1450,6 +1482,7 @@ fn set_orientation() {
     assert_near(roll, roll_, 1.0e-9);
 }
 
+// gtest: Camera.SetOrientationWithRoll
 #[test]
 fn set_orientation_with_roll() {
     let mut camera = UtilCamera::new();
@@ -1463,6 +1496,7 @@ fn set_orientation_with_roll() {
     assert_near(roll, roll_, 1.0e-9);
 }
 
+// gtest: Camera.SetOrientationWithRollNoPitch
 #[test]
 fn set_orientation_with_roll_no_pitch() {
     let mut camera = UtilCamera::new();

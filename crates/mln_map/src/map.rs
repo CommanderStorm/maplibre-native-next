@@ -13,8 +13,11 @@ use mln_style::Style;
 use mln_util::exception::MisuseException;
 use mln_util::geo::{EdgeInsets, ScreenCoordinate};
 use mln_util::size::Size;
+use mln_storage::FileSource;
+use mln_util::geo::{LatLng, LatLngBounds, WrapMode};
 use std::cell::Ref;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct Map {
     impl_: Rc<MapImpl>,
@@ -57,6 +60,24 @@ impl Map {
             FileSourceManager::get().get_file_source(FileSourceType::ResourceLoader, resource_options, client_options);
         Map {
             impl_: MapImpl::new(Box::new(frontend.clone()), observer, file_source, &map_options),
+        }
+    }
+
+    // gtests-core: the C++ tests' `MapAdapter` (test/include/mln/test/
+    // map_adapter.hpp), i.e. `Map(std::make_unique<Map::Impl>(frontend,
+    // observer, fileSource, options))`: a map over a given file source.
+    /// `Map(std::unique_ptr<Impl>)` with `Impl(frontend, observer, fileSource, mapOptions)`.
+    pub fn with_file_source<F>(
+        frontend: &F,
+        observer: Rc<dyn MapObserver>,
+        file_source: Arc<dyn FileSource>,
+        map_options: MapOptions,
+    ) -> Map
+    where
+        F: RendererFrontend + Clone + 'static,
+    {
+        Map {
+            impl_: MapImpl::new(Box::new(frontend.clone()), observer, Some(file_source), &map_options),
         }
     }
 
@@ -165,6 +186,22 @@ impl Map {
         self.impl_.jump_to(camera);
     }
 
+    // query: the render-test runner's tile mode uses it.
+    /// `latLngBoundsForCamera(camera)`.
+    pub fn lat_lng_bounds_for_camera(&self, camera: &CameraOptions) -> mln_util::geo::LatLngBounds {
+        let mut shallow = crate::transform::Transform::from_state(self.impl_.transform.borrow().get_state().clone());
+        let size = shallow.get_state().get_size();
+
+        shallow.jump_to(camera);
+        mln_util::geo::LatLngBounds::hull(
+            shallow.screen_coordinate_to_lat_lng(&ScreenCoordinate::new(0.0, 0.0), mln_util::geo::WrapMode::Wrapped),
+            shallow.screen_coordinate_to_lat_lng(
+                &ScreenCoordinate::new(f64::from(size.width), f64::from(size.height)),
+                mln_util::geo::WrapMode::Wrapped,
+            ),
+        )
+    }
+
     pub fn ease_to(&mut self, camera: &CameraOptions, animation: &AnimationOptions) {
         self.impl_.camera_mutated.set(true);
         self.impl_.transform.borrow_mut().ease_to(camera, animation);
@@ -202,8 +239,71 @@ impl Map {
         self.impl_.on_update();
     }
 
-    // TODO(port): cameraForLatLngBounds, cameraForLatLngs,
-    // cameraForGeometry, latLngBoundsForCamera(Unwrapped).
+    // gtests-core: cameraForLatLngBounds, cameraForLatLngs,
+    // latLngBoundsForCameraUnwrapped (test/map/map.test.cpp).
+    /// `cameraForLatLngBounds(bounds, padding, bearing, pitch)`.
+    pub fn camera_for_lat_lng_bounds(
+        &self,
+        bounds: &LatLngBounds,
+        padding: &EdgeInsets,
+        bearing: Option<f64>,
+        pitch: Option<f64>,
+    ) -> CameraOptions {
+        self.camera_for_lat_lngs(
+            &[bounds.northwest(), bounds.southwest(), bounds.southeast(), bounds.northeast()],
+            padding,
+            bearing,
+            pitch,
+        )
+    }
+
+    /// `cameraForLatLngs(latLngs, padding, bearing, pitch)`.
+    pub fn camera_for_lat_lngs(
+        &self,
+        lat_lngs: &[LatLng],
+        padding: &EdgeInsets,
+        bearing: Option<f64>,
+        pitch: Option<f64>,
+    ) -> CameraOptions {
+        if bearing.is_none() && pitch.is_none() {
+            return camera_for_lat_lngs(lat_lngs, &self.impl_.transform.borrow(), padding);
+        }
+
+        let mut transform = crate::transform::Transform::from_state(self.impl_.transform.borrow().get_state().clone());
+
+        transform.jump_to(&CameraOptions::default().with_bearing(bearing).with_pitch(pitch));
+
+        camera_for_lat_lngs(lat_lngs, &transform, padding)
+            .with_bearing(Some(mln_math::rad2deg(-transform.get_bearing())))
+            .with_pitch(Some(mln_math::rad2deg(transform.get_pitch())))
+    }
+
+    // TODO(port): cameraForGeometry.
+
+    /// `latLngBoundsForCameraUnwrapped(camera)`.
+    pub fn lat_lng_bounds_for_camera_unwrapped(&self, camera: &CameraOptions) -> LatLngBounds {
+        let mut shallow = crate::transform::Transform::from_state(self.impl_.transform.borrow().get_state().clone());
+        let size = shallow.get_state().get_size();
+
+        shallow.jump_to(camera);
+        let width = f64::from(size.width);
+        let height = f64::from(size.height);
+        let mut nw = shallow.screen_coordinate_to_lat_lng(&ScreenCoordinate::new(0.0, 0.0), WrapMode::Wrapped);
+        let mut se = shallow.screen_coordinate_to_lat_lng(&ScreenCoordinate::new(width, height), WrapMode::Wrapped);
+        let mut ne = shallow.screen_coordinate_to_lat_lng(&ScreenCoordinate::new(width, 0.0), WrapMode::Wrapped);
+        let mut sw = shallow.screen_coordinate_to_lat_lng(&ScreenCoordinate::new(0.0, height), WrapMode::Wrapped);
+        let center =
+            shallow.screen_coordinate_to_lat_lng(&ScreenCoordinate::new(width / 2.0, height / 2.0), WrapMode::Wrapped);
+        nw.unwrap_for_shortest_path(&center);
+        se.unwrap_for_shortest_path(&center);
+        ne.unwrap_for_shortest_path(&center);
+        sw.unwrap_for_shortest_path(&center);
+        let mut bounds = LatLngBounds::hull(nw, se);
+        bounds.extend(&ne);
+        bounds.extend(&sw);
+        bounds.extend(&center);
+        bounds
+    }
 
     // MARK: - Bounds
 
@@ -396,8 +496,59 @@ impl Map {
         self.impl_.tile_lod_mode.get()
     }
 
-    // TODO(port): pixelForLatLng, latLngForPixel, annotations, prefetch zoom
-    // delta, rendering stats view, free camera options, rendered features.
+    // gtests-core: projection and prefetch zoom delta (test/map, test/api).
+    // MARK: - Projection
+
+    /// `pixelForLatLng(latLng)`.
+    pub fn pixel_for_lat_lng(&self, lat_lng: &LatLng) -> ScreenCoordinate {
+        // If the center and point longitudes are not in the same side of the
+        // antimeridian, we unwrap the point longitude so it would be seen if
+        // e.g. the next antimeridian side is visible.
+        let transform = self.impl_.transform.borrow();
+        let mut unwrapped_lat_lng = lat_lng.wrapped();
+        unwrapped_lat_lng.unwrap_for_shortest_path(&transform.get_lat_lng(WrapMode::Wrapped));
+        transform.lat_lng_to_screen_coordinate(&unwrapped_lat_lng)
+    }
+
+    /// `latLngForPixel(pixel, wrapMode)`.
+    pub fn lat_lng_for_pixel(&self, pixel: &ScreenCoordinate, wrap_mode: WrapMode) -> LatLng {
+        self.impl_.transform.borrow().screen_coordinate_to_lat_lng(pixel, wrap_mode)
+    }
+
+    /// `pixelsForLatLngs(latLngs)`.
+    pub fn pixels_for_lat_lngs(&self, lat_lngs: &[LatLng]) -> Vec<ScreenCoordinate> {
+        lat_lngs.iter().map(|lat_lng| self.pixel_for_lat_lng(lat_lng)).collect()
+    }
+
+    /// `latLngsForPixels(screenCoords, wrapMode)`.
+    pub fn lat_lngs_for_pixels(&self, screen_coords: &[ScreenCoordinate], wrap_mode: WrapMode) -> Vec<LatLng> {
+        screen_coords
+            .iter()
+            .map(|point| self.lat_lng_for_pixel(point, wrap_mode))
+            .collect()
+    }
+
+    /// `setPrefetchZoomDelta(delta)`.
+    pub fn set_prefetch_zoom_delta(&mut self, delta: u8) {
+        if self.impl_.prefetch_zoom_delta.get() == delta {
+            return;
+        }
+        self.impl_.prefetch_zoom_delta.set(delta);
+        self.impl_.on_update();
+    }
+
+    /// `getPrefetchZoomDelta()`.
+    pub fn get_prefetch_zoom_delta(&self) -> u8 {
+        self.impl_.prefetch_zoom_delta.get()
+    }
+
+    /// `getFreeCameraOptions()`.
+    pub fn get_free_camera_options(&self) -> mln_map_types::FreeCameraOptions {
+        self.impl_.transform.borrow().get_free_camera_options()
+    }
+
+    // TODO(port): annotations, rendering stats view, setFreeCameraOptions,
+    // rendered features.
 
     // MARK: - Debug
 
@@ -417,4 +568,63 @@ impl Map {
 
 fn misuse(message: &str) -> ExceptionPtr {
     MisuseException::ptr(message)
+}
+
+// gtests-core: the free function `cameraForLatLngs(latLngs, transform,
+// padding)` of map.cpp (Map::cameraForLatLngs and MapProjection use it).
+pub(crate) fn camera_for_lat_lngs(
+    lat_lngs: &[LatLng],
+    transform: &crate::transform::Transform,
+    padding: &EdgeInsets,
+) -> CameraOptions {
+    if lat_lngs.is_empty() {
+        return CameraOptions::default();
+    }
+    let size = transform.get_state().get_size();
+    // Calculate the bounds of the possibly rotated shape with respect to the viewport.
+    let mut ne_pixel = ScreenCoordinate::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut sw_pixel = ScreenCoordinate::new(f64::INFINITY, f64::INFINITY);
+    for lat_lng in lat_lngs {
+        let pixel = transform.lat_lng_to_screen_coordinate(lat_lng);
+        // std::min / std::max
+        sw_pixel.x = if pixel.x < sw_pixel.x { pixel.x } else { sw_pixel.x };
+        ne_pixel.x = if ne_pixel.x < pixel.x { pixel.x } else { ne_pixel.x };
+        sw_pixel.y = if pixel.y < sw_pixel.y { pixel.y } else { sw_pixel.y };
+        ne_pixel.y = if ne_pixel.y < pixel.y { pixel.y } else { ne_pixel.y };
+    }
+    let width = ne_pixel.x - sw_pixel.x;
+    let height = ne_pixel.y - sw_pixel.y;
+
+    // Calculate the zoom level.
+    let mut min_scale = f64::INFINITY;
+    if width > 0.0 || height > 0.0 {
+        let mut scale_x = f64::from(size.width) / width;
+        let mut scale_y = f64::from(size.height) / height;
+        scale_x -= (padding.left() + padding.right()) / width;
+        scale_y -= (padding.top() + padding.bottom()) / height;
+        min_scale = mln_math::min_f64(scale_x, scale_y);
+    }
+
+    let mut zoom = transform.get_zoom();
+    if min_scale > 0.0 {
+        zoom = mln_math::clamp_f64(
+            zoom + mln_math::log2(min_scale),
+            transform.get_state().get_min_zoom(),
+            transform.get_state().get_max_zoom(),
+        );
+    } else {
+        mln_util::logging::Log::error(
+            mln_util::logging::Event::General,
+            "Unable to calculate appropriate zoom level for bounds. Vertical or horizontal padding is greater than \
+             map's height or width.",
+        );
+    }
+
+    // Calculate the center point of a virtual bounds that is extended in all directions by padding.
+    let center_pixel = ScreenCoordinate::new((ne_pixel.x + sw_pixel.x) / 2.0, (ne_pixel.y + sw_pixel.y) / 2.0);
+
+    CameraOptions::default()
+        .with_center(Some(transform.screen_coordinate_to_lat_lng(&center_pixel, WrapMode::Wrapped)))
+        .with_padding(Some(*padding))
+        .with_zoom(Some(zoom))
 }

@@ -127,6 +127,7 @@ mod glyph_pbf {
         panic!("{path} not in the runfiles");
     }
 
+    // gtest: GlyphPBF.Parsing
     #[test]
     fn parsing() {
         // The fake glyphs contain a number of invalid glyphs, which should

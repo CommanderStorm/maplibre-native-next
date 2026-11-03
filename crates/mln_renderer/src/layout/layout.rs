@@ -86,9 +86,10 @@ pub trait Layout: Send {
 }
 
 /// `LayoutParameters`.
-// TODO(port): `std::shared_ptr<FontFaces> fontFaces` (font faces).
 pub struct LayoutParameters<'a> {
     pub bucket_parameters: &'a BucketParameters,
+    /// symbols: `std::shared_ptr<FontFaces> fontFaces`.
+    pub font_faces: Option<Arc<mln_text::glyph::FontFaces>>,
     pub glyph_dependencies: &'a mut GlyphDependencies,
     pub image_dependencies: &'a mut ImageDependencies,
     pub available_images: &'a BTreeSet<String>,

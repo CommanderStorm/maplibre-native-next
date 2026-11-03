@@ -84,8 +84,52 @@ const RESULTS_HEADER_BUTTONS: &str = r#"
 </h1>
 "#;
 
-// TODO(port): toJSON(const mln::Value&, ...) and toJSON(features, ...) for
-// query tests (rapidjson PrettyWriter output, used by checkQueryTestResults).
+// query: `toJSON` with `indent` 2 and `singleLine` false, the only form the
+// runner uses. rapidjson's PrettyWriter and serde_json's pretty printer lay
+// out JSON the same way (two-space indent, `"key": value`, `[]`/`{}` when
+// empty); number spelling may differ (the text is only parsed back, written
+// to actual.json and shown in the report).
+
+/// `mln::Value` as a JSON value (object members sorted by key, as C++
+/// writes them).
+fn value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Uint(u) => serde_json::Value::from(*u),
+        Value::Int(i) => serde_json::Value::from(*i),
+        Value::Double(d) => serde_json::Number::from_f64(*d).map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Array(values) => serde_json::Value::Array(values.iter().map(value_to_json).collect()),
+        Value::Object(map) => {
+            serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect())
+        }
+    }
+}
+
+/// `toJSON(const mln::Value&, 2, false)`.
+pub fn to_json_value(value: &Value) -> String {
+    serde_json::to_string_pretty(&value_to_json(value)).expect("JSON value serializes")
+}
+
+/// `toJSON(const std::vector<mln::Feature>&, 2, false)`.
+pub fn to_json_features(features: &[mln_util::feature::Feature]) -> String {
+    let mut array = Vec::with_capacity(features.len());
+    for feature in features {
+        // type, id, geometry, properties (mapbox::geojson::convert), then
+        // source, sourceLayer (when not empty) and state.
+        let serde_json::Value::Object(mut result) = geojson::to_json_feature(&feature.to_geojson_feature()) else {
+            unreachable!("a feature converts to an object");
+        };
+        result.insert("source".to_owned(), serde_json::Value::String(feature.source.clone()));
+        if !feature.source_layer.is_empty() {
+            result.insert("sourceLayer".to_owned(), serde_json::Value::String(feature.source_layer.clone()));
+        }
+        result.insert("state".to_owned(), value_to_json(&Value::Object(feature.state.clone())));
+        array.push(serde_json::Value::Object(result));
+    }
+    serde_json::to_string_pretty(&serde_json::Value::Array(array)).expect("JSON value serializes")
+}
 
 /// `readJson(path)`.
 pub fn read_json(json_path: &str) -> Result<serde_json::Value, ErrorMessage> {
@@ -785,11 +829,21 @@ pub fn parse_test_operations(metadata: &mut TestMetadata) -> TestOperations {
                 }
             }));
         } else if name == SET_LIGHT_OP {
-            // setLight
-            // TODO(port): C++ converts the light here (`convert<Light>`) and,
-            // on error, sets "Unable to convert light: ..." and returns no
-            // operations at all. The conversion needs mln_style.
-            result.push(not_ported("setLight operation (convert<style::Light>)".to_string()));
+            // setLight (conformance). C++ converts the light while parsing
+            // and, on error, sets "Unable to convert light: ..." and returns
+            // no operations at all; the conversion needs mln_style, so here it
+            // happens when the operation runs, with the same message.
+            let json = serialize_json_value(arg(1));
+            result.push(Box::new(move |ctx: &mut TestContext<'_>| match ctx.get_map().set_light(&json) {
+                Ok(()) => true,
+                Err(MapError::Conversion(message)) => {
+                    ctx.get_metadata().error_message = format!("Unable to convert light: {message}");
+                    false
+                }
+                Err(MapError::NotPorted(what)) => ctx.fail_not_ported(&what),
+                Err(MapError::Exception(what)) => ctx.fail_exception(&what),
+                Err(_) => true,
+            }));
         } else if name == ADD_LAYER_OP {
             // addLayer
             let json = serialize_json_value(arg(1));

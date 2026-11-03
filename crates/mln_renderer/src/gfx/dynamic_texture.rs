@@ -5,10 +5,11 @@
 // C++ shares a `DynamicTexture` between the worker threads (which reserve
 // bins and queue images) and the render thread (which uploads them). The
 // shelf pack and the queued images are behind a mutex here as there; the GPU
-// texture is render-thread state (`Texture2DPtr` is `Rc`), so it lives in a
-// render-thread registry keyed by the texture's id and is created in the
+// texture is render-thread state (`Texture2DPtr` is `Rc`), so it is a
+// `LocalObject` (a Send handle to a render-thread value) created in the
 // first `upload_deferred_images`, as the C++ WebGPU texture is
-// (`deferredCreation`).
+// (`deferredCreation`). Dropping the DynamicTexture on the render thread
+// frees the GPU texture (and with the last one, the map's device).
 
 use mln_gfx::texture2d::{SamplerState, Texture2DPtr};
 use mln_gfx::types::{TextureChannelDataType, TextureFilterType, TexturePixelType, TextureWrapType};
@@ -16,6 +17,7 @@ use mln_gfx::Context;
 use mln_style_types::image::RectU16;
 use mln_util::size::Size;
 use shelf_pack::{ShelfPack, ShelfPackOptions};
+use mln_actor::LocalObject;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,10 +74,8 @@ pub type DynamicTexturePtr = Arc<DynamicTexture>;
 
 static NEXT_DYNAMIC_TEXTURE_ID: AtomicUsize = AtomicUsize::new(1);
 
-thread_local! {
-    /// The GPU textures of the dynamic textures, on the render thread.
-    static TEXTURES: RefCell<HashMap<usize, Texture2DPtr>> = RefCell::new(HashMap::new());
-}
+/// The render-thread GPU texture of a dynamic texture.
+type GpuTexture = LocalObject<RefCell<Option<Texture2DPtr>>>;
 
 /// `gfx::DynamicTexture` (with the `webgpu::DynamicTexture` overrides).
 pub struct DynamicTexture {
@@ -83,6 +83,7 @@ pub struct DynamicTexture {
     size: Size,
     pixel_format: TexturePixelType,
     inner: Mutex<Inner>,
+    gpu_texture: Mutex<Option<GpuTexture>>,
 }
 
 impl std::fmt::Debug for DynamicTexture {
@@ -114,6 +115,7 @@ impl DynamicTexture {
                 num_textures: 0,
                 images_to_upload: HashMap::new(),
             }),
+            gpu_texture: Mutex::new(None),
         }
     }
 
@@ -128,7 +130,8 @@ impl DynamicTexture {
     /// `getTexture()`: the GPU texture, once `upload_deferred_images` created
     /// it (render thread).
     pub fn get_texture(&self) -> Option<Texture2DPtr> {
-        TEXTURES.with(|textures| textures.borrow().get(&self.id).cloned())
+        let gpu_texture = self.gpu_texture.lock().unwrap();
+        gpu_texture.as_ref().and_then(|t| t.get()).and_then(|t| t.borrow().clone())
     }
 
     pub fn get_pixel_format(&self) -> TexturePixelType {
@@ -174,28 +177,26 @@ impl DynamicTexture {
     /// and uploads the queued images (render thread).
     pub fn upload_deferred_images(&self, context: &dyn Context) {
         let mut inner = self.inner.lock().unwrap();
-        let texture = TEXTURES.with(|textures| {
-            textures
-                .borrow_mut()
-                .entry(self.id)
-                .or_insert_with(|| {
-                    let texture = context.create_texture_2d();
-                    {
-                        let mut t = texture.borrow_mut();
-                        t.set_size(self.size);
-                        t.set_format(self.pixel_format, TextureChannelDataType::UnsignedByte);
-                        t.set_sampler_configuration(SamplerState {
-                            filter: TextureFilterType::Linear,
-                            wrap_u: TextureWrapType::Clamp,
-                            wrap_v: TextureWrapType::Clamp,
-                            ..SamplerState::default()
-                        });
-                        t.create();
-                    }
-                    texture
-                })
-                .clone()
-        });
+        let texture = match self.get_texture() {
+            Some(texture) => texture,
+            None => {
+                let texture = context.create_texture_2d();
+                {
+                    let mut t = texture.borrow_mut();
+                    t.set_size(self.size);
+                    t.set_format(self.pixel_format, TextureChannelDataType::UnsignedByte);
+                    t.set_sampler_configuration(SamplerState {
+                        filter: TextureFilterType::Linear,
+                        wrap_u: TextureWrapType::Clamp,
+                        wrap_v: TextureWrapType::Clamp,
+                        ..SamplerState::default()
+                    });
+                    t.create();
+                }
+                *self.gpu_texture.lock().unwrap() = Some(LocalObject::new(RefCell::new(Some(texture.clone()))));
+                texture
+            }
+        };
         let mut t = texture.borrow_mut();
         for (rect, data) in inner.images_to_upload.values() {
             t.upload_sub_region(Some(data), Size::new(rect.w as u32, rect.h as u32), rect.x, rect.y);
@@ -218,11 +219,14 @@ impl DynamicTexture {
         false
     }
 
-    /// Drops the render-thread GPU texture of a dynamic texture that is no
-    /// longer used (render thread; see `remove_unused_dynamic_textures`).
-    pub(crate) fn release_gpu_texture(id: usize) {
-        TEXTURES.with(|textures| {
-            textures.borrow_mut().remove(&id);
-        });
+    /// Drops the render-thread GPU texture (render thread; a no-op
+    /// elsewhere).
+    pub(crate) fn release_gpu_texture(&self) {
+        let gpu_texture = self.gpu_texture.lock().unwrap().take();
+        if let Some(gpu_texture) = gpu_texture {
+            if let Some(cell) = gpu_texture.get() {
+                cell.borrow_mut().take();
+            }
+        }
     }
 }

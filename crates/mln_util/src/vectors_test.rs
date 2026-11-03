@@ -2,6 +2,7 @@
 
 use super::*;
 
+// gtest: Vectors.ConcatenateArrayAndScalars
 #[test]
 fn concatenate_array_and_scalars() {
     let expected: Vec4 = [1.0, 2.0, 3.0, 4.0];
@@ -16,6 +17,7 @@ fn concatenate_array_and_scalars() {
 }
 
 // `Vectors.Slice`; named `slice_` so it does not shadow `super::slice`.
+// gtest: Vectors.Slice
 #[test]
 fn slice_() {
     let v: Vec4 = [1.0, 2.0, 3.0, 4.0];

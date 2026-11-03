@@ -263,16 +263,19 @@ mod tests {
         Path::with_range(s, u.path.0, u.path.1)
     }
 
+    // gtest: URL.percentEncode
     #[test]
     fn percent_encode_test() {
         assert_eq!("%22%c3%a9nc%c3%b8%c3%b0ing%22", percent_encode("\"éncøðing\""));
     }
 
+    // gtest: URL.percentDecode
     #[test]
     fn percent_decode_test() {
         assert_eq!("\"éncøðing\"".as_bytes(), percent_decode("%22%C3%A9nc%C3%B8%C3%B0ing%22"));
     }
 
+    // gtest: URL.Scheme
     #[test]
     fn scheme() {
         assert_eq!((0, 4), url("http://example.com/test?query=foo").scheme);
@@ -292,6 +295,7 @@ mod tests {
         assert_eq!((0, 4), url("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ%3D%3D").scheme);
     }
 
+    // gtest: URL.Query
     #[test]
     fn query() {
         assert_eq!((23, 10), url("http://example.com/test?query=foo").query);
@@ -314,6 +318,7 @@ mod tests {
         assert_eq!((47, 0), url("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ%3D%3D").query);
     }
 
+    // gtest: URL.Domain
     #[test]
     fn domain() {
         assert_eq!((7, 11), url("http://example.com/test?query=foo").domain);
@@ -342,6 +347,7 @@ mod tests {
         assert_eq!((5, 17), url("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ%3D%3D").domain);
     }
 
+    // gtest: URL.Path
     #[test]
     fn path() {
         assert_eq!((18, 5), url("http://example.com/test?query=foo").path);
@@ -362,6 +368,7 @@ mod tests {
         assert_eq!((23, 24), url("data:text/plain;base64,SGVsbG8sIFdvcmxkIQ%3D%3D").path);
     }
 
+    // gtest: Path.Directory
     #[test]
     fn path_directory() {
         let p = Path::new;
@@ -388,6 +395,7 @@ mod tests {
         assert_eq!((0, 1), p("/").directory);
     }
 
+    // gtest: Path.URLDirectory
     #[test]
     fn path_url_directory() {
         assert_eq!((18, 9), url_path("http://example.com/foo/bar/baz.ext").directory);
@@ -414,6 +422,7 @@ mod tests {
         assert_eq!((18, 0), url_path("http://example.com?query=foo.bar").directory);
     }
 
+    // gtest: Path.Extension
     #[test]
     fn path_extension() {
         let p = Path::new;
@@ -442,6 +451,7 @@ mod tests {
         assert_eq!((1, 0), p("/").extension);
     }
 
+    // gtest: Path.URLExtension
     #[test]
     fn path_url_extension() {
         assert_eq!((30, 4), url_path("http://example.com/foo/bar/baz.ext").extension);
@@ -468,6 +478,7 @@ mod tests {
         assert_eq!((18, 0), url_path("http://example.com?query=foo.bar").extension);
     }
 
+    // gtest: Path.Filename
     #[test]
     fn path_filename() {
         let p = Path::new;
@@ -494,6 +505,7 @@ mod tests {
         assert_eq!((1, 0), p("/").filename);
     }
 
+    // gtest: Path.URLFilename
     #[test]
     fn path_url_filename() {
         assert_eq!((27, 3), url_path("http://example.com/foo/bar/baz.ext").filename);

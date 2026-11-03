@@ -57,6 +57,7 @@ fn rotated_frame(quaternion: &Vec4) -> (Vec3, Vec3, Vec3) {
     )
 }
 
+// gtest: FreeCameraOptions.SetLocation
 #[test]
 fn set_location() {
     let mut options = FreeCameraOptions::default();
@@ -90,6 +91,7 @@ fn set_location() {
     assert_vec3_near_1e7(&options.position.unwrap(), &[0.5, 1.0, 0.5]);
 }
 
+// gtest: FreeCameraOptions.SetLocationNegativeAltitude
 #[test]
 fn set_location_negative_altitude() {
     let mut options = FreeCameraOptions::default();
@@ -101,6 +103,7 @@ fn set_location_negative_altitude() {
     assert_double_eq(options.position.unwrap()[2], -100.0 / M2PI / EARTH_RADIUS_M);
 }
 
+// gtest: FreeCameraOptions.SetLocationUnwrappedLocation
 #[test]
 fn set_location_unwrapped_location() {
     let mut options = FreeCameraOptions::default();
@@ -113,6 +116,7 @@ fn set_location_unwrapped_location() {
     assert_vec3_near_1e7(&options.position.unwrap(), &[-1.0, 0.5, 0.0]);
 }
 
+// gtest: FreeCameraOptions.GetLocation
 #[test]
 fn get_location() {
     let mut options = FreeCameraOptions::default();
@@ -139,6 +143,7 @@ fn get_location() {
     assert_near(lat_lng_altitude.altitude, 1728570.489074, 1e-6);
 }
 
+// gtest: FreeCameraOptions.GetLocationInvalidPosition
 #[test]
 fn get_location_invalid_position() {
     let mut options = FreeCameraOptions::default();
@@ -152,6 +157,7 @@ fn get_location_invalid_position() {
     assert!(options.get_location().is_none());
 }
 
+// gtest: FreeCameraOptions.GetLocationNegativeAltitude
 #[test]
 fn get_location_negative_altitude() {
     let mut options = FreeCameraOptions::default();
@@ -162,6 +168,7 @@ fn get_location_negative_altitude() {
     assert_double_eq(lat_lng_altitude.unwrap().altitude, -0.5 * EARTH_RADIUS_M * PI);
 }
 
+// gtest: FreeCameraOptions.GetLocationUnwrappedPosition
 #[test]
 fn get_location_unwrapped_position() {
     let mut options = FreeCameraOptions::default();
@@ -174,6 +181,7 @@ fn get_location_unwrapped_position() {
     assert_double_eq(lat_lng_altitude.altitude, 0.0);
 }
 
+// gtest: FreeCameraOptions.LookAtPoint
 #[test]
 fn look_at_point() {
     let mut options = FreeCameraOptions::default();
@@ -262,6 +270,7 @@ fn look_at_point() {
     assert_vec3_near_1e7(&forward, &[0.0, -cos_pi4, -cos_pi4]);
 }
 
+// gtest: FreeCameraOptions.LookAtPointInvalidInput
 #[test]
 fn look_at_point_invalid_input() {
     let mut options = FreeCameraOptions::default();
@@ -294,6 +303,7 @@ fn look_at_point_invalid_input() {
     assert!(options.orientation.is_none());
 }
 
+// gtest: FreeCameraOptions.SetRollPitchBearing
 #[test]
 fn set_roll_pitch_bearing() {
     let mut options = FreeCameraOptions::default();

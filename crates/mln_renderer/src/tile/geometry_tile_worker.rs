@@ -135,6 +135,7 @@ pub struct GeometryTileWorker {
     pending_glyph_dependencies: GlyphDependencies,
     glyph_map: GlyphMap,
     dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
+    font_faces: Option<Arc<mln_text::glyph::FontFaces>>,
 
     pending_image_dependencies: ImageDependencies,
     icon_map: ImageMap,
@@ -161,6 +162,7 @@ impl GeometryTileWorker {
         pixel_ratio: f32,
         show_collision_boxes: bool,
         dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
+        font_faces: Option<Arc<mln_text::glyph::FontFaces>>,
         capture_rendered_features: bool,
     ) -> Self {
         GeometryTileWorker {
@@ -184,6 +186,7 @@ impl GeometryTileWorker {
             pending_glyph_dependencies: GlyphDependencies::default(),
             glyph_map: GlyphMap::new(),
             dynamic_texture_atlas,
+            font_faces,
             pending_image_dependencies: ImageDependencies::new(),
             icon_map: ImageMap::new(),
             pattern_map: ImageMap::new(),
@@ -404,6 +407,9 @@ impl GeometryTileWorker {
 
     /// `onGlyphsAvailable(newGlyphMap, results)`.
     pub fn on_glyphs_available(&mut self, new_glyph_map: GlyphMap, mut results: HBShapeResults) {
+        // C++ moves the pending glyphs out of `newGlyphMap` in the first loop
+        // and adds the rest (the shaped glyphs) in the second.
+        let mut shaped_glyph_map = new_glyph_map.clone();
         for (font_stack, new_glyphs) in new_glyph_map {
             let glyphs = self.glyph_map.entry(font_stack).or_default();
             for (pending_font_stack, pending_glyph_ids) in self.pending_glyph_dependencies.glyphs.iter_mut() {
@@ -413,10 +419,16 @@ impl GeometryTileWorker {
                 // fontstacks to look through
                 if font_stack_hash(pending_font_stack) == font_stack {
                     for (glyph_id, glyph) in &new_glyphs {
-                        if pending_glyph_ids.remove(glyph_id)
-                            && (glyph_id.code != 0 || glyph_id.type_ == GlyphIDType::FontPBF)
-                        {
-                            glyphs.entry(*glyph_id).or_insert_with(|| glyph.clone());
+                        if pending_glyph_ids.remove(glyph_id) {
+                            if glyph_id.code != 0 || glyph_id.type_ == GlyphIDType::FontPBF {
+                                glyphs.entry(*glyph_id).or_insert_with(|| glyph.clone());
+                            }
+                            // moved-from in C++: the second loop sees an
+                            // empty optional, which `emplace` won't add over
+                            // this entry anyway.
+                            if let Some(shaped) = shaped_glyph_map.get_mut(&font_stack) {
+                                shaped.remove(glyph_id);
+                            }
                         }
                     }
                 }
@@ -424,9 +436,16 @@ impl GeometryTileWorker {
         }
 
         if !results.is_empty() {
-            // TODO(port): font faces: the shaped glyphs of `results` join
-            // the glyph map (C++ newGlyphMap loop over complex glyphs).
             self.pending_glyph_dependencies.shapes.clear();
+
+            for (font_stack, new_glyphs) in &shaped_glyph_map {
+                let glyphs = self.glyph_map.entry(*font_stack).or_default();
+                for (glyph_id, glyph) in new_glyphs {
+                    if glyph_id.code != 0 || glyph_id.type_ == GlyphIDType::FontPBF {
+                        glyphs.entry(*glyph_id).or_insert_with(|| glyph.clone());
+                    }
+                }
+            }
 
             for layout in self.layouts.iter_mut() {
                 if layout.need_finalize_symbols() {
@@ -567,6 +586,7 @@ impl GeometryTileWorker {
                 let layout = layermanager::create_layout(
                     &mut LayoutParameters {
                         bucket_parameters: &parameters,
+                        font_faces: self.font_faces.clone(),
                         glyph_dependencies: &mut glyph_dependencies,
                         image_dependencies: &mut image_dependencies,
                         available_images: &self.available_images,

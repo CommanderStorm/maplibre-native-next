@@ -2,8 +2,7 @@
 // src/mln/renderer/layers/render_fill_layer.cpp (drawable path,
 // MLN_TRIANGULATE_FILL_OUTLINES = 1 as for WebGPU).
 //
-// TODO(port): the fill-pattern branch (pattern atlas textures,
-// DrawableAtlasesTweaker) and captureRenderedFeatures.
+// TODO(port): captureRenderedFeatures.
 
 use super::fill_layer_tweaker::FillLayerTweaker;
 use super::{TileDrawables, refresh_if_bucket_updated, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
@@ -265,6 +264,9 @@ impl RenderLayer for RenderFillLayer {
 
         let mut fill_builder: Option<UniqueDrawableBuilder> = None;
         let mut outline_builder: Option<UniqueDrawableBuilder> = None;
+        // conformance: fill-pattern
+        let mut pattern_builder: Option<UniqueDrawableBuilder> = None;
+        let mut outline_pattern_builder: Option<UniqueDrawableBuilder> = None;
 
         let layer_prefix = format!("{}/", self.get_id());
         let render_pass = RenderPass::Translucent;
@@ -319,7 +321,7 @@ impl RenderLayer for RenderFillLayer {
 
             let evaluated = get_evaluated::<FillLayerProperties>(&render_data.layer_properties);
 
-            // TODO(port): getAtlasTweaker (fill-pattern) and
+            // (getAtlasTweaker: in the pattern branch.) TODO(port):
             // captureRenderedFeatures.
 
             // Drawables' stored attributes point directly into the bucket's
@@ -514,11 +516,108 @@ impl RenderLayer for RenderFillLayer {
                     }
                 }
             } else {
-                // Fill with pattern
-                // TODO(port): FillPatternShader / FillOutlinePatternShader
-                // drawables with the tile's icon atlas texture
-                // (DrawableAtlasesTweaker); needs the image atlas (sprites).
-                continue;
+                // Fill with pattern (conformance)
+                if (render_pass.underlying_type() & RenderPass::Translucent.underlying_type()) == 0 {
+                    continue;
+                }
+
+                let (Some(pattern_shader_group), Some(outline_pattern_shader_group)) =
+                    (self.pattern_shader_group.clone(), self.outline_pattern_shader_group.clone())
+                else {
+                    continue;
+                };
+
+                let fill_shader = pattern_shader_group.get_or_create_shader(context, &properties_as_uniforms, "a_pos");
+                let outline_shader = if do_outline {
+                    outline_pattern_shader_group.get_or_create_shader(context, &properties_as_uniforms, "a_pos")
+                } else {
+                    None
+                };
+
+                // getAtlasTweaker()
+                let atlas_tweaker: Option<mln_gfx::drawable_tweaker::DrawableTweakerPtr> =
+                    tile.get_atlas_textures().filter(|a| a.icon.borrow().is_some()).map(|atlases| {
+                        Rc::new(crate::gfx::drawable_atlases_tweaker::DrawableAtlasesTweaker::new(
+                            Some(atlases.clone()),
+                            None,
+                            Some(ID_FILL_IMAGE_TEXTURE),
+                            /*is_text*/ false,
+                            /*sdf_icons*/ true, // to force linear filter
+                            /*rotation_alignment*/ mln_style_types::AlignmentType::Auto,
+                            /*icon_scaled*/ false,
+                            /*text_size_is_zoom_constant*/ false,
+                        )) as mln_gfx::drawable_tweaker::DrawableTweakerPtr
+                    });
+
+                if pattern_builder.is_none() {
+                    let mut builder = context.create_drawable_builder(format!("{layer_prefix}fill-pattern"));
+                    common_init(builder.as_mut());
+                    builder.set_shader(fill_shader.clone());
+                    builder.set_depth_type(DepthMaskType::ReadWrite);
+                    builder.set_color_mode(&ColorMode::alpha_blended());
+                    builder.set_sub_layer_index(1);
+                    builder.set_render_pass(RenderPass::Translucent);
+                    pattern_builder = Some(builder);
+                }
+                if do_outline && outline_pattern_builder.is_none() {
+                    let mut builder = context.create_drawable_builder(format!("{layer_prefix}fill-outline-pattern"));
+                    common_init(builder.as_mut());
+                    builder.set_shader(outline_shader.clone());
+                    builder.set_line_width(LINE_WIDTH);
+                    builder.set_depth_type(DepthMaskType::ReadOnly);
+                    builder.set_color_mode(&ColorMode::alpha_blended());
+                    builder.set_sub_layer_index(2);
+                    builder.set_render_pass(RenderPass::Translucent);
+                    outline_pattern_builder = Some(builder);
+                }
+
+                if let Some(builder) = pattern_builder.as_mut() {
+                    builder.clear_tweakers();
+                    if let Some(tweaker) = &atlas_tweaker {
+                        builder.add_tweaker(tweaker.clone());
+                    }
+                }
+                if do_outline && let Some(builder) = outline_pattern_builder.as_mut() {
+                    builder.clear_tweakers();
+                    if let Some(tweaker) = &atlas_tweaker {
+                        builder.add_tweaker(tweaker.clone());
+                    }
+                }
+
+                if let Some(builder) = pattern_builder.as_mut()
+                    && !bucket.triangles.is_empty()
+                {
+                    builder.set_shader(fill_shader.clone());
+                    builder.set_render_pass(render_pass);
+                    if do_outline && let Some(outline) = outline_pattern_builder.as_mut() {
+                        outline.set_vertex_attributes(Some(vertex_attrs.clone()));
+                    }
+                    builder.set_vertex_attributes(Some(vertex_attrs.clone()));
+                    builder.set_raw_vertices(Vec::new(), fill_vertex_count, AttributeDataType::Short2);
+                    builder.set_segments_shared(
+                        DrawMode::Triangles(),
+                        Some(Rc::new(RefCell::new(IndexVectorBase::new(bucket.triangles.clone())))),
+                        &bucket.triangle_segments,
+                    );
+
+                    finish(builder.as_mut(), FillVariant::FillPattern, base_stats);
+                }
+
+                if do_outline
+                    && let Some(builder) = outline_pattern_builder.as_mut()
+                    && !bucket.basic_lines.is_empty()
+                {
+                    builder.set_shader(outline_shader.clone());
+                    builder.set_render_pass(render_pass);
+                    builder.set_raw_vertices(Vec::new(), fill_vertex_count, AttributeDataType::Short2);
+                    builder.set_segments_shared(
+                        DrawMode::Lines(LINE_WIDTH),
+                        Some(Rc::new(RefCell::new(IndexVectorBase::new(bucket.basic_lines.clone())))),
+                        &bucket.basic_line_segments,
+                    );
+
+                    finish(builder.as_mut(), FillVariant::FillOutlinePattern, base_stats);
+                }
             }
         }
     }

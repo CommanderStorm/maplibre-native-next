@@ -761,6 +761,15 @@ impl ViewState {
 
     /// `render()`
     fn render(&mut self, shared: &ViewShared) {
+        // Port-only perf probe (symbols): `MLN_GLFW_PAN_PX=<px>` pans the map
+        // by that many pixels every frame, reversing every 2 s (so it stays
+        // over the same area), so the "Frame time" log measures continuous
+        // camera movement.
+        if let Some(dx) = std::env::var("MLN_GLFW_PAN_PX").ok().and_then(|v| v.parse::<f64>().ok()) {
+            let dx = if (self.glfw.get_time() / 2.0) as i64 % 2 == 0 { dx } else { -dx };
+            self.with_map(|map| map.move_by(&ScreenCoordinate::new(dx, 0.0), &AnimationOptions::default()));
+            shared.invalidate();
+        }
         if shared.dirty.get()
             && let Some(frontend) = self.renderer_frontend.clone()
         {
@@ -889,7 +898,9 @@ pub fn report_style(map: &Map) {
     let impls = style.impl_.get_layer_impls();
     for layer in impls.iter() {
         let type_ = layer.get_type_info().type_;
-        if !renderer_supports(type_) {
+        // Ask the renderer's layer manager itself, so this summary can't go
+        // stale as layer types get ported.
+        if mln_renderer::layermanager::create_render_layer(layer).is_none() {
             *skipped_type.entry(type_).or_default() += 1;
         } else if !layer.source.is_empty() && !loaded_sources.contains(&layer.source) {
             let source_type = declared_sources.get(&layer.source).map_or("missing", String::as_str);
@@ -916,12 +927,6 @@ pub fn report_style(map: &Map) {
             if unported_sources.is_empty() { "none".to_owned() } else { unported_sources.join(", ") },
         ),
     );
-}
-
-/// The layer types `mln_renderer::layermanager::create_render_layer` has a
-/// render layer for.
-fn renderer_supports(type_: &str) -> bool {
-    matches!(type_, "background" | "circle" | "fill" | "line")
 }
 
 /// Port-only scripted input (see `GLFWView::set_gesture_test`).

@@ -66,6 +66,7 @@ mod fixture_tests {
     }
 
     // TEST(Image, PNGReadNoProfile)
+    // gtest: Image.PNGReadNoProfile
     #[test]
     fn png_read_no_profile() {
         let image = decode_image(&read_file("test/fixtures/image/no_profile.png")).unwrap();
@@ -73,6 +74,7 @@ mod fixture_tests {
     }
 
     // TEST(Image, PNGReadNoProfileAlpha)
+    // gtest: Image.PNGReadNoProfileAlpha
     #[test]
     fn png_read_no_profile_alpha() {
         let image = decode_image(&read_file("test/fixtures/image/no_profile_alpha.png")).unwrap();
@@ -80,6 +82,7 @@ mod fixture_tests {
     }
 
     // TEST(Image, PNGReadProfile)
+    // gtest: Image.PNGReadProfile
     #[test]
     fn png_read_profile() {
         let image = decode_image(&read_file("test/fixtures/image/profile.png")).unwrap();
@@ -87,6 +90,7 @@ mod fixture_tests {
     }
 
     // TEST(Image, PNGReadProfileAlpha)
+    // gtest: Image.PNGReadProfileAlpha
     #[test]
     fn png_read_profile_alpha() {
         let image = decode_image(&read_file("test/fixtures/image/profile_alpha.png")).unwrap();
@@ -94,6 +98,7 @@ mod fixture_tests {
     }
 
     // TEST(Image, PNGTile)
+    // gtest: Image.PNGTile
     #[test]
     fn png_tile() {
         let image = decode_image(&read_file("test/fixtures/image/tile.png")).unwrap();
@@ -102,6 +107,7 @@ mod fixture_tests {
     }
 
     // TEST(Image, JPEGTile)
+    // gtest: Image.JPEGTile
     #[test]
     #[ignore = "TODO(port): decodeJPEG (platform/default/src/mln/util/jpeg_reader.cpp)"]
     fn jpeg_tile() {
@@ -111,21 +117,47 @@ mod fixture_tests {
     }
 
     // TEST(Image, WebPTile)
+    // gtest: Image.WebPTile
     #[test]
-    #[ignore = "TODO(port): decodeWEBP (platform/default/src/mln/util/webp_reader.cpp)"]
     fn webp_tile() {
         let image = decode_image(&read_file("test/fixtures/image/tile.webp")).unwrap();
         assert_eq!(image.size.width, 256);
         assert_eq!(image.size.height, 256);
     }
 
-    // Not in the C++ suite: JPEG and WebP are recognized and reported as not
-    // ported rather than as unsupported.
+    // Not in the C++ suite: JPEG is recognized and reported as not ported
+    // rather than as unsupported.
     #[test]
-    fn jpeg_and_webp_are_todo() {
-        for file in ["tile.jpeg", "tile.webp"] {
+    fn jpeg_is_todo() {
+        for file in ["tile.jpeg"] {
             let error = decode_image(&read_file(&format!("test/fixtures/image/{file}"))).unwrap_err();
             assert!(error.starts_with("TODO(port)"), "{file}: {error}");
         }
+    }
+
+    // Not in the C++ suite: the lossless DEM tiles of the render tests
+    // (cache-style.db `http://tiles/{z}-{x}-{y}.ocean.webp`, VP8L) decode
+    // to their full size, opaque.
+    #[test]
+    fn webp_lossless_dem_tile() {
+        let db = metrics_file("integration/tiles/1-0-0.ocean.webp");
+        let image = decode_image(&db).unwrap();
+        assert_eq!(image.size.width, 512);
+        assert_eq!(image.size.height, 512);
+        assert!(image.data.chunks_exact(4).all(|p| p[3] == 255));
+    }
+
+    fn metrics_file(path: &str) -> Vec<u8> {
+        read_file(&format!("metrics/{path}"))
+    }
+
+    // Not in the C++ suite: corrupt data decodes to an empty image, as C++
+    // (with a warning) instead of an error.
+    #[test]
+    fn webp_corrupt_is_empty() {
+        let mut data = b"RIFF\x10\x00\x00\x00WEBPVP8L".to_vec();
+        data.extend_from_slice(&[0u8; 8]);
+        let image = decode_image(&data).unwrap();
+        assert!(!image.valid());
     }
 }

@@ -6,9 +6,9 @@ use maplibre_native_base::Value;
 use mln_conversion::{Convertible, Error};
 use mln_style_types::{SymbolAnchorType, VariableAnchorOffsetCollection};
 
+// gtest: StyleConversion.PropertyValue
 #[test]
 fn property_value() {
-    // TEST(StyleConversion, PropertyValue)
     // PropertyValue<T> accepts a constant expression:
     // https://github.com/mapbox/mapbox-gl-native/issues/11940
     let mut error = Error::default();
@@ -20,9 +20,9 @@ fn property_value() {
     assert_eq!(*result.as_constant(), expected);
 }
 
+// gtest: StyleConversion.SemiliteralOffsets
 #[test]
 fn semiliteral_offsets() {
-    // TEST(StyleConversion, SemiliteralOffsets)
     let mut error = Error::default();
     let doc = parse_json(r#"["semiliteral", [["number", ["get", "x"]], ["*", 2, ["get", "y"]]]]"#);
     let result = convert_property_value::<[f32; 2]>(&Convertible::from(&doc), &mut error, true, false);

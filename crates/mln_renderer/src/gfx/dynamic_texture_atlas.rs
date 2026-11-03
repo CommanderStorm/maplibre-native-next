@@ -91,6 +91,17 @@ pub struct DynamicTextureAtlas {
     state: Mutex<State>,
 }
 
+impl Drop for DynamicTextureAtlas {
+    /// Frees the GPU textures with the atlas (render thread): textures still
+    /// referenced elsewhere must not keep the map's device alive.
+    fn drop(&mut self) {
+        let state = self.state.get_mut().unwrap_or_else(|e| e.into_inner());
+        for texture in state.dynamic_textures.iter().chain(state.dummy_dynamic_texture.values()) {
+            texture.release_gpu_texture();
+        }
+    }
+}
+
 fn pixel_type_key(t: TexturePixelType) -> u8 {
     t as u8
 }
@@ -427,7 +438,7 @@ impl DynamicTextureAtlas {
         state.dynamic_textures.retain(|dynamic_texture| {
             let unused = Arc::strong_count(dynamic_texture) == 1 && dynamic_texture.is_empty();
             if unused {
-                DynamicTexture::release_gpu_texture(dynamic_texture.id());
+                dynamic_texture.release_gpu_texture();
             }
             !unused
         });

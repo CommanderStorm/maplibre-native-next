@@ -8,3 +8,6 @@ pub mod check_max_angle;
 pub mod collision_feature;
 pub mod get_anchors;
 pub mod quads;
+pub mod collision_index;
+pub mod cross_tile_symbol_index;
+pub mod placement;

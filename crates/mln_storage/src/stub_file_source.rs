@@ -40,6 +40,9 @@ struct State {
     next_id: u64,
     timer: Option<AsyncTask>,
     responders: HashMap<Kind, Responder>,
+    // gtests-core: the C++ `response` member (the responder for every kind;
+    // by default `defaultResponse`, which dispatches to the per-kind ones).
+    response: Option<Responder>,
     properties: HashMap<String, Value>,
 }
 
@@ -102,9 +105,19 @@ impl StubFileSource {
         self.state().borrow_mut().responders.insert(kind, Rc::new(responder));
     }
 
+    // gtests-core: assigning `response` in C++ (test/map/map.test.cpp
+    // DisabledSources, test/map/prefetch.test.cpp).
+    /// Replaces the responder for all kinds (C++ `fileSource->response = ...`).
+    pub fn set_global_response(&self, responder: impl Fn(&Resource) -> Option<Response> + 'static) {
+        self.state().borrow_mut().response = Some(Rc::new(responder));
+    }
+
     /// `response(resource)`.
     fn response(&self, kind: Kind) -> Responder {
         let state = self.state();
+        if let Some(response) = state.borrow().response.clone() {
+            return response;
+        }
         let responder = state.borrow().responders.get(&kind).cloned();
         responder.unwrap_or_else(|| Rc::new(unexpected))
     }

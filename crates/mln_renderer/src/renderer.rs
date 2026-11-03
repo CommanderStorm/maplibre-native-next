@@ -101,8 +101,13 @@ impl Renderer {
         self.impl_ref().orchestrator.query_source_features(source_id, options)
     }
 
+    /// `getPlacedSymbolsData()`.
+    pub fn get_placed_symbols_data(&self) -> Vec<crate::text::placement::PlacedSymbolData> {
+        self.impl_ref().orchestrator.get_placed_symbols_data()
+    }
+
     // TODO(port): queryPointAnnotations, queryShapeAnnotations,
-    // queryFeatureExtensions, dumpDebugLogs, getPlacedSymbolsData.
+    // queryFeatureExtensions, dumpDebugLogs.
 
     // layers: feature state
     /// `setFeatureState(sourceID, sourceLayerID, featureID, state)`.

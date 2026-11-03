@@ -50,6 +50,13 @@ pub trait TileRenderData {
 
     fn upload(&self, _upload_pass: &dyn UploadPass) {}
 
+    /// symbols: the tile's feature index (C++ `GeometryTile::getFeatureIndex`,
+    /// reached through `RenderSource::getRenderedTile` in
+    /// `RenderSymbolLayer::prepare`).
+    fn get_feature_index(&self) -> Option<std::sync::Arc<crate::geometry::feature_index::FeatureIndex>> {
+        None
+    }
+
     fn prepare(&mut self, _parameters: &SourcePrepareParameters<'_>) {}
 }
 

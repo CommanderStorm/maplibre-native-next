@@ -146,6 +146,10 @@ impl TileRenderData for GeometryTileRenderData {
         self.get_layer_render_data(layer_impl).map(|data| &data.bucket)
     }
 
+    fn get_feature_index(&self) -> Option<Arc<FeatureIndex>> {
+        self.layout_result.as_ref().map(|result| result.feature_index.clone())
+    }
+
     fn upload(&self, upload_pass: &dyn UploadPass) {
         let Some(layout_result) = &self.layout_result else {
             return;
@@ -386,9 +390,38 @@ impl GeometryTileInner {
 
 impl GlyphRequestor for GeometryTileInner {
     /// `onGlyphsAvailable(GlyphMap, HBShapeRequests)`.
-    fn on_glyphs_available(&self, glyph_map: GlyphMap, _requests: HBShapeRequests) {
-        // TODO(port): HarfBuzz shaping of the requests (font faces).
-        let results = HBShapeResults::new();
+    fn on_glyphs_available(&self, mut glyph_map: GlyphMap, requests: HBShapeRequests) {
+        let mut results = HBShapeResults::new();
+        for (font_stack, font_types) in &requests {
+            for (type_, strs) in font_types {
+                for str_ in strs {
+                    let mut shaped_glyph_ids = Vec::new();
+                    let mut shaped_adjusts = Vec::new();
+                    self.glyph_manager
+                        .hb_shaping(str_, font_stack, *type_, &mut shaped_glyph_ids, &mut shaped_adjusts);
+                    let mut shaped_str: Vec<u16> = Vec::with_capacity(shaped_glyph_ids.len());
+                    for glyph_id in &shaped_glyph_ids {
+                        shaped_str.push(glyph_id.code);
+
+                        let font_stack_hash = mln_text::tagged_string::font_stack_hash(font_stack);
+                        let need_shape =
+                            !glyph_map.get(&font_stack_hash).is_some_and(|glyphs| glyphs.contains_key(glyph_id));
+                        if need_shape {
+                            let glyph = self.glyph_manager.get_glyph(font_stack, *glyph_id);
+                            glyph_map.entry(font_stack_hash).or_default().entry(glyph.id).or_insert(Some(glyph));
+                        }
+                    }
+
+                    results.entry(font_stack.clone()).or_default().entry(*type_).or_default().insert(
+                        str_.clone(),
+                        crate::text::glyph_manager::HBShapeResult {
+                            str_: shaped_str,
+                            adjusts: Arc::new(shaped_adjusts),
+                        },
+                    );
+                }
+            }
+        }
         self.worker.invoke(move |worker: &mut GeometryTileWorker| {
             worker.on_glyphs_available(glyph_map, results)
         });
@@ -444,6 +477,7 @@ impl GeometryTile {
             let pixel_ratio = parameters.pixel_ratio;
             let capture_rendered_features = parameters.capture_rendered_features;
             let dynamic_texture_atlas = Some(parameters.dynamic_texture_atlas.clone());
+            let font_faces = parameters.glyph_manager.get_font_faces();
             move |self_ref, parent| {
                 GeometryTileWorker::new(
                     self_ref,
@@ -455,6 +489,7 @@ impl GeometryTile {
                     pixel_ratio,
                     show_collision_boxes,
                     dynamic_texture_atlas,
+                    font_faces,
                     capture_rendered_features,
                 )
             }

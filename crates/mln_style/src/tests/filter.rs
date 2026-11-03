@@ -97,6 +97,7 @@ fn s(v: &str) -> Value {
     Value::String(v.to_owned())
 }
 
+// gtest: Filter.EqualsNull
 #[test]
 fn equals_null() {
     let f = r#"["==", "foo", null]"#;
@@ -110,6 +111,7 @@ fn equals_null() {
     assert!(!filter(f, &[]));
 }
 
+// gtest: Filter.EqualsString
 #[test]
 fn equals_string() {
     let f = r#"["==", "foo", "bar"]"#;
@@ -117,6 +119,7 @@ fn equals_string() {
     assert!(!filter(f, &[("foo", s("baz"))]));
 }
 
+// gtest: Filter.EqualsNumber
 #[test]
 fn equals_number() {
     let f = r#"["==", "foo", 0]"#;
@@ -133,6 +136,7 @@ fn equals_number() {
     assert!(!filter(f, &[]));
 }
 
+// gtest: Filter.EqualsType
 #[test]
 fn equals_type() {
     let f = r#"["==", "$type", "LineString"]"#;
@@ -146,6 +150,7 @@ fn equals_type() {
     invalid_filter(r#"["==", "$type", "foo", "Point"]"#);
 }
 
+// gtest: Filter.InType
 #[test]
 fn in_type() {
     let f = r#"["in", "$type", "LineString", "Polygon"]"#;
@@ -154,6 +159,7 @@ fn in_type() {
     assert!(filter_type(f, FeatureType::Polygon));
 }
 
+// gtest: Filter.InID
 #[test]
 fn in_id() {
     let f = r#"["in", "$id", "123", "1234", 1234]"#;
@@ -163,6 +169,7 @@ fn in_id() {
     assert!(!filter_id(f, &[], Identifier::String("4321".into())));
 }
 
+// gtest: Filter.Any
 #[test]
 fn any() {
     assert!(!filter(r#"["any"]"#, &[]));
@@ -171,6 +178,7 @@ fn any() {
     assert!(filter(r#"["any", ["==", "foo", 0], ["==", "foo", 1]]"#, &[("foo", Value::Int(1))]));
 }
 
+// gtest: Filter.AnyExpression
 #[test]
 fn any_expression() {
     assert!(!filter(r#"["any"]"#, &[]));
@@ -182,6 +190,7 @@ fn any_expression() {
     ));
 }
 
+// gtest: Filter.All
 #[test]
 fn all() {
     assert!(filter(r#"["all"]"#, &[]));
@@ -190,6 +199,7 @@ fn all() {
     assert!(!filter(r#"["all", ["==", "foo", 0], ["==", "foo", 1]]"#, &[("foo", Value::Int(1))]));
 }
 
+// gtest: Filter.AllExpression
 #[test]
 fn all_expression() {
     assert!(filter(r#"["all", ["==", ["get", "foo"], 1]]"#, &[("foo", Value::Int(1))]));
@@ -200,6 +210,7 @@ fn all_expression() {
     ));
 }
 
+// gtest: Filter.None
 #[test]
 fn none() {
     assert!(filter(r#"["none"]"#, &[]));
@@ -208,6 +219,7 @@ fn none() {
     assert!(!filter(r#"["none", ["==", "foo", 0], ["==", "foo", 1]]"#, &[("foo", Value::Int(1))]));
 }
 
+// gtest: Filter.Has
 #[test]
 fn has() {
     assert!(filter(r#"["has", "foo"]"#, &[("foo", Value::Int(1))]));
@@ -217,6 +229,7 @@ fn has() {
     assert!(!filter(r#"["has", "$id"]"#, &[]));
 }
 
+// gtest: Filter.NotHas
 #[test]
 fn not_has() {
     assert!(!filter(r#"["!has", "foo"]"#, &[("foo", Value::Int(1))]));
@@ -225,6 +238,7 @@ fn not_has() {
     assert!(filter(r#"["!has", "foo"]"#, &[]));
 }
 
+// gtest: Filter.ID
 #[test]
 fn id() {
     let id1 = Identifier::Uint(1234);
@@ -267,18 +281,21 @@ fn id() {
     assert!(!filter_id(r#"["<=", "$id", 1]"#, &[], id2));
 }
 
+// gtest: Filter.Expression
 #[test]
 fn expression() {
     assert!(filter(r#"["==", ["+", 1, 1], 2]"#, &[]));
     assert!(!filter(r#"["==", ["+", 1, 1], 4]"#, &[]));
 }
 
+// gtest: Filter.PropertyExpression
 #[test]
 fn property_expression() {
     assert!(filter(r#"["==", ["get", "two"], 2]"#, &[("two", Value::Int(2))]));
     assert!(!filter(r#"["==", ["get", "two"], 4]"#, &[("two", Value::Int(2))]));
 }
 
+// gtest: Filter.LegacyProperty
 #[test]
 fn legacy_property() {
     let i = Value::Int;
@@ -358,6 +375,7 @@ fn legacy_property() {
     assert!(!filter(r#"["==", "two", false]"#, &[("two", Value::Bool(true))]));
 }
 
+// gtest: Filter.Serialize
 #[test]
 fn serialize() {
     let json = r#"["any",["==","foo",0],["==","foo",1]]"#;
@@ -374,6 +392,7 @@ fn serialize() {
     assert_eq!(stringify_filter(json), json);
 }
 
+// gtest: Filter.ExpressionLegacyMix
 #[test]
 fn expression_legacy_mix() {
     let mut error = Error::default();
@@ -385,6 +404,7 @@ fn expression_legacy_mix() {
     assert!(!error.message.is_empty());
 }
 
+// gtest: Filter.ZoomExpressionNested
 #[test]
 fn zoom_expression_nested() {
     assert!(filter_full(
@@ -403,6 +423,7 @@ fn zoom_expression_nested() {
     ));
 }
 
+// gtest: Filter.GeomType
 #[test]
 fn geom_type() {
     let check = |json: &str, type_: FeatureType| filter_full(json, &[], Identifier::Null, type_, 2.0);
@@ -427,16 +448,19 @@ fn geom_type() {
     assert!(check(r#"["==", ["geometry-type"], "Unknown"]"#, FeatureType::Unknown));
 }
 
+// gtest: Filter.Internal
 #[test]
 fn internal() {
     filter(r#"["filter-==","class","snow"]"#, &[]);
 }
 
+// gtest: Filter.Short
 #[test]
 fn short() {
     filter(r#"["==", ["id"], "foo"]"#, &[]);
 }
 
+// gtest: Filter.LegacyExpressionInvalidType
 #[test]
 fn legacy_expression_invalid_type() {
     let value = serde_json::json!("string");

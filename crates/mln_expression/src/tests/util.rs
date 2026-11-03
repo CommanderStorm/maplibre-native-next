@@ -2,6 +2,7 @@
 
 use crate::util::rgba;
 
+// gtest: Expression.Util_rgba
 #[test]
 fn util_rgba() {
     let valid = rgba(0.0, 0.0, 0.0, 0.0);

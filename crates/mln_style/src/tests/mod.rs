@@ -3,9 +3,15 @@
 //! snake_case.
 
 mod conversion_function;
+mod conversion_geojson_options;
 mod conversion_layer;
 mod conversion_light;
+mod conversion_padding;
 mod conversion_property_value;
+mod conversion_source_options;
+mod conversion_stringify;
+mod conversion_tileset;
+mod expression_global_state;
 mod filter;
 mod layer_properties;
 mod m1_render_test_styles;
@@ -13,6 +19,7 @@ mod properties;
 mod source;
 mod property_expression;
 mod style;
+mod style_image;
 mod style_layer;
 mod style_parser;
 mod util;

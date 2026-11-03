@@ -43,6 +43,7 @@ mod tests {
     use super::*;
 
     // Ports test/util/token.test.cpp.
+    // gtest: Token.replaceTokens
     #[test]
     fn replace_tokens_test() {
         let one = |key: &'static str, value: &'static str| {

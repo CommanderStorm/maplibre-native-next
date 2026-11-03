@@ -247,6 +247,7 @@ mod language_tag {
         Some(v.to_string())
     }
 
+    // gtest: LanguageTag.Parsing
     #[test]
     fn parsing() {
         let bare_language = LanguageTag::from_bcp47("de");
@@ -270,6 +271,7 @@ mod language_tag {
         assert_eq!(kitchen_sink.region, s("US"));
     }
 
+    // gtest: LanguageTag.Generation
     #[test]
     fn generation() {
         let de_hans_us = LanguageTag::new(s("de"), s("hans"), s("US"));

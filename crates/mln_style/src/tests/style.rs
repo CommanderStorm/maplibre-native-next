@@ -1,11 +1,12 @@
-// Ports test/style/style.test.cpp (the cases that need no sources or
-// expressions).
+// Ports test/style/style.test.cpp.
 
-use super::util::{FixtureLog, parse_json};
+use super::util::{FixtureLog, parse_json, read_file};
 use crate::image;
 use crate::layer::Layer;
-use crate::layers::background_layer::{BackgroundLayer, Impl as BackgroundLayerImpl};
-use crate::layers::BackgroundColor;
+use crate::layers::line_layer_properties::LineColor;
+use crate::layers::line_layer::{Impl as LineLayerImpl, LineLayer};
+use crate::sources::tile_source::{UrlOrTileset, VectorSource};
+use mln_util::logging::{Event, EventSeverity};
 use crate::observer::{Observer, SourceObserver};
 use crate::style::{Impl, Style};
 use crate::transition_options::TransitionOptions;
@@ -34,9 +35,9 @@ fn stub_style() -> Impl {
     )
 }
 
+// gtest: Style.Properties
 #[test]
 fn properties() {
-    // TEST(Style, Properties)
     let mut style = stub_style();
 
     style.load_json(r#"{"name": "Test"}"#);
@@ -83,9 +84,9 @@ fn properties() {
     assert_eq!(0.0, style.get_default_camera().pitch.unwrap());
 }
 
+// gtest: Style.GlobalStatePropertyRequiresLoadedStyle
 #[test]
 fn global_state_property_requires_loaded_style() {
-    // TEST(Style, GlobalStatePropertyRequiresLoadedStyle)
     let mut style = Style { impl_: Box::new(stub_style()) };
 
     assert!(!style.is_loaded());
@@ -124,9 +125,9 @@ fn make_image(id: &str) -> Arc<image::Impl> {
     )
 }
 
+// gtest: Style.AddRemoveImage
 #[test]
 fn add_remove_image() {
-    // TEST(Style, AddRemoveImage)
     let mut style = stub_style();
     style.add_image(make_image("one"));
     style.add_image(make_image("two"));
@@ -140,9 +141,9 @@ fn add_remove_image() {
     assert!(style.get_image("four").is_none());
 }
 
+// gtest: Style.AddRemoveRemoveImage
 #[test]
 fn add_remove_remove_image() {
-    // TEST(Style, AddRemoveRemoveImage)
     // regression test for https://github.com/mapbox/mapbox-gl-native/pull/16391
     let mut style = stub_style();
     style.add_image(make_image("one"));
@@ -158,31 +159,26 @@ fn add_remove_remove_image() {
     assert!(style.get_image("four").is_none());
 }
 
+// gtest: Style.LayerTransitionRefreshesImmutableCollection
 #[test]
 fn layer_transition_refreshes_immutable_collection() {
-    // TEST(Style, LayerTransitionRefreshesImmutableCollection), with a
-    // background layer instead of a line layer.
     let mut style = stub_style();
     style.load_json(r#"{"version":8,"sources":{},"layers":[]}"#);
-    style.add_layer(Box::new(BackgroundLayer::new("line")), None).unwrap();
+    style.add_layer(Box::new(LineLayer::new("line", "source")), None).unwrap();
     let before = style.get_layer_impls();
 
     {
         let mut layer = style.get_layer_mut("line").unwrap();
-        let line = layer.downcast_mut::<BackgroundLayer>().unwrap();
-        line.set_background_color_transition(&TransitionOptions::new(
-            Some(milliseconds(123)),
-            Some(milliseconds(45)),
-            true,
-        ));
+        let line = layer.downcast_mut::<LineLayer>().unwrap();
+        line.set_line_color_transition(&TransitionOptions::new(Some(milliseconds(123)), Some(milliseconds(45)), true));
     }
     let after = style.get_layer_impls();
     assert!(!Arc::ptr_eq(&before, &after));
     assert_eq!(1, after.len());
     assert!(Arc::ptr_eq(&style.get_layer("line").unwrap().base_impl(), &after[0]));
-    let impl_ = after[0].downcast_ref::<BackgroundLayerImpl>().unwrap();
-    assert_eq!(Some(milliseconds(123)), impl_.paint.get::<BackgroundColor>().options.duration);
-    assert_eq!(Some(milliseconds(45)), impl_.paint.get::<BackgroundColor>().options.delay);
+    let impl_ = after[0].downcast_ref::<LineLayerImpl>().unwrap();
+    assert_eq!(Some(milliseconds(123)), impl_.paint.get::<LineColor>().options.duration);
+    assert_eq!(Some(milliseconds(45)), impl_.paint.get::<LineColor>().options.delay);
 }
 
 #[derive(Default)]
@@ -197,10 +193,10 @@ impl Observer for CountingObserver {
     }
 }
 
+// gtest: Style.TransitionOptionsPublishUpdates
 #[test]
 fn transition_options_publish_updates() {
-    // TEST(Style, TransitionOptionsPublishUpdates). The C++ observer reads
-    // the style back inside onUpdate; a Rust observer cannot borrow the
+    // The C++ observer reads the style back inside onUpdate; a Rust observer cannot borrow the
     // style it observes, so this reads it after each call.
     let mut style = stub_style();
     style.load_json(r#"{"version":8,"sources":{},"layers":[]}"#);
@@ -246,9 +242,9 @@ fn layer_mut_guard_notifies_once_per_change() {
     assert!(!Arc::ptr_eq(&before, &style.get_layer_impls()));
 }
 
+// gtest: Style.GlobalState
 #[test]
 fn global_state() {
-    // TEST(Style, GlobalState)
     let mut style = stub_style();
 
     // Defaults from the root "state" property are used as the initial global state.
@@ -309,9 +305,9 @@ fn global_state() {
     assert!(Arc::ptr_eq(&after_null, &style.get_global_state_shared()));
 }
 
+// gtest: Style.GlobalStateNumericEquality
 #[test]
 fn global_state_numeric_equality() {
-    // TEST(Style, GlobalStateNumericEquality)
     let mut style = stub_style();
 
     style.load_json(
@@ -333,9 +329,9 @@ fn global_state_numeric_equality() {
     assert!(!Arc::ptr_eq(&before, &style.get_global_state_shared()));
 }
 
+// gtest: Style.GlobalStateVisibility
 #[test]
 fn global_state_visibility() {
-    // TEST(Style, GlobalStateVisibility)
     let log = FixtureLog::new();
 
     let mut style = stub_style();
@@ -375,9 +371,9 @@ fn global_state_visibility() {
     assert_eq!(VisibilityType::None, style.get_layer("background").unwrap().get_visibility());
 }
 
+// gtest: Style.VisibilityExpressionSetAtRuntime
 #[test]
 fn visibility_expression_set_at_runtime() {
-    // TEST(Style, VisibilityExpressionSetAtRuntime)
     let log = FixtureLog::new();
 
     let mut style = stub_style();
@@ -417,15 +413,14 @@ fn visibility_expression_set_at_runtime() {
     assert!(log.is_empty(), "{:?}", log.messages());
 }
 
+// gtest: Style.LayerAddedAfterGlobalStateUpdateUsesCurrentState
 #[test]
 fn layer_added_after_global_state_update_uses_current_state() {
-    // TEST(Style, LayerAddedAfterGlobalStateUpdateUsesCurrentState), with a
-    // background layer instead of a line layer.
     let mut style = stub_style();
     style.load_json(r#"{"version": 8, "sources": {}, "layers": []}"#);
     style.set_global_state_property("showLayer", &Value::Bool(false));
 
-    let mut layer = BackgroundLayer::new("line");
+    let mut layer = LineLayer::new("line", "source");
     let json = parse_json(r#"["case", ["to-boolean", ["global-state", "showLayer"]], "visible", "none"]"#);
     assert!(layer.set_property("visibility", &Convertible::from(&json), None).is_none());
     assert_eq!(VisibilityType::Visible, layer.get_visibility());
@@ -434,9 +429,9 @@ fn layer_added_after_global_state_update_uses_current_state() {
     assert_eq!(VisibilityType::None, added_layer.get_visibility());
 }
 
+// gtest: Style.VisibilityExpressionRejectsOtherDependencies
 #[test]
 fn visibility_expression_rejects_other_dependencies() {
-    // TEST(Style, VisibilityExpressionRejectsOtherDependencies)
     let mut style = stub_style();
 
     style.load_json(
@@ -457,9 +452,109 @@ fn visibility_expression_rejects_other_dependencies() {
     assert_eq!(VisibilityType::Visible, style.get_layer("background").unwrap().get_visibility());
 }
 
-// TODO(port): DuplicateSource, RemoveSourceInUse, SourceImplsOrder,
-// LoadJSONCancelsPendingLoadURL, PublicLoadStateDoesNotWaitForResources
-// (need sources / a file source).
+fn vector_source(id: &str) -> Box<VectorSource> {
+    Box::new(VectorSource::new(
+        id,
+        UrlOrTileset::Url("mptiler://tiles/contours".to_owned()),
+        None,
+        None,
+        mln_util::tileset::VectorEncoding::Mapbox,
+    ))
+}
+
+// gtest: Style.DuplicateSource
+#[test]
+fn duplicate_source() {
+    let mut style = stub_style();
+
+    style.load_json(&read_file("test/fixtures/resources/style-unused-sources.json"));
+
+    style.add_source(vector_source("sourceId")).unwrap();
+
+    // C++ throws std::runtime_error.
+    assert!(
+        style.add_source(vector_source("sourceId")).is_err(),
+        "Should not have been allowed to add a duplicate source id"
+    );
+}
+
+// gtest: Style.RemoveSourceInUse
+#[test]
+fn remove_source_in_use() {
+    let log = FixtureLog::new();
+
+    let mut style = stub_style();
+
+    style.load_json(&read_file("test/fixtures/resources/style-unused-sources.json"));
+    style.add_source(vector_source("sourceId")).unwrap();
+    style.add_layer(Box::new(LineLayer::new("layerId", "sourceId")), None).unwrap();
+
+    // Should not remove the source
+    let removed = style.remove_source("sourceId");
+    assert!(removed.is_none());
+    assert!(style.get_source("sourceId").is_some());
+
+    assert_eq!(
+        1,
+        log.count(EventSeverity::Warning, Event::General, "Source 'sourceId' is in use, cannot remove")
+    );
+}
+
+// gtest: Style.PublicLoadStateDoesNotWaitForResources
+#[test]
+fn public_load_state_does_not_wait_for_resources() {
+    let file_source = mln_storage::stub_file_source::StubFileSource::new(
+        mln_storage::stub_file_source::ResponseType::Asynchronous,
+    );
+    // TODO(port): StubFileSource::ResponseType::Manual (never answers here,
+    // as no run loop runs).
+    let mut style = Style::with_file_source(
+        Some(Arc::new(file_source)),
+        1.0,
+        mln_actor::TaggedScheduler::new(mln_actor::scheduler::get_background(), mln_util::identity::SimpleIdentity::new()),
+    );
+
+    assert!(!style.is_loaded());
+
+    style.load_json(
+        r#"{
+        "version": 8,
+        "sources": {
+            "pending": {
+                "type": "geojson",
+                "data": { "type": "FeatureCollection", "features": [] }
+            }
+        },
+        "layers": []
+    }"#,
+    );
+    assert!(style.is_loaded());
+
+    style.load_url("http://some-url");
+    assert!(!style.is_loaded());
+}
+
+// gtest: Style.SourceImplsOrder
+#[test]
+fn source_impls_order() {
+    let mut style = stub_style();
+
+    style.add_source(vector_source("c")).unwrap();
+    style.add_source(vector_source("b")).unwrap();
+    style.add_source(vector_source("a")).unwrap();
+
+    let sources = style.get_sources();
+    assert_eq!(3, sources.len());
+    assert_eq!("c", sources[0].get_id());
+    assert_eq!("b", sources[1].get_id());
+    assert_eq!("a", sources[2].get_id());
+
+    let source_impls = style.get_source_impls();
+    assert_eq!(3, source_impls.len());
+    assert_eq!("a", source_impls[0].id);
+    assert_eq!("b", source_impls[1].id);
+    assert_eq!("c", source_impls[2].id);
+}
 
 // Style::loadURL (added by glfw).
 
@@ -534,20 +629,37 @@ fn load_url_error() {
     assert!(!style.is_loaded());
 }
 
+// gtest: Style.LoadJSONCancelsPendingLoadURL
 #[test]
 fn load_json_cancels_pending_load_url() {
-    // TEST(Style, LoadJSONCancelsPendingLoadURL)
+    // C++ answers with ResponseType::Manual + respondToAll(); the stub
+    // answers asynchronously here (TODO(port): Manual), on run_once.
     let (mut style, _observer, run_loop) = stub_with_style_response(|_| {
         let mut response = mln_storage::Response::new();
-        response.data = Some(Arc::new(br#"{"version": 8, "name": "Streets", "sources": {}, "layers": []}"#.to_vec()));
+        response.data = Some(Arc::new(read_file("test/fixtures/resources/style_vector.json").into_bytes()));
         Some(response)
     });
+
+    // Start loading a URL (this will be pending)
     style.load_url("http://some-url");
-    style.load_json(r#"{"version": 8, "name": "Test Style", "sources": {}, "layers": []}"#);
+
+    // Before the URL request completes, load JSON directly
+    style.load_json(r#"{
+        "version": 8,
+        "name": "Test Style",
+        "sources": {},
+        "layers": []
+    }"#);
+
+    // The style should now be loaded with our JSON content
     assert_eq!("Test Style", style.get_name());
     assert_eq!("", style.get_url());
     assert!(style.get_json().contains("Test Style"));
+
     run_loop.run_once();
     style.process_style_responses();
+
+    // The style should still show our JSON content, not the URL content
     assert_eq!("Test Style", style.get_name());
+    assert_ne!("Streets", style.get_name());
 }

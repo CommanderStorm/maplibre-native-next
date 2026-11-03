@@ -29,7 +29,8 @@ pub type StyleParseResult = Result<(), ExceptionPtr>;
 pub struct Parser {
     pub sprites: Vec<Sprite>,
     pub glyph_url: String,
-    // TODO(port): fontFaces (MLN_TEXT_SHAPING_HARFBUZZ, M5).
+    /// `std::shared_ptr<FontFaces> fontFaces` (symbols: MLN_TEXT_SHAPING_HARFBUZZ).
+    pub font_faces: Option<std::sync::Arc<mln_text::glyph::FontFaces>>,
     pub sources: Vec<Box<dyn Source>>,
     pub layers: Vec<Box<dyn Layer>>,
 
@@ -54,6 +55,7 @@ impl Default for Parser {
         Parser {
             sprites: Vec::new(),
             glyph_url: String::new(),
+            font_faces: None,
             sources: Vec::new(),
             layers: Vec::new(),
             transition: TransitionOptions::with_duration(DEFAULT_TRANSITION_DURATION),
@@ -178,7 +180,12 @@ impl Parser {
             }
         }
 
-        // TODO(port): "font-faces" (MLN_TEXT_SHAPING_HARFBUZZ, M5).
+        // symbols: "font-faces" (MLN_TEXT_SHAPING_HARFBUZZ).
+        if let Some(faces) = object.get("font-faces") {
+            if let Some(faces) = faces.as_object() {
+                self.font_faces = Some(std::sync::Arc::new(parse_font_faces(faces)));
+            }
+        }
 
         // Call for side effect of logging warnings for invalid values.
         self.font_stacks();
@@ -442,4 +449,77 @@ fn parse_state_value(value: &serde_json::Value) -> Value {
 /// message instead of rapidjson's (see the file comment).
 fn format_json_parse_error(error: &serde_json::Error) -> String {
     error.to_string()
+}
+
+/// The "font-faces" block of `Parser::parse` (MLN_TEXT_SHAPING_HARFBUZZ).
+fn parse_font_faces(faces: &serde_json::Map<String, serde_json::Value>) -> mln_text::glyph::FontFaces {
+    use mln_text::glyph::{FontFace, gen_new_glyph_id_type};
+    use mln_util::logging::{Event, Log};
+    let mut font_faces = mln_text::glyph::FontFaces::new();
+    for (face_name, face_value) in faces {
+        if let Some(files) = face_value.as_array() {
+            // If the face is an array, we assume it is a list of font file
+            // objects.
+            for font_file in files {
+                let Some(font_file) = font_file.as_object() else {
+                    continue;
+                };
+                let mut font_face = FontFace::new(face_name, "", vec![(0, 0x10FFFF)]);
+
+                // Parse url
+                if let Some(url) = font_file.get("url").and_then(|u| u.as_str()) {
+                    font_face.url = url.to_owned();
+                }
+
+                // Parse unicode-range
+                if let Some(unicode_range) = font_file.get("unicode-range") {
+                    font_face.ranges.clear();
+                    if let Some(ranges) = unicode_range.as_array() {
+                        for range in ranges {
+                            let Some(range_string) = range.as_str() else {
+                                continue;
+                            };
+                            if range_string.len() <= 2 {
+                                continue;
+                            }
+                            let range_string = &range_string[2..];
+                            let Some(pos) = range_string.find('-') else {
+                                continue;
+                            };
+                            let (start, end) = (&range_string[..pos], &range_string[pos + 1..]);
+                            if start.is_empty() || end.is_empty() {
+                                continue;
+                            }
+                            // `util::parse<int>(s, 16)`: std::from_chars, the
+                            // whole string must be consumed.
+                            match (i32::from_str_radix(start, 16), i32::from_str_radix(end, 16)) {
+                                (Ok(start), Ok(end)) => font_face.ranges.push((start as u32, end as u32)),
+                                _ => Log::warning(
+                                    Event::ParseStyle,
+                                    format!("Invalid unicode-range in font-face: {range_string}"),
+                                ),
+                            }
+                        }
+                    }
+                }
+
+                // If valid, generate a unique glyph ID type for this font
+                // face and add it to the font faces list.
+                if font_face.valid() {
+                    font_face.type_ =
+                        gen_new_glyph_id_type(&font_face.url, &vec![font_face.name.clone()], &font_face.ranges);
+                    font_faces.push(font_face);
+                } else {
+                    Log::warning(Event::ParseStyle, format!("Invalid font-face definition for: {face_name}"));
+                }
+            }
+        } else if let Some(url) = face_value.as_str() {
+            let mut font_face = FontFace::new(face_name, url, vec![(0, 0x10FFFF)]);
+            font_face.type_ = gen_new_glyph_id_type(&font_face.url, &vec![font_face.name.clone()], &font_face.ranges);
+            font_faces.push(font_face);
+        } else {
+            Log::warning(Event::ParseStyle, "font-face must be an object or array");
+        }
+    }
+    font_faces
 }
