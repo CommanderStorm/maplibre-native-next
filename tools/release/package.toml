@@ -6,7 +6,7 @@
 name = "maplibre-native-next"
 # Bump before running the release workflow; it publishes this version and
 # tags the commit v<version>.
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 description = "A Rust port of the MapLibre Native map rendering core"
 license = "BSD-2-Clause"
