@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The C++ core the port is tested against (MODULE.bazel expects it at
+  # ../maplibre-native): maplibre-native plus the changes that make its Bazel
+  # module usable as a dependency.
+  MAPLIBRE_NATIVE_REPOSITORY: louwers/maplibre-native
+  MAPLIBRE_NATIVE_REF: ef5c691552b1ba7d407762d35f358e1d67839e0a
+
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: maplibre-native-next
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.MAPLIBRE_NATIVE_REPOSITORY }}
+          ref: ${{ env.MAPLIBRE_NATIVE_REF }}
+          path: maplibre-native
+
+      - name: Fetch the C++ core's vendored submodules
+        run: git -C maplibre-native submodule update --init --recursive --depth 1 --jobs 8 -- vendor
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libcurl4-openssl-dev libglfw3-dev libicu-dev libjpeg-dev \
+            libpng-dev libuv1-dev libvulkan1 libwebp-dev mesa-vulkan-drivers \
+            pkg-config zlib1g-dev
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel-disk
+            ~/.cache/bazel-repo
+          key: bazel-${{ runner.os }}-${{ hashFiles('maplibre-native-next/MODULE.bazel.lock') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ hashFiles('maplibre-native-next/MODULE.bazel.lock') }}-
+            bazel-${{ runner.os }}-
+
+      # All tests, plus the full shared C++ render suite (a manual target).
+      - name: Test
+        working-directory: maplibre-native-next
+        run: bazelisk test --config=ci //... //tools/render-test:render_tests
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlogs
+          path: maplibre-native-next/bazel-testlogs/**/test.log
+          if-no-files-found: ignore
