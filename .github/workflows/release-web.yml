@@ -1,0 +1,72 @@
+name: release-web
+
+# Publishes platform/web to npm as @bartlwrs/mln-next-web, at the version in
+# tools/release/package.toml (the crate's), through npm's trusted publishing:
+# npm trusts this workflow's OIDC identity, so there is no token. Rerunning
+# for a version that is already on npm does nothing.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing (OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Require the default branch
+        if: github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          echo "::error::Run the release from ${{ github.event.repository.default_branch }}."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # The threaded module rebuilds std with atomics: rust-src.
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update \
+            --target wasm32-unknown-unknown --component rust-src
+          rustup default stable
+
+      # The CLI must be the version platform/web/Cargo.toml pins.
+      - name: Install wasm-bindgen
+        run: |
+          version=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' platform/web/Cargo.toml)
+          name="wasm-bindgen-$version-x86_64-unknown-linux-musl"
+          curl -sSfL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$version/$name.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: platform/web/build.sh
+
+      # No registry-url: setup-node would set NODE_AUTH_TOKEN, which npm then
+      # uses instead of the OIDC exchange.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - name: Update npm
+        run: npm install --global npm@latest
+
+      - name: Publish
+        working-directory: platform/web/dist
+        run: |
+          name=$(node -p 'require("./package.json").name')
+          version=$(node -p 'require("./package.json").version')
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version is already on npm."
+            exit 0
+          fi
+          npm publish
