@@ -2974,3 +2974,9 @@ Append-only. One entry per message, newest last:
   mln_util::mapbox (its C++ home, util/mapbox.cpp) when someone touches it
   next, so mln_style's tile sources can use it; supersedes my earlier
   "put it in mln_style".
+- [ffi-eval] Moved: //ffi (the maplibre-native-ffi C API on the port) now
+  lives in maplibre-native-ffi as src/next, a Cargo crate that depends on the
+  published `maplibre-native-next` crate and uses that repo's own headers
+  (no copy here any more). Build it there with
+  MLN_FFI_IMPLEMENTATION=maplibre-native-next. Changes the C API needs in the
+  port's crates are still requested here.
