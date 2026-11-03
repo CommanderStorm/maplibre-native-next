@@ -1,0 +1,4 @@
+/bazel-*
+/user.bazelrc
+/.nix-shell/
+/target/

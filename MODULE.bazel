@@ -1,0 +1,137 @@
+module(name = "maplibre-native-next")
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "rules_rust", version = "0.74.0")
+
+# The C++ MapLibre Native core. It is never linked into the port itself; the
+# targets under //difftest link it as the reference implementation that the
+# Rust code must match.
+bazel_dep(name = "maplibre")
+
+# Tracks the sibling checkout, including uncommitted C++ changes. For CI, pin
+# the oracle instead:
+#
+# git_override(
+#     module_name = "maplibre",
+#     remote = "https://github.com/maplibre/maplibre-native.git",
+#     commit = "<sha>",
+#     init_submodules = True,
+# )
+local_path_override(
+    module_name = "maplibre",
+    path = "../maplibre-native",
+)
+
+# Overrides declared by a non-root module are ignored, so repeat the ones from
+# ../maplibre-native/MODULE.bazel that the core build needs.
+local_path_override(
+    module_name = "maplibre-tile-spec",
+    path = "../maplibre-native/vendor/maplibre-tile-spec",
+)
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(edition = "2024")
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+# Third-party crates. Bazel is the only build: crates in this repo are plain
+# rust_library targets, so adding one never touches this file. Only add a
+# crate here when nothing in the C++ core has to be ported for it (see
+# PLAN.md, "Dependency map"). The repo is not called "crates" because
+# @maplibre already uses that name for rustutils.
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.spec(
+    features = ["derive"],
+    package = "bytemuck",
+    version = "1",
+)
+crate.spec(
+    package = "flate2",
+    version = "1",
+)
+crate.spec(
+    package = "harfrust",
+    version = "0.15",
+)
+
+# Two HarfRust 0.15 vs HarfBuzz differences found by //difftest/text (anchor
+# rounding ties, fallback space widths); see DEVIATIONS.md [text]. Drop this
+# once fixed upstream.
+crate.annotation(
+    crate = "harfrust",
+    patch_args = ["-p1"],
+    # GNU patch: Bazel's built-in patcher rejects this patch, which GNU patch
+    # applies cleanly to harfrust 0.15.0.
+    patch_tool = "patch",
+    patches = ["//crates/mln_text/patches:harfrust_hb_rounding.patch"],
+    repositories = ["next_crates"],
+)
+# MLT decoding: the Rust implementation of the MapLibre Tile spec, instead of
+# porting the C++ decoder (vendor/maplibre-tile-spec/cpp). //difftest/tile
+# compares it with the C++ decoder.
+crate.spec(
+    package = "mlt-core",
+    version = "0.22",
+)
+crate.spec(
+    package = "png",
+    version = "0.18",
+)
+crate.spec(
+    package = "pollster",
+    version = "1",
+)
+crate.spec(
+    package = "proptest",
+    version = "1",
+)
+crate.spec(
+    package = "regex",
+    version = "1",
+)
+
+# The same engine as the C++ core's vendored SQLite, built from source like it.
+crate.spec(
+    features = ["bundled"],
+    package = "rusqlite",
+    version = "0.41",
+)
+crate.spec(
+    features = ["derive"],
+    package = "serde",
+    version = "1",
+)
+# preserve_order: rapidjson iterates object members in document order, and
+# the C++ relies on that (style parser, expression error order).
+# float_roundtrip: correctly rounded float parsing, like rapidjson's full
+# precision parse (the default parser can be off by an ULP).
+crate.spec(
+    features = [
+        "float_roundtrip",
+        "preserve_order",
+    ],
+    package = "serde_json",
+    version = "1",
+)
+crate.spec(
+    package = "skrifa",
+    version = "0.49",
+)
+
+# Candidate for ICU's ubidi (platform/default/src/mln/text/bidi.cpp); kept only
+# if //difftest/shaping shows it matches ICU on the test corpus.
+crate.spec(
+    package = "unicode-bidi",
+    version = "0.3",
+)
+
+# Ports the C++ WebGPU backend (src/mln/webgpu, which runs on Dawn or
+# wgpu-native) onto the Rust implementation of the same API.
+crate.spec(
+    package = "wgpu",
+    version = "30",
+)
+crate.from_specs(name = "next_crates")
+use_repo(crate, "next_crates")

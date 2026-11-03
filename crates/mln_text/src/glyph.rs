@@ -1,0 +1,225 @@
+// Ports include/mln/text/glyph.hpp, include/mln/text/glyph_range.hpp and
+// src/mln/text/glyph.cpp (the parts the shaper and the glyph PBF parser use).
+
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
+use mln_util::image::AlphaImage;
+
+use mln_util::font_stack::{FontStack, font_stack_to_string};
+
+/// `GlyphIDType` (glyph_range.hpp): `FontPBF` (0) for glyphs from glyph PBFs,
+/// other values are generated at runtime for HarfBuzz-shaped font faces
+/// (`genNewGlyphIDType`), so this is a newtype, not a Rust enum.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct GlyphIDType(pub u16);
+
+#[allow(non_upper_case_globals)]
+impl GlyphIDType {
+    pub const FontPBF: GlyphIDType = GlyphIDType(0x00);
+}
+
+/// `GLYPHS_PER_GLYPH_RANGE` etc. (glyph_range.hpp).
+pub const GLYPHS_PER_GLYPH_RANGE: u32 = 256;
+pub const GLYPH_RANGES_PER_FONT_STACK: u32 = 256;
+pub const NON_IDEOGRAPH_GLYPH_RANGES_PER_FONT_STACK: u32 = 97;
+
+/// `GlyphRange` (glyph_range.hpp / glyph.cpp).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GlyphRange {
+    pub first: u16,
+    pub second: u16,
+    pub type_: GlyphIDType,
+}
+
+impl GlyphRange {
+    /// `GlyphRange(uint32_t, uint32_t, GlyphIDType = FontPBF)`: the bounds
+    /// are truncated to `uint16_t` as in C++.
+    pub fn new(first: u32, second: u32, type_: GlyphIDType) -> Self {
+        GlyphRange { first: first as u16, second: second as u16, type_ }
+    }
+}
+
+impl PartialOrd for GlyphRange {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for GlyphRange {
+    /// `GlyphRange::operator<`: first, then second, then type.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.first, self.second, self.type_).cmp(&(other.first, other.second, other.type_))
+    }
+}
+
+/// `union GlyphID`: `complex.code` (UTF-16 code unit or font glyph index)
+/// and `complex.type`; `hash` is the two read as one little-endian
+/// `char32_t`, which is what C++ compares.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct GlyphID {
+    pub code: u16,
+    pub type_: GlyphIDType,
+}
+
+impl GlyphID {
+    /// `GlyphID(int)` / `GlyphID(uint32_t)` / `GlyphID(char16_t)`: the
+    /// codepoint is truncated to `char16_t`, the type is `FontPBF`.
+    pub fn new(codepoint: u32) -> Self {
+        GlyphID { code: codepoint as u16, type_: GlyphIDType::FontPBF }
+    }
+
+    /// `GlyphID(char16_t index, GlyphIDType t)`.
+    pub fn with_type(index: u16, type_: GlyphIDType) -> Self {
+        GlyphID { code: index, type_ }
+    }
+
+    /// The `hash` member of the union (x86-64 / arm64 are little endian).
+    pub fn hash(&self) -> u32 {
+        ((self.type_.0 as u32) << 16) | self.code as u32
+    }
+}
+
+impl PartialOrd for GlyphID {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for GlyphID {
+    /// `GlyphID::operator<` compares `hash`.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.hash().cmp(&other.hash())
+    }
+}
+
+impl From<u16> for GlyphID {
+    fn from(code: u16) -> Self {
+        GlyphID::new(code as u32)
+    }
+}
+
+/// `GlyphIDs` (`std::set<GlyphID>`).
+pub type GlyphIDs = std::collections::BTreeSet<GlyphID>;
+
+/// `getGlyphRange`. Note: this only works for the BMP.
+pub fn get_glyph_range(glyph: GlyphID) -> GlyphRange {
+    let start = (glyph.code as u32 / 256) * 256;
+    let end = start + 255;
+    let start = start.min(65280);
+    let end = end.min(65535);
+    GlyphRange::new(start, end, glyph.type_)
+}
+
+/// `GlyphMetrics`.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct GlyphMetrics {
+    pub width: u32,
+    pub height: u32,
+    pub left: f32,
+    pub top: f32,
+    pub advance: u32,
+    /// True when the glyph bitmap is rendered at 2x texture resolution
+    /// (e.g. local CJK glyphs).
+    pub is_double_resolution: bool,
+}
+
+/// `Glyph`.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct Glyph {
+    pub id: GlyphID,
+    /// A signed distance field of the glyph with a border (see `BORDER_SIZE`).
+    pub bitmap: AlphaImage,
+    pub metrics: GlyphMetrics,
+}
+
+impl Glyph {
+    /// `Glyph::borderSize`. We're using this value throughout the Mapbox GL
+    /// ecosystem. If this is different, the glyphs also need to be reencoded.
+    pub const BORDER_SIZE: u8 = 3;
+}
+
+/// `genNewGlyphIDType()`: a process-wide counter (a function-local static
+/// in C++) that skips `FontPBF` when it wraps.
+fn gen_new_glyph_id_type_counter(counter: &mut i16) -> GlyphIDType {
+    *counter = counter.wrapping_add(1);
+    if *counter == GlyphIDType::FontPBF.0 as i16 {
+        *counter = counter.wrapping_add(1);
+    }
+    GlyphIDType(*counter as u16)
+}
+
+struct GlyphTypes {
+    counter: i16,
+    types: BTreeMap<String, BTreeMap<String, BTreeMap<usize, GlyphIDType>>>,
+}
+
+static GLYPH_TYPES: Mutex<GlyphTypes> =
+    Mutex::new(GlyphTypes { counter: GlyphIDType::FontPBF.0 as i16, types: BTreeMap::new() });
+
+/// `util::hash_combine` with libstdc++'s identity `std::hash<uint32_t>`.
+fn hash_combine(seed: &mut usize, v: u32) {
+    *seed ^= (v as usize)
+        .wrapping_add(0x9e3779b9)
+        .wrapping_add(*seed << 6)
+        .wrapping_add(*seed >> 2);
+}
+
+/// `genNewGlyphIDType(url, fontStack, pairs)`: one type per (url, font
+/// stack, unicode ranges), stable for the process.
+pub fn gen_new_glyph_id_type(url: &str, font_stack: &FontStack, pairs: &[(u32, u32)]) -> GlyphIDType {
+    let mut hash = 0usize;
+    for pair in pairs {
+        hash_combine(&mut hash, pair.0);
+        hash_combine(&mut hash, pair.1);
+    }
+    let family = font_stack_to_string(font_stack);
+
+    let mut state = GLYPH_TYPES.lock().unwrap_or_else(|e| e.into_inner());
+    let state = &mut *state;
+    let entry = state
+        .types
+        .entry(url.to_string())
+        .or_default()
+        .entry(family)
+        .or_default()
+        .entry(hash)
+        .or_insert(GlyphIDType::FontPBF);
+    if *entry == GlyphIDType::FontPBF {
+        *entry = gen_new_glyph_id_type_counter(&mut state.counter);
+    }
+    *entry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glyph_id_order_is_the_union_hash() {
+        let a = GlyphID::with_type(0xFFFF, GlyphIDType::FontPBF);
+        let b = GlyphID::with_type(0, GlyphIDType(1));
+        assert!(a < b);
+        assert_eq!(b.hash(), 0x10000);
+        assert_eq!(GlyphID::new(0x1F600).code, 0xF600);
+    }
+
+    #[test]
+    fn glyph_range() {
+        let r = get_glyph_range(GlyphID::new(0x41));
+        assert_eq!((r.first, r.second), (0, 255));
+        let r = get_glyph_range(GlyphID::new(0xFFFF));
+        assert_eq!((r.first, r.second), (65280, 65535));
+    }
+
+    #[test]
+    fn new_glyph_id_types_are_stable_per_key() {
+        let fs = vec!["Noto Sans Regular".to_string()];
+        let a = gen_new_glyph_id_type("local://a.ttf", &fs, &[(0x1780, 0x17FF)]);
+        let b = gen_new_glyph_id_type("local://a.ttf", &fs, &[(0x1780, 0x17FF)]);
+        let c = gen_new_glyph_id_type("local://b.ttf", &fs, &[(0x1780, 0x17FF)]);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, GlyphIDType::FontPBF);
+    }
+}

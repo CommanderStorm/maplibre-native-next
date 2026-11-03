@@ -1,0 +1,29 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Ports vendor/polylabel (header-only mapbox/polylabel.hpp).
+rust_library(
+    name = "polylabel",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/libstdcxx",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+rust_test(
+    name = "polylabel_test",
+    crate = ":polylabel",
+)
+
+# Port of polylabel/test/test.cpp over its fixtures, read in place.
+rust_test(
+    name = "polylabel_fixtures_test",
+    srcs = ["tests/polylabel.rs"],
+    data = ["@maplibre//vendor:polylabel_fixtures"],
+    deps = [
+        ":polylabel",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:serde_json",
+    ],
+)

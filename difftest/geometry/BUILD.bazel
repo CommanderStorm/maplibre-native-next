@@ -1,0 +1,244 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Differential tests: the ported geometry libraries in //vendor (earcut,
+# geojson-vt, geojson, supercluster, kdbush, polylabel, cheap-ruler,
+# shelf-pack, wagyu, and the libstdc++ algorithms they depend on) against
+# the C++ libraries the core vendors. They are header-only, so each
+# reference compiles them directly instead of linking @maplibre//:mbgl-core.
+
+rust_library(
+    name = "geometry_difftest_support",
+    testonly = True,
+    srcs = ["support.rs"],
+    deps = ["@next_crates//:proptest"],
+)
+
+cc_library(
+    name = "libstdcxx_reference",
+    srcs = ["libstdcxx_reference.cpp"],
+    copts = ["-std=c++20"],
+)
+
+rust_test(
+    name = "libstdcxx_difftest",
+    size = "medium",
+    srcs = ["libstdcxx_difftest.rs"],
+    deps = [
+        ":geometry_difftest_support",
+        ":libstdcxx_reference",
+        "//vendor/libstdcxx",
+        "@next_crates//:proptest",
+    ],
+)
+
+cc_library(
+    name = "earcut_reference",
+    srcs = ["earcut_reference.cpp"],
+    copts = ["-std=c++20"],
+    deps = [
+        "@maplibre//vendor:earcut.hpp",
+        "@maplibre//vendor:maplibre-native-base",
+    ],
+)
+
+rust_test(
+    name = "earcut_difftest",
+    size = "medium",
+    srcs = ["earcut_difftest.rs"],
+    deps = [
+        ":earcut_reference",
+        ":geometry_difftest_support",
+        "//vendor/earcut",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "earcut_fixtures_difftest",
+    size = "medium",
+    srcs = ["earcut_fixtures_difftest.rs"],
+    data = ["@maplibre//vendor:earcut_fixtures"],
+    deps = [
+        ":earcut_reference",
+        "//vendor/earcut",
+        "//vendor/earcut:earcut_test_fixtures",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+cc_library(
+    name = "geojson_reference",
+    srcs = ["geojson_reference.cpp"],
+    hdrs = ["canonical.hpp"],
+    copts = ["-std=c++20"],
+    deps = [
+        "@maplibre//vendor:maplibre-native-base",
+        "@maplibre//vendor:rapidjson",
+    ],
+)
+
+# Canonical form, FFI wrappers and strategies shared by the geojson and
+# geojson-vt difftests.
+rust_library(
+    name = "geojson_canonical",
+    testonly = True,
+    srcs = ["geojson_canonical.rs"],
+    link_deps = [":geojson_reference"],
+    deps = [
+        "//vendor/geojson",
+        "//vendor/geojson-vt:geojson_vt",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "geojson_difftest",
+    size = "medium",
+    srcs = ["geojson_difftest.rs"],
+    deps = [
+        ":geojson_canonical",
+        ":geometry_difftest_support",
+        "//vendor/geojson",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "geojson_vt_difftest",
+    size = "medium",
+    srcs = ["geojson_vt_difftest.rs"],
+    deps = [
+        ":geojson_canonical",
+        ":geometry_difftest_support",
+        "//vendor/geojson",
+        "//vendor/geojson-vt:geojson_vt",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+cc_library(
+    name = "supercluster_reference",
+    srcs = ["supercluster_reference.cpp"],
+    copts = ["-std=c++20"],
+    deps = [
+        ":geojson_reference",
+        "@maplibre//vendor:maplibre-native-base",
+        "@maplibre//vendor:rapidjson",
+        "@maplibre//vendor:supercluster.hpp",
+    ],
+)
+
+rust_test(
+    name = "kdbush_difftest",
+    size = "medium",
+    srcs = ["kdbush_difftest.rs"],
+    deps = [
+        ":geometry_difftest_support",
+        ":supercluster_reference",
+        "//vendor/kdbush",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "supercluster_difftest",
+    size = "medium",
+    srcs = ["supercluster_difftest.rs"],
+    deps = [
+        ":geojson_canonical",
+        ":geometry_difftest_support",
+        ":supercluster_reference",
+        "//vendor/geojson",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/supercluster",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+cc_library(
+    name = "misc_reference",
+    srcs = ["misc_reference.cpp"],
+    copts = ["-std=c++20"],
+    deps = [
+        ":geojson_reference",
+        "@maplibre//vendor:maplibre-native-base",
+        "@maplibre//vendor:polylabel",
+        "@maplibre//vendor:rapidjson",
+    ],
+)
+
+rust_test(
+    name = "polylabel_difftest",
+    size = "medium",
+    srcs = ["polylabel_difftest.rs"],
+    deps = [
+        ":geometry_difftest_support",
+        ":misc_reference",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/polylabel",
+        "@next_crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "cheap_ruler_difftest",
+    size = "medium",
+    srcs = ["cheap_ruler_difftest.rs"],
+    deps = [
+        ":geometry_difftest_support",
+        ":misc_reference",
+        "//vendor/cheap-ruler:cheap_ruler",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "shelf_pack_difftest",
+    size = "medium",
+    srcs = ["shelf_pack_difftest.rs"],
+    deps = [
+        ":geometry_difftest_support",
+        ":misc_reference",
+        "//vendor/shelf-pack:shelf_pack",
+        "@next_crates//:proptest",
+        "@next_crates//:serde_json",
+    ],
+)
+
+# The libraries' own fixtures (earcut's: earcut_fixtures_difftest).
+rust_test(
+    name = "fixtures_difftest",
+    size = "medium",
+    srcs = ["fixtures_difftest.rs"],
+    data = [
+        "@maplibre//vendor:geojson_fixtures",
+        "@maplibre//vendor:geojson_vt_fixtures",
+        "@maplibre//vendor:kdbush_test_source",
+        "@maplibre//vendor:polylabel_fixtures",
+        "@maplibre//vendor:supercluster_fixtures",
+    ],
+    deps = [
+        ":geojson_canonical",
+        ":geometry_difftest_support",
+        ":misc_reference",
+        ":supercluster_reference",
+        "//vendor/geojson",
+        "//vendor/geojson-vt:geojson_vt",
+        "//vendor/kdbush",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/polylabel",
+        "//vendor/supercluster",
+        "@next_crates//:serde_json",
+    ],
+)

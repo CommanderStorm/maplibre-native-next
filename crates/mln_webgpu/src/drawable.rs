@@ -1,0 +1,982 @@
+// Ports include/mln/webgpu/drawable.hpp, src/mln/webgpu/drawable_impl.hpp and
+// src/mln/webgpu/drawable.cpp
+//
+// Logging: the C++ `Log::Warning`/`Log::Error` calls print to stderr here.
+// TODO(port): route them through mln::Log once a logging port exists.
+
+use crate::context::Context;
+use crate::render_pass::RenderPass;
+use crate::shaders::shader_program::{BindingType, ShaderProgram, VertexLayout, as_webgpu_shader};
+use crate::texture2d::Texture2D;
+use crate::uniform_buffer::UniformBuffer;
+use crate::upload_pass::UploadPass;
+use crate::vertex_buffer_resource::{IndexBufferResource, VertexBufferResource};
+use bytemuck::{Pod, Zeroable};
+use mln_gfx::attribute::AttributeBindingArray;
+use mln_gfx::color_mode::{BlendFunction, ColorMode};
+use mln_gfx::context::Context as _;
+use mln_gfx::cull_face_mode::CullFaceMode;
+use mln_gfx::depth_mode::DepthMode;
+use mln_gfx::draw_mode::DrawMode;
+use mln_gfx::drawable::{self, DrawSegment, DrawableBase, UniqueDrawSegment};
+use mln_gfx::gfx_types::{AttributeDataType, DrawModeType};
+use mln_gfx::index_vector::{IndexBufferBase, IndexVectorBasePtr};
+use mln_gfx::paint_parameters::PaintParameters;
+use mln_gfx::shaders::segment::SegmentBase;
+use mln_gfx::shaders::shader_defines::ID_GLOBAL_UBO_INDEX;
+use mln_gfx::shaders::shader_program_base::{ShaderProgramBasePtr, same_shader};
+use mln_gfx::stencil_mode::StencilMode;
+use mln_gfx::texture2d::Texture2D as _;
+use mln_gfx::types::{BufferUsageType, DepthMaskType};
+use mln_gfx::uniform_buffer::{UniformBufferArray, UniformBufferPtr};
+use mln_gfx::upload_pass::UploadPass as _;
+use mln_gfx::util_hash::hash;
+use mln_gfx::vertex_attribute::{VertexAttribute, VertexAttributeArray, VertexAttributeArrayPtr};
+use mln_gfx::vertex_buffer::{IndexBuffer as GfxIndexBuffer, UniqueVertexBufferResource};
+use std::any::Any;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::Instant;
+
+#[derive(Clone, Copy, Pod, Zeroable)]
+#[repr(C, align(16))]
+struct GlobalUBOIndexData {
+    value: u32,
+    pad: [u32; 3],
+}
+
+fn hash_stencil_mode(mode: &StencilMode) -> u64 {
+    let mut h = hash(&[
+        mode.ref_ as i64 as u64,
+        u64::from(mode.mask),
+        mode.fail as u64,
+        mode.depth_fail as u64,
+        mode.pass as u64,
+    ]);
+    h = hash(&[h, mode.test.func() as u64]);
+    if let Some(mask) = mode.test.masked() {
+        h = hash(&[h, u64::from(mask)]);
+    }
+    h
+}
+
+fn hash_pipeline_state(
+    vertex_layouts: &[VertexLayout],
+    color_mode: &ColorMode,
+    depth_mode: &DepthMode,
+    stencil_mode: &StencilMode,
+    draw_mode_type: DrawModeType,
+) -> u64 {
+    let mut h = 0u64;
+    // Hash vertex layouts
+    for layout in vertex_layouts {
+        h = hash(&[h, layout.array_stride as u32 as u64]);
+        h = hash(&[h, layout.step_mode as u64]);
+        h = hash(&[h, layout.attributes.len() as u64]);
+        for attr in layout.attributes.iter().take(16) {
+            h = hash(&[h, attr.format as u64, u64::from(attr.shader_location), attr.offset as u32 as u64]);
+        }
+    }
+    // Hash color mode
+    h = hash(&[
+        h,
+        u64::from(color_mode.mask.r),
+        u64::from(color_mode.mask.g),
+        u64::from(color_mode.mask.b),
+        u64::from(color_mode.mask.a),
+    ]);
+    match &color_mode.blend_function {
+        BlendFunction::Replace => h = hash(&[h, 0]),
+        f => {
+            h = hash(&[h, f.equation() as u64, f.src_factor() as u64, f.dst_factor() as u64]);
+        }
+    }
+    // Hash depth mode
+    h = hash(&[h, depth_mode.func as u64, depth_mode.mask as u64]);
+    // Hash stencil mode
+    h = hash(&[h, hash_stencil_mode(stencil_mode)]);
+    // Hash draw mode
+    hash(&[h, draw_mode_type as u64])
+}
+
+fn wgpu_vertex_format_of(type_: AttributeDataType) -> wgpu::VertexFormat {
+    use AttributeDataType as A;
+    use wgpu::VertexFormat as F;
+    match type_ {
+        A::Byte => F::Sint8,
+        A::Byte2 => F::Sint8x2,
+        A::Byte4 => F::Sint8x4,
+        A::UByte => F::Uint8,
+        A::UByte2 => F::Uint8x2,
+        A::UByte4 => F::Uint8x4,
+        A::UByte4Normalized => F::Unorm8x4,
+        A::Short => F::Sint16,
+        A::Short2 => F::Sint16x2,
+        A::Short4 => F::Sint16x4,
+        A::UShort => F::Uint16,
+        A::UShort2 => F::Uint16x2,
+        A::UShort4 => F::Uint16x4,
+        A::Int => F::Sint32,
+        A::Int2 => F::Sint32x2,
+        A::Int3 => F::Sint32x3,
+        A::Int4 => F::Sint32x4,
+        A::UInt => F::Uint32,
+        A::UInt2 => F::Uint32x2,
+        A::UInt3 => F::Uint32x3,
+        A::UInt4 => F::Uint32x4,
+        A::Float => F::Float32,
+        A::Float2 => F::Float32x2,
+        A::Float3 => F::Float32x3,
+        A::Float4 => F::Float32x4,
+        _ => {
+            debug_assert!(false, "Unsupported vertex attribute format");
+            F::Float32x2 // Default fallback
+        }
+    }
+}
+
+/// `struct IndexBuffer : gfx::IndexBufferBase`: adapts `gfx::IndexBuffer`.
+struct IndexBuffer {
+    buffer: GfxIndexBuffer,
+}
+
+impl IndexBufferBase for IndexBuffer {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+struct BindGroupRecord {
+    slot: u32,
+    #[allow(dead_code)]
+    group: u32,
+    handle: wgpu::BindGroup,
+}
+
+/// `webgpu::Drawable::Impl`
+struct DrawableImpl {
+    segments: Vec<UniqueDrawSegment>,
+    vertex_desc_hash: u64,
+    indexes: Option<IndexVectorBasePtr>,
+    vertex_count: usize,
+    vertex_type: AttributeDataType,
+    attribute_bindings: AttributeBindingArray,
+    instance_bindings: AttributeBindingArray,
+    /// Store dummy vertex buffers to keep them alive
+    dummy_vertex_buffers: Vec<UniqueVertexBufferResource>,
+    uniform_buffers: UniformBufferArray,
+    ubo_index_uniform: Option<UniformBufferPtr>,
+    depth_mode: DepthMode,
+    stencil_mode: StencilMode,
+    #[allow(dead_code)]
+    cull_face_mode: CullFaceMode,
+    vertex_attr_id: usize,
+    stencil_mode_hash: u64,
+    stencil_mode_hash_valid: bool,
+    /// We don't own the pipeline - it's owned by the shader program's cache.
+    pipeline_state: Option<wgpu::RenderPipeline>,
+    previous_stencil_mode: StencilMode,
+    bind_groups: Vec<BindGroupRecord>,
+}
+
+pub struct Drawable {
+    base: DrawableBase,
+    impl_: DrawableImpl,
+}
+
+thread_local! {
+    static DRAW_CALL_COUNT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Owned resources of a bind group entry (the wgpu entries borrow them).
+enum EntryResource {
+    Buffer(wgpu::Buffer, u64),
+    Sampler(wgpu::Sampler),
+    TextureView(wgpu::TextureView),
+}
+
+impl Drawable {
+    pub fn new(name: String) -> Self {
+        Drawable {
+            base: DrawableBase::new(name),
+            impl_: DrawableImpl {
+                segments: Vec::new(),
+                vertex_desc_hash: 0,
+                indexes: None,
+                vertex_count: 0,
+                vertex_type: AttributeDataType::Invalid,
+                attribute_bindings: Vec::new(),
+                instance_bindings: Vec::new(),
+                dummy_vertex_buffers: Vec::new(),
+                uniform_buffers: UniformBufferArray::new(),
+                ubo_index_uniform: None,
+                depth_mode: DepthMode::disabled(),
+                stencil_mode: StencilMode::default(),
+                cull_face_mode: CullFaceMode::disabled(),
+                vertex_attr_id: 0,
+                stencil_mode_hash: 0,
+                stencil_mode_hash_valid: false,
+                pipeline_state: None,
+                previous_stencil_mode: StencilMode::default(),
+                bind_groups: Vec::new(),
+            },
+        }
+    }
+
+    pub fn set_depth_mode_for_3d(&mut self, value: &DepthMode) {
+        if self.impl_.depth_mode.func != value.func || self.impl_.depth_mode.mask != value.mask {
+            self.impl_.pipeline_state = None;
+        }
+        self.impl_.depth_mode = *value;
+    }
+
+    pub fn set_stencil_mode_for_3d(&mut self, value: &StencilMode) {
+        let new_hash = hash_stencil_mode(value);
+        let m = &self.impl_.stencil_mode;
+        if !self.impl_.stencil_mode_hash_valid
+            || self.impl_.stencil_mode_hash != new_hash
+            || m.ref_ != value.ref_
+            || m.mask != value.mask
+            || m.fail != value.fail
+            || m.depth_fail != value.depth_fail
+            || m.pass != value.pass
+        {
+            self.impl_.pipeline_state = None;
+            self.impl_.stencil_mode_hash_valid = false;
+        }
+        self.impl_.stencil_mode = *value;
+        self.impl_.stencil_mode_hash = new_hash;
+    }
+
+    pub fn set_vertex_attr_id(&mut self, id: usize) {
+        self.impl_.vertex_attr_id = id;
+    }
+
+    pub fn upload(&mut self, upload_pass: &UploadPass) {
+        if self.base.is_custom {
+            return;
+        }
+        let Some(shader) = self.base.shader.clone() else {
+            eprintln!("Missing shader for drawable {}/{}", self.base.unique_id, self.base.name);
+            debug_assert!(false);
+            return;
+        };
+
+        let usage = BufferUsageType::StaticDraw;
+
+        // We need either raw index data or a buffer already created from them.
+        // We can have a buffer and no indexes, but only if it's not marked dirty.
+        let Some(indexes) = self.impl_.indexes.clone() else {
+            debug_assert!(false, "Missing index data");
+            return;
+        };
+        {
+            let mut indexes = indexes.borrow_mut();
+            if indexes.empty() && (indexes.get_buffer().is_none() || indexes.get_dirty()) {
+                debug_assert!(false, "Missing index data");
+                return;
+            }
+            if indexes.get_buffer().is_none() || indexes.get_dirty() {
+                // Create or update a buffer for the index data. We don't
+                // update any existing buffer because it may still be in use
+                // by the previous frame.
+                let resource = upload_pass.create_index_buffer_resource(
+                    bytemuck::cast_slice(indexes.data()),
+                    usage,
+                    /*persistent=*/ false,
+                );
+                let gfx_index_buffer = GfxIndexBuffer::new(indexes.elements(), resource);
+                indexes.set_buffer(Some(Box::new(IndexBuffer { buffer: gfx_index_buffer })));
+                indexes.set_dirty(false);
+            }
+        }
+
+        // Upload vertex attributes (like Metal does)
+        let build_attribs = match (&self.base.vertex_attributes, self.base.attribute_update_time) {
+            (Some(attrs), Some(t)) => attrs.borrow().is_modified_after(t),
+            _ => true,
+        };
+        if build_attribs {
+            let attrs = self.base.vertex_attributes.get_or_insert_with(VertexAttributeArray::new_ptr).clone();
+            // Apply drawable values to shader defaults (matching Metal's approach)
+            let mut vertex_buffers = Vec::new();
+            let attribute_bindings = upload_pass.build_attribute_bindings(
+                self.impl_.vertex_count,
+                self.impl_.vertex_type,
+                /*vertexAttributeIndex=*/ usize::MAX,
+                /*vertexData=*/ &[],
+                shader.get_vertex_attributes(),
+                &mut attrs.borrow_mut(),
+                usage,
+                self.base.attribute_update_time,
+                &mut vertex_buffers,
+            );
+            if self.impl_.attribute_bindings != attribute_bindings {
+                self.impl_.attribute_bindings = attribute_bindings;
+                self.impl_.vertex_desc_hash = 0; // Reset hash when bindings change
+                self.impl_.pipeline_state = None; // Reset pipeline state when attribute bindings change
+                // Store the dummy vertex buffers to keep them alive
+                self.impl_.dummy_vertex_buffers = vertex_buffers;
+            }
+        }
+
+        // Build instance buffer (like Metal does)
+        let build_instance_buffer = match (&self.base.instance_attributes, self.base.attribute_update_time) {
+            (Some(attrs), Some(t)) => attrs.borrow().is_modified_after(t),
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        if build_instance_buffer {
+            let attrs = self.base.instance_attributes.clone().unwrap();
+            let mut instance_buffers = Vec::new();
+            let instance_bindings = upload_pass.build_attribute_bindings(
+                self.impl_.vertex_count,
+                self.impl_.vertex_type,
+                usize::MAX,
+                &[],
+                shader.get_instance_attributes(),
+                &mut attrs.borrow_mut(),
+                usage,
+                self.base.attribute_update_time,
+                &mut instance_buffers,
+            );
+            if self.impl_.instance_bindings != instance_bindings {
+                self.impl_.instance_bindings = instance_bindings;
+                self.impl_.pipeline_state = None; // Reset pipeline state when instance bindings change
+                // Store the dummy instance buffers to keep them alive
+                self.impl_.dummy_vertex_buffers.extend(instance_buffers);
+            }
+        }
+
+        // Upload uniform buffers to ensure they're ready for the GPU: only a
+        // check that each has a GPU buffer.
+        for i in 0..self.impl_.uniform_buffers.allocated_size() {
+            if let Some(ub) = self.impl_.uniform_buffers.get(i)
+                && let Some(webgpu_ub) = ub.as_any().downcast_ref::<UniformBuffer>()
+                && webgpu_ub.get_buffer().is_none()
+            {
+                eprintln!("Uniform buffer {i} has no GPU buffer!");
+            }
+        }
+
+        // Upload textures if needed
+        let textures_need_upload = self.base.textures.iter().flatten().any(|t| t.borrow().needs_upload());
+        if textures_need_upload {
+            for texture in self.base.textures.iter().flatten() {
+                let mut t = texture.borrow_mut();
+                if t.needs_upload() {
+                    t.upload();
+                }
+            }
+        }
+
+        self.base.attribute_update_time = Some(Instant::now());
+    }
+
+    /// Build the bind groups for this draw from the shader's metadata.
+    /// Returns false when the draw must be skipped (C++ `return`).
+    fn build_bind_groups(&mut self, context: &Context, render_pass: &RenderPass, shader: &ShaderProgram) -> bool {
+        self.impl_.bind_groups.clear();
+        let Some(device) = context.get_backend().get_device() else {
+            return true;
+        };
+        let draw_call_count = DRAW_CALL_COUNT.with(Cell::get);
+        let global_buffers = render_pass.get_global_uniform_buffers();
+        let textures = &self.base.textures;
+        let find_texture_for_binding = |binding: u32, sampler_binding: bool| -> Option<Rc<RefCell<dyn mln_gfx::texture2d::Texture2D>>> {
+            for (tex_index, texture) in textures.iter().enumerate() {
+                let Some(texture) = texture else { continue };
+                if let Some(location) = shader.get_sampler_location_of(tex_index) {
+                    let location = location as u32;
+                    if (sampler_binding && location == binding)
+                        || (!sampler_binding && (location == binding || location + 1 == binding))
+                    {
+                        return Some(texture.clone());
+                    }
+                }
+            }
+            None
+        };
+
+        let group_order = shader.get_bind_group_order().to_vec();
+        for (slot, &group) in group_order.iter().enumerate() {
+            let Some(layout) = shader.get_bind_group_layout(group) else {
+                eprintln!(
+                    "WebGPU: missing bind group layout for group {group} in shader '{}'",
+                    shader.get_shader_name()
+                );
+                return false;
+            };
+            let binding_infos = shader.get_binding_infos_for_group(group);
+
+            let mut resources: Vec<(u32, EntryResource)> = Vec::with_capacity(binding_infos.len());
+            let mut valid_bindings = true;
+            for binding_info in binding_infos {
+                match binding_info.type_ {
+                    BindingType::UniformBuffer | BindingType::ReadOnlyStorageBuffer | BindingType::StorageBuffer => {
+                        let mut buffer = self.impl_.uniform_buffers.get(binding_info.binding as usize).cloned();
+                        if binding_info.binding as usize == ID_GLOBAL_UBO_INDEX {
+                            let index_data = GlobalUBOIndexData { value: self.base.ubo_index, pad: [0; 3] };
+                            context.emplace_or_update_uniform_buffer(
+                                &mut self.impl_.ubo_index_uniform,
+                                bytemuck::bytes_of(&index_data),
+                                false,
+                            );
+                            if let Some(ubo) = self.impl_.ubo_index_uniform.clone() {
+                                self.impl_.uniform_buffers.set(binding_info.binding as usize, Some(ubo.clone()));
+                                buffer = Some(ubo);
+                            }
+                        }
+                        if buffer.is_none()
+                            && let Some(globals) = &global_buffers
+                        {
+                            buffer = globals.get(binding_info.binding as usize).cloned();
+                        }
+                        let Some(buffer) = buffer else {
+                            if draw_call_count <= 200 {
+                                eprintln!(
+                                    "No buffer found for binding {} type={} group={group}",
+                                    binding_info.binding, binding_info.type_ as i32
+                                );
+                            }
+                            valid_bindings = false;
+                            break;
+                        };
+                        let gpu_buffer = buffer
+                            .as_any()
+                            .downcast_ref::<UniformBuffer>()
+                            .and_then(|b| b.get_buffer().cloned());
+                        let Some(gpu_buffer) = gpu_buffer else {
+                            if draw_call_count <= 200 {
+                                eprintln!(
+                                    "Uniform buffer missing GPU handle for binding {} group={group}",
+                                    binding_info.binding
+                                );
+                            }
+                            valid_bindings = false;
+                            break;
+                        };
+                        resources.push((binding_info.binding, EntryResource::Buffer(gpu_buffer, buffer.get_size() as u64)));
+                    }
+                    BindingType::Sampler => {
+                        let Some(texture) = find_texture_for_binding(binding_info.binding, true) else {
+                            valid_bindings = false;
+                            break;
+                        };
+                        let mut texture = texture.borrow_mut();
+                        let Some(texture) = texture.as_any_mut().downcast_mut::<Texture2D>() else {
+                            valid_bindings = false;
+                            break;
+                        };
+                        if texture.get_sampler().is_none() {
+                            let state = *texture.get_sampler_state();
+                            texture.set_sampler_configuration(state);
+                        }
+                        let Some(sampler) = texture.get_sampler().cloned() else {
+                            valid_bindings = false;
+                            break;
+                        };
+                        resources.push((binding_info.binding, EntryResource::Sampler(sampler)));
+                    }
+                    BindingType::Texture | BindingType::UnfilterableTexture => {
+                        let Some(texture) = find_texture_for_binding(binding_info.binding, false) else {
+                            valid_bindings = false;
+                            break;
+                        };
+                        let mut texture = texture.borrow_mut();
+                        let Some(texture) = texture.as_any_mut().downcast_mut::<Texture2D>() else {
+                            valid_bindings = false;
+                            break;
+                        };
+                        if texture.get_texture().is_none() || texture.get_texture_view().is_none() {
+                            texture.create();
+                        }
+                        let Some(view) = texture.get_texture_view().cloned() else {
+                            valid_bindings = false;
+                            break;
+                        };
+                        resources.push((binding_info.binding, EntryResource::TextureView(view)));
+                    }
+                }
+            }
+
+            if !valid_bindings || resources.is_empty() {
+                eprintln!(
+                    "WebGPU: invalid bindings for drawable '{}' (group={group}, slot={slot})",
+                    self.base.name
+                );
+                return false;
+            }
+
+            let entries: Vec<wgpu::BindGroupEntry<'_>> = resources
+                .iter()
+                .map(|(binding, resource)| wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: match resource {
+                        EntryResource::Buffer(buffer, size) => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(*size),
+                        }),
+                        EntryResource::Sampler(sampler) => wgpu::BindingResource::Sampler(sampler),
+                        EntryResource::TextureView(view) => wgpu::BindingResource::TextureView(view),
+                    },
+                })
+                .collect();
+            let label = format!("{} bind-group {group}", self.base.name);
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&label),
+                layout,
+                entries: &entries,
+            });
+            self.impl_.bind_groups.push(BindGroupRecord { slot: slot as u32, group, handle: bind_group });
+        }
+        true
+    }
+}
+
+impl ShaderProgram {
+    fn get_sampler_location_of(&self, id: usize) -> Option<usize> {
+        mln_gfx::shaders::shader_program_base::ShaderProgramBase::get_sampler_location(self, id)
+    }
+}
+
+/// `UniqueBinding` in `Drawable::draw`
+struct UniqueBinding {
+    vertex_resource: Rc<dyn mln_gfx::vertex_buffer::VertexBufferResource>,
+    buffer: Option<wgpu::Buffer>,
+    buffer_size: u64,
+    stride: u32,
+    base_offset: u64,
+    step_mode: wgpu::VertexStepMode,
+    attributes: Vec<wgpu::VertexAttribute>,
+    attribute_byte_offsets: Vec<u64>,
+}
+
+fn accumulate_bindings(source: &AttributeBindingArray, step_mode: wgpu::VertexStepMode, out: &mut Vec<UniqueBinding>) {
+    for (attribute_index, binding) in source.iter().enumerate() {
+        let Some(binding) = binding else { continue };
+        let Some(resource) = &binding.vertex_buffer_resource else { continue };
+        let Some(vertex_buffer_res) = resource.as_any().downcast_ref::<VertexBufferResource>() else {
+            continue;
+        };
+        let (buffer, buffer_size) = {
+            let b = vertex_buffer_res.get_buffer();
+            (b.get_buffer().cloned(), b.get_size_in_bytes() as u64)
+        };
+        if buffer.is_none() {
+            continue;
+        }
+        let binding_byte_offset = u64::from(binding.vertex_offset) * u64::from(binding.vertex_stride);
+        let pos = out.iter().position(|e| {
+            std::ptr::addr_eq(Rc::as_ptr(&e.vertex_resource), Rc::as_ptr(resource))
+                && e.stride == binding.vertex_stride
+                && e.step_mode == step_mode
+        });
+        let entry = match pos {
+            None => {
+                out.push(UniqueBinding {
+                    vertex_resource: resource.clone(),
+                    buffer,
+                    buffer_size,
+                    stride: binding.vertex_stride,
+                    base_offset: binding_byte_offset,
+                    step_mode,
+                    attributes: Vec::with_capacity(4),
+                    attribute_byte_offsets: Vec::with_capacity(4),
+                });
+                out.last_mut().unwrap()
+            }
+            Some(i) => {
+                let e = &mut out[i];
+                e.base_offset = e.base_offset.min(binding_byte_offset);
+                e
+            }
+        };
+        entry.attributes.push(wgpu::VertexAttribute {
+            format: wgpu_vertex_format_of(binding.attribute.data_type),
+            offset: u64::from(binding.attribute.offset),
+            shader_location: attribute_index as u32,
+        });
+        entry.attribute_byte_offsets.push(binding_byte_offset);
+    }
+}
+
+impl drawable::Drawable for Drawable {
+    fn base(&self) -> &DrawableBase {
+        &self.base
+    }
+    fn base_mut(&mut self) -> &mut DrawableBase {
+        &mut self.base
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn draw(&mut self, parameters: &mut dyn PaintParameters) {
+        let draw_call_count = DRAW_CALL_COUNT.with(|c| {
+            c.set(c.get() + 1);
+            c.get()
+        });
+        if self.base.is_custom {
+            return;
+        }
+
+        // Get WebGPU context and render pass (following Metal's pattern)
+        let parameters: &dyn PaintParameters = parameters;
+        let Some(context) = parameters.context().as_any().downcast_ref::<Context>() else {
+            return;
+        };
+        let Some(render_pass) = parameters.render_pass().and_then(|p| p.as_any().downcast_ref::<RenderPass>()) else {
+            eprintln!("No render pass encoder available");
+            debug_assert!(false);
+            return;
+        };
+        if !render_pass.has_encoder() {
+            eprintln!("No render pass encoder available");
+            debug_assert!(false);
+            return;
+        }
+
+        let Some(shader_ptr) = self.base.shader.clone() else {
+            eprintln!("Missing shader for drawable {}/{}", self.base.unique_id, self.base.name);
+            debug_assert!(false);
+            return;
+        };
+        if !self.base.enabled {
+            return;
+        }
+
+        let backend = context.get_backend();
+        if backend.get_device().is_none() || backend.get_queue().is_none() {
+            return;
+        }
+
+        // Bind uniform buffers (a no-op in WebGPU, see UniformBufferArray).
+
+        // Check index buffer is valid (like Metal does)
+        if let Some(indexes) = &self.impl_.indexes {
+            let indexes = indexes.borrow();
+            if indexes.get_buffer().is_none() || indexes.get_dirty() {
+                debug_assert!(false, "Index buffer not uploaded");
+                return;
+            }
+        }
+
+        // Build bind groups based on shader metadata
+        let Some(shader) = as_webgpu_shader(&shader_ptr) else {
+            return;
+        };
+        if !self.build_bind_groups(context, render_pass, shader) {
+            return;
+        }
+
+        let drawable_tile_id = self.base.tile_id;
+        let mut depth_mode = DepthMode::disabled();
+        let mut stencil_mode = StencilMode::disabled();
+        if self.base.is_3d {
+            depth_mode = self.impl_.depth_mode;
+            stencil_mode = self.impl_.stencil_mode;
+        } else {
+            if self.base.enable_depth {
+                depth_mode = parameters.depth_mode_for_sublayer(self.base.sub_layer_index as u8, self.base.depth_type);
+            }
+            if self.base.enable_stencil
+                && let Some(tile_id) = drawable_tile_id
+            {
+                stencil_mode = parameters.stencil_mode_for_clipping(&tile_id.to_unwrapped());
+            }
+        }
+
+        let new_stencil_hash = hash_stencil_mode(&stencil_mode);
+        if !self.impl_.stencil_mode_hash_valid
+            || self.impl_.stencil_mode_hash != new_stencil_hash
+            || self.impl_.depth_mode.func != depth_mode.func
+            || self.impl_.depth_mode.mask != depth_mode.mask
+        {
+            self.impl_.pipeline_state = None;
+            self.impl_.stencil_mode_hash_valid = true;
+        }
+        self.impl_.depth_mode = depth_mode;
+        self.impl_.stencil_mode = stencil_mode;
+        self.impl_.stencil_mode_hash = new_stencil_hash;
+        self.impl_.previous_stencil_mode = stencil_mode;
+
+        let mut unique_bindings: Vec<UniqueBinding> =
+            Vec::with_capacity(self.impl_.attribute_bindings.len() + self.impl_.instance_bindings.len());
+        accumulate_bindings(&self.impl_.attribute_bindings, wgpu::VertexStepMode::Vertex, &mut unique_bindings);
+        accumulate_bindings(&self.impl_.instance_bindings, wgpu::VertexStepMode::Instance, &mut unique_bindings);
+
+        const MAX_VERTEX_BUFFER_SLOTS: usize = 8;
+        if unique_bindings.len() > MAX_VERTEX_BUFFER_SLOTS {
+            eprintln!(
+                "WebGPU: reducing vertex buffer bindings from {} to {MAX_VERTEX_BUFFER_SLOTS}",
+                unique_bindings.len()
+            );
+            unique_bindings.truncate(MAX_VERTEX_BUFFER_SLOTS);
+        }
+
+        for entry in &mut unique_bindings {
+            for j in 0..entry.attributes.len() {
+                if entry.attribute_byte_offsets[j] < entry.base_offset {
+                    continue;
+                }
+                let delta = entry.attribute_byte_offsets[j] - entry.base_offset;
+                entry.attributes[j].offset += u64::from(delta as u32);
+            }
+        }
+
+        if self.impl_.pipeline_state.is_none() {
+            // Create vertex layout from attribute bindings
+            let vertex_layouts: Vec<VertexLayout> = unique_bindings
+                .iter()
+                .map(|b| VertexLayout {
+                    array_stride: u64::from(b.stride),
+                    step_mode: b.step_mode,
+                    attributes: b.attributes.clone(),
+                })
+                .collect();
+            // Use the actual color mode from the drawable (like Metal does)
+            let color_mode = self.base.color_mode;
+            let draw_mode_type =
+                self.impl_.segments.first().map_or(DrawModeType::Triangles, |s| s.get_mode().type_);
+            // Compute pipeline state hash for caching
+            let pipeline_hash =
+                hash_pipeline_state(&vertex_layouts, &color_mode, &depth_mode, &stencil_mode, draw_mode_type);
+            self.impl_.pipeline_state = shader.get_render_pipeline(
+                &vertex_layouts,
+                &color_mode,
+                &depth_mode,
+                &stencil_mode,
+                draw_mode_type,
+                Some(pipeline_hash),
+            );
+            if self.impl_.pipeline_state.is_none() {
+                eprintln!(
+                    "WebGPU: skipping pipeline creation for drawable '{}' (shader='{}')",
+                    self.base.name,
+                    mln_gfx::shader::Shader::type_name(shader)
+                );
+            }
+        }
+
+        let mut encoder_guard = render_pass.get_encoder();
+        let Some(encoder) = encoder_guard.as_mut() else {
+            eprintln!("renderPassEncoder is null!");
+            return;
+        };
+        let Some(pipeline) = &self.impl_.pipeline_state else {
+            eprintln!("WebGPU: no pipeline available for drawable '{}'; draw skipped", self.base.name);
+            return;
+        };
+        encoder.set_pipeline(pipeline);
+        if self.base.enable_stencil {
+            encoder.set_stencil_reference(stencil_mode.ref_ as u32);
+        }
+
+        // Clamp scissor to the current render pass size (not the default
+        // renderable, which may be different during offscreen passes).
+        {
+            let rt_size = render_pass.get_renderable_size();
+            let scissor = parameters.scissor_rect();
+            let sx = scissor.x as u32;
+            let sy = scissor.y as u32;
+            let sw = if sx < rt_size.width { scissor.width.min(rt_size.width - sx) } else { 0 };
+            let sh = if sy < rt_size.height { scissor.height.min(rt_size.height - sy) } else { 0 };
+            if sw > 0 && sh > 0 {
+                encoder.set_scissor_rect(sx, sy, sw, sh);
+            }
+        }
+
+        let mut buffer_slot = 0u32;
+        for binding in &unique_bindings {
+            let Some(buffer) = &binding.buffer else { continue };
+            let buffer_size = binding.buffer_size;
+            if binding.base_offset >= buffer_size {
+                eprintln!(
+                    "Skipping vertex buffer slot {buffer_slot} due to base offset {} >= size {buffer_size}",
+                    binding.base_offset
+                );
+                continue;
+            }
+            encoder.set_vertex_buffer(buffer_slot, buffer.slice(binding.base_offset..buffer_size));
+            buffer_slot += 1;
+        }
+
+        // Bind index buffer if present
+        if let Some(indexes) = &self.impl_.indexes {
+            let indexes = indexes.borrow();
+            if indexes.elements() > 0
+                && !indexes.get_dirty()
+                && let Some(index_buffer) =
+                    indexes.get_buffer().and_then(|b| b.as_any().downcast_ref::<IndexBuffer>())
+                && let Some(resource) = index_buffer.buffer.get_resource::<IndexBufferResource>()
+            {
+                let buffer_resource = resource.get_buffer();
+                if let Some(buffer) = buffer_resource.get_buffer() {
+                    // Always use Uint16 format for now
+                    encoder.set_index_buffer(
+                        buffer.slice(0..buffer_resource.get_size_in_bytes() as u64),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                }
+            }
+        }
+
+        // Set bind groups
+        for record in &self.impl_.bind_groups {
+            encoder.set_bind_group(record.slot, &record.handle, &[]);
+        }
+
+        // Handle depth and stencil states (like Metal does). For 3D mode,
+        // stenciling is handled by the layer group.
+        if !self.base.is_3d {
+            if self.base.enable_stencil {
+                if let Some(tile_id) = self.base.tile_id {
+                    let expected_stencil = parameters.stencil_mode_for_clipping(&tile_id.to_unwrapped());
+                    if hash_stencil_mode(&expected_stencil) != hash_stencil_mode(&self.impl_.stencil_mode) {
+                        debug_assert!(false, "stencil mismatch");
+                        eprintln!("WebGPU drawable stencil mismatch for '{}' tile={tile_id}", self.base.name);
+                    }
+                    encoder.set_stencil_reference(expected_stencil.ref_ as u32);
+                }
+            } else {
+                // Reset the reference so subsequent drawables that re-enable
+                // stencilling start from a known value.
+                encoder.set_stencil_reference(0);
+            }
+            if self.base.enable_depth {
+                #[cfg(debug_assertions)]
+                {
+                    let expected_depth =
+                        parameters.depth_mode_for_sublayer(self.base.sub_layer_index as u8, self.base.depth_type);
+                    debug_assert!(expected_depth.func == self.impl_.depth_mode.func);
+                    debug_assert!(expected_depth.mask == self.impl_.depth_mode.mask);
+                }
+            }
+        }
+
+        // Draw indexed geometry - loop through segments (exactly like Metal does)
+        let instance_count = match &self.base.instance_attributes {
+            Some(attrs) => attrs.borrow().get_min_count() as u32,
+            None => 1,
+        };
+        let mut draw_calls = 0;
+        for segment in &self.impl_.segments {
+            let ml_segment = segment.get_segment();
+            if ml_segment.index_length > 0 {
+                let index_offset = ml_segment.index_offset as u32;
+                let base_vertex = ml_segment.vertex_offset as i32;
+                let base_instance = 0u32;
+                encoder.draw_indexed(
+                    index_offset..index_offset + ml_segment.index_length as u32,
+                    base_vertex,
+                    base_instance..base_instance + instance_count,
+                );
+                draw_calls += 1;
+            }
+        }
+        drop(encoder_guard);
+        if draw_calls > 0 {
+            let mut stats = context.rendering_stats_mut();
+            stats.num_draw_calls += draw_calls;
+            stats.total_draw_calls += draw_calls;
+        }
+        let _ = draw_call_count;
+    }
+
+    fn update_vertex_attributes(
+        &mut self,
+        vertices: Option<VertexAttributeArrayPtr>,
+        vertex_count: usize,
+        mode: DrawMode,
+        indexes: Option<IndexVectorBasePtr>,
+        segments: &[SegmentBase],
+    ) {
+        // Store the vertex attributes (base class method)
+        drawable::Drawable::set_vertex_attributes(self, vertices);
+        // Store vertex count
+        self.impl_.vertex_count = vertex_count;
+        // Handle segments
+        let draw_segs: Vec<UniqueDrawSegment> =
+            segments.iter().map(|seg| Box::new(DrawSegment::new(mode, seg.copy()))).collect();
+        // Set the index data with segments
+        self.set_index_data(indexes, draw_segs);
+    }
+
+    fn set_vertices(&mut self, data: Vec<u8>, count: usize, data_type: AttributeDataType) {
+        self.impl_.vertex_count = count;
+        self.impl_.vertex_type = data_type;
+        if count != 0 && data_type != AttributeDataType::Invalid && !data.is_empty() {
+            let attrs = self.base.vertex_attributes.get_or_insert_with(VertexAttributeArray::new_ptr).clone();
+            let mut attrs = attrs.borrow_mut();
+            if let Some(attrib) = attrs.set(self.impl_.vertex_attr_id, /*index=*/ -1, data_type, 0) {
+                attrib.set_raw_data(data);
+                attrib.set_stride(VertexAttribute::get_stride_of(data_type));
+            } else {
+                eprintln!("Vertex attribute type mismatch: {} / {}", self.base.name, self.impl_.vertex_attr_id);
+                debug_assert!(false);
+            }
+        }
+    }
+
+    fn set_index_data(&mut self, indexes: Option<IndexVectorBasePtr>, segments: Vec<UniqueDrawSegment>) {
+        self.impl_.indexes = indexes;
+        self.impl_.segments = segments;
+    }
+
+    fn get_uniform_buffers(&self) -> &UniformBufferArray {
+        &self.impl_.uniform_buffers
+    }
+
+    fn mutable_uniform_buffers(&mut self) -> &mut UniformBufferArray {
+        &mut self.impl_.uniform_buffers
+    }
+
+    fn set_color_mode(&mut self, value: &ColorMode) {
+        self.base.color_mode = *value;
+        self.impl_.pipeline_state = None; // Rebuild pipeline to honour new color mode
+    }
+
+    fn set_enable_stencil(&mut self, value: bool) {
+        if self.base.enable_stencil == value {
+            return;
+        }
+        self.base.enable_stencil = value;
+        self.impl_.pipeline_state = None; // Force recreation with new stencil state
+    }
+
+    fn set_enable_depth(&mut self, value: bool) {
+        if self.base.enable_depth == value {
+            return;
+        }
+        self.base.enable_depth = value;
+        self.impl_.pipeline_state = None; // Force recreation with new depth state
+    }
+
+    fn set_sub_layer_index(&mut self, value: i32) {
+        if self.base.sub_layer_index == value {
+            return;
+        }
+        self.base.sub_layer_index = value;
+    }
+
+    fn set_depth_type(&mut self, value: DepthMaskType) {
+        if self.base.depth_type == value {
+            return;
+        }
+        self.base.depth_type = value;
+        self.impl_.pipeline_state = None; // Force recreation with new depth mask
+    }
+
+    fn set_shader(&mut self, value: Option<ShaderProgramBasePtr>) {
+        if same_shader(&self.base.shader, &value) {
+            return;
+        }
+        self.base.shader = value;
+        self.impl_.pipeline_state = None; // Reset pipeline when shader changes
+    }
+}

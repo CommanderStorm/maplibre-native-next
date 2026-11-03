@@ -1,0 +1,363 @@
+// Ports include/mln/util/run_loop.hpp and platform/default/src/mln/util/run_loop.cpp
+// (the libuv loop): `invoke`, `runOnce`, `run`, `stop`, `waitForEmpty`, and
+// the async handles behind `util::AsyncTask`.
+//
+// libuv is replaced by a plain loop: `run_once` is `uv_run(UV_RUN_NOWAIT)`,
+// i.e. it runs every async handle that was signalled, in registration order
+// (the loop's own task queue first, as its handle is created in the RunLoop
+// constructor), then returns without blocking. `run` is
+// `uv_run(UV_RUN_DEFAULT)` with the holder handle ref'd: it waits for a
+// wake-up (a task from any thread, or an AsyncTask send), runs once, and
+// returns once a `stop()` task ran (C++ `stop` invokes a task that unrefs
+// the holder handle).
+//
+// The task queues live in a `Send + Sync` core (`RunLoopHandle`), which is
+// also the loop's `Scheduler` for mailboxes and `Scheduler::get_current()`:
+// other threads post to it, as they post through a C++ `RunLoop*`. The async
+// handles stay on the loop's thread.
+//
+// TODO(port): timers (`util::Timer`), fd watches (`addWatch`/`removeWatch`,
+// only for libcurl), `invokeCancellable`, `updateTime`, `setPlatformCallback`.
+
+use crate::scheduler::{self, Scheduler};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+
+type Task = Box<dyn FnOnce() + Send + 'static>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Priority {
+    Default,
+    High,
+}
+
+#[derive(Default)]
+struct Queues {
+    default_queue: VecDeque<Task>,
+    high_priority_queue: VecDeque<Task>,
+}
+
+/// The thread-safe part of a RunLoop: the task queues (`defaultQueue`,
+/// `highPriorityQueue` and their mutex in C++), the pending flag of the
+/// loop's own async handle, and the wake-up a blocking `run()` waits on.
+pub(crate) struct Core {
+    queues: Mutex<Queues>,
+    /// The RunLoop's own async handle (`impl->async`), which runs `process`.
+    queue_pending: AtomicBool,
+    /// Set by every wake-up; `run()` sleeps until it is set.
+    signal: Mutex<bool>,
+    condvar: Condvar,
+    /// The holder handle is unref'd (`stop()` ran).
+    stopped: AtomicBool,
+}
+
+impl Core {
+    fn new() -> Self {
+        Core {
+            queues: Mutex::new(Queues::default()),
+            queue_pending: AtomicBool::new(false),
+            signal: Mutex::new(false),
+            condvar: Condvar::new(),
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    fn push(&self, priority: Priority, task: Task) {
+        {
+            let mut queues = self.queues.lock().unwrap();
+            match priority {
+                Priority::High => queues.high_priority_queue.push_back(task),
+                Priority::Default => queues.default_queue.push_back(task),
+            }
+        }
+        // wake()
+        self.queue_pending.store(true, Ordering::SeqCst);
+        self.wake();
+    }
+
+    /// Wakes a blocking `run()` (what `uv_async_send` does for libuv).
+    pub(crate) fn wake(&self) {
+        let mut signalled = self.signal.lock().unwrap();
+        *signalled = true;
+        self.condvar.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut signalled = self.signal.lock().unwrap();
+        while !*signalled {
+            signalled = self.condvar.wait(signalled).unwrap();
+        }
+        *signalled = false;
+    }
+
+    fn process(&self) {
+        loop {
+            let task = {
+                let mut queues = self.queues.lock().unwrap();
+                if let Some(task) = queues.high_priority_queue.pop_front() {
+                    task
+                } else if let Some(task) = queues.default_queue.pop_front() {
+                    task
+                } else {
+                    break;
+                }
+            };
+            task();
+        }
+    }
+
+    fn remaining(&self) -> usize {
+        let queues = self.queues.lock().unwrap();
+        queues.default_queue.len() + queues.high_priority_queue.len()
+    }
+}
+
+/// An async handle (`uv_async_t`): a coalescing "pending" flag plus the
+/// callback that runs on the loop's thread.
+pub(crate) struct AsyncHandle {
+    pub(crate) pending: Arc<AtomicBool>,
+    pub(crate) task: RefCell<Box<dyn FnMut()>>,
+    pub(crate) core: Arc<Core>,
+}
+
+struct Inner {
+    core: Arc<Core>,
+    handles: RefCell<Vec<Weak<AsyncHandle>>>,
+}
+
+thread_local! {
+    static CURRENT: RefCell<Option<Rc<Inner>>> = const { RefCell::new(None) };
+}
+
+/// `util::RunLoop`. Cheap to clone: clones refer to the same loop.
+#[derive(Clone)]
+pub struct RunLoop {
+    inner: Rc<Inner>,
+}
+
+/// A `Send + Sync` reference to a RunLoop's task queue (what other threads
+/// hold as a `RunLoop*` in C++): `invoke`, `stop`, and the loop's
+/// `Scheduler`.
+#[derive(Clone)]
+pub struct RunLoopHandle {
+    core: Arc<Core>,
+}
+
+impl RunLoop {
+    /// `RunLoop(Type::Default)` / `RunLoop(Type::New)`: creates a loop and
+    /// makes it the current scheduler of this thread
+    /// (`Scheduler::SetCurrent(this)`).
+    pub fn new() -> Self {
+        let inner = Rc::new(Inner {
+            core: Arc::new(Core::new()),
+            handles: RefCell::new(Vec::new()),
+        });
+        CURRENT.with(|c| *c.borrow_mut() = Some(inner.clone()));
+        let scheduler: Arc<dyn Scheduler + Send + Sync> = Arc::new(RunLoopHandle {
+            core: inner.core.clone(),
+        });
+        scheduler::set_current(Some(scheduler));
+        RunLoop { inner }
+    }
+
+    /// `RunLoop::Get()`. C++ asserts that the thread has a current RunLoop;
+    /// the port creates one on first use instead, which is what the test
+    /// harnesses do first thing in C++ (and what `Scheduler::GetCurrent()`
+    /// does).
+    pub fn get() -> RunLoop {
+        let existing = CURRENT.with(|c| c.borrow().clone());
+        match existing {
+            Some(inner) => RunLoop { inner },
+            None => RunLoop::new(),
+        }
+    }
+
+    /// The current thread's loop, if it has one.
+    pub fn try_get() -> Option<RunLoop> {
+        CURRENT.with(|c| c.borrow().clone()).map(|inner| RunLoop { inner })
+    }
+
+    /// A handle other threads can post to.
+    pub fn handle(&self) -> RunLoopHandle {
+        RunLoopHandle {
+            core: self.inner.core.clone(),
+        }
+    }
+
+    /// Invoke `task` on this RunLoop.
+    pub fn invoke(&self, task: impl FnOnce() + Send + 'static) {
+        self.invoke_with_priority(Priority::Default, task);
+    }
+
+    pub fn invoke_with_priority(&self, priority: Priority, task: impl FnOnce() + Send + 'static) {
+        self.inner.core.push(priority, Box::new(task));
+    }
+
+    /// `uv_run(loop, UV_RUN_NOWAIT)`.
+    pub fn run_once(&self) {
+        if self.inner.core.queue_pending.swap(false, Ordering::SeqCst) {
+            self.inner.core.process();
+        }
+        // Snapshot: callbacks may create or drop async handles.
+        let handles: Vec<Rc<AsyncHandle>> = {
+            let mut handles = self.inner.handles.borrow_mut();
+            handles.retain(|h| h.strong_count() > 0);
+            handles.iter().filter_map(Weak::upgrade).collect()
+        };
+        for handle in handles {
+            if handle.pending.swap(false, Ordering::SeqCst) {
+                (handle.task.borrow_mut())();
+            }
+        }
+    }
+
+    /// `run()`: `uv_run(loop, UV_RUN_DEFAULT)` until `stop()`.
+    pub fn run(&self) {
+        let core = &self.inner.core;
+        core.stopped.store(false, Ordering::SeqCst);
+        loop {
+            self.run_once();
+            if core.stopped.load(Ordering::SeqCst) {
+                return;
+            }
+            core.wait();
+        }
+    }
+
+    /// `stop()`: `invoke([&] { uv_unref(holder) })`.
+    pub fn stop(&self) {
+        self.handle().stop();
+    }
+
+    pub(crate) fn register(&self, handle: &Rc<AsyncHandle>) {
+        self.inner.handles.borrow_mut().push(Rc::downgrade(handle));
+    }
+
+    pub(crate) fn core(&self) -> Arc<Core> {
+        self.inner.core.clone()
+    }
+
+    /// `RunLoop::waitForEmpty`.
+    pub fn wait_for_empty(&self) {
+        loop {
+            if self.inner.core.remaining() == 0 {
+                return;
+            }
+            self.run_once();
+        }
+    }
+}
+
+impl Default for RunLoop {
+    fn default() -> Self {
+        RunLoop::new()
+    }
+}
+
+impl Scheduler for RunLoop {
+    fn schedule(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        self.inner.core.push(Priority::Default, task);
+    }
+
+    fn wait_for_empty(&self) {
+        RunLoop::wait_for_empty(self);
+    }
+}
+
+impl RunLoopHandle {
+    /// `RunLoop::invoke` from any thread.
+    pub fn invoke(&self, task: impl FnOnce() + Send + 'static) {
+        self.core.push(Priority::Default, Box::new(task));
+    }
+
+    pub fn invoke_with_priority(&self, priority: Priority, task: impl FnOnce() + Send + 'static) {
+        self.core.push(priority, Box::new(task));
+    }
+
+    /// `RunLoop::stop()`.
+    pub fn stop(&self) {
+        let core = Arc::downgrade(&self.core);
+        self.invoke(move || {
+            if let Some(core) = core.upgrade() {
+                core.stopped.store(true, Ordering::SeqCst);
+            }
+        });
+    }
+}
+
+impl Scheduler for RunLoopHandle {
+    fn schedule(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        self.core.push(Priority::Default, task);
+    }
+
+    /// Must be called on the loop's own thread (as in C++, where it calls
+    /// `runOnce`); elsewhere it waits for the queue to drain.
+    fn wait_for_empty(&self) {
+        if let Some(run_loop) = RunLoop::try_get() {
+            if Arc::ptr_eq(&run_loop.inner.core, &self.core) {
+                run_loop.wait_for_empty();
+                return;
+            }
+        }
+        while self.core.remaining() != 0 {
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn invoke_runs_on_run_once() {
+        let run_loop = RunLoop::new();
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = count.clone();
+        run_loop.invoke(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        run_loop.run_once();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        run_loop.run_once();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn high_priority_first() {
+        let run_loop = RunLoop::new();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (a, b) = (order.clone(), order.clone());
+        run_loop.invoke(move || a.lock().unwrap().push(1));
+        run_loop.invoke_with_priority(Priority::High, move || b.lock().unwrap().push(2));
+        run_loop.wait_for_empty();
+        assert_eq!(*order.lock().unwrap(), vec![2, 1]);
+    }
+
+    #[test]
+    fn run_until_stopped_from_another_thread() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = count.clone();
+        let thread = std::thread::spawn(move || {
+            let run_loop = RunLoop::new();
+            tx.send(run_loop.handle()).unwrap();
+            run_loop.run();
+            c.load(Ordering::SeqCst)
+        });
+        let handle = rx.recv().unwrap();
+        for _ in 0..10 {
+            let c = count.clone();
+            handle.invoke(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            });
+        }
+        handle.stop();
+        assert_eq!(thread.join().unwrap(), 10);
+    }
+}

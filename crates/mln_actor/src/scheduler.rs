@@ -1,0 +1,169 @@
+// Ports include/mln/actor/scheduler.hpp and src/mln/actor/scheduler.cpp:
+// the `Scheduler` interface, `GetCurrent`/`SetCurrent`, `GetBackground`,
+// `bindOnce`, `scheduleAndReplyValue` and `TaggedScheduler`.
+//
+// `mapbox::base::WeakPtr<Scheduler>` is `Weak<dyn Scheduler + Send + Sync>`:
+// schedulers that other threads post to live in an `Arc` (a RunLoop's
+// `RunLoopHandle`, a `ThreadPool`).
+//
+// TODO(port): `GetSequenced`, `runOnRenderThread`/`runRenderJobs`,
+// `setExceptionHandler`.
+
+use crate::local_object::LocalObject;
+use crate::thread_pool::ThreadPool;
+use mln_util::identity::SimpleIdentity;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex, Weak};
+
+pub type Task = Box<dyn FnOnce() + Send + 'static>;
+
+/// A `Scheduler` is responsible for coordinating the processing of messages
+/// by one or more actors via their mailboxes.
+pub trait Scheduler {
+    /// Enqueues a function for execution.
+    fn schedule(&self, task: Task);
+
+    /// Enqueues a function for execution in the queue of `tag` (schedulers
+    /// without tagged queues ignore the tag, as the C++ RunLoop does).
+    fn schedule_tagged(&self, _tag: SimpleIdentity, task: Task) {
+        self.schedule(task);
+    }
+
+    /// Wait until there's nothing pending or in process. Must not be called
+    /// from a task provided to this scheduler.
+    fn wait_for_empty(&self);
+
+    /// `waitForEmpty(tag)`.
+    fn wait_for_empty_tagged(&self, _tag: SimpleIdentity) {
+        self.wait_for_empty();
+    }
+}
+
+pub type SchedulerPtr = Arc<dyn Scheduler + Send + Sync>;
+pub type WeakScheduler = Weak<dyn Scheduler + Send + Sync>;
+
+thread_local! {
+    static LOCAL_SCHEDULER: RefCell<Option<SchedulerPtr>> = const { RefCell::new(None) };
+}
+
+/// `Scheduler::SetCurrent`.
+pub fn set_current(scheduler: Option<SchedulerPtr>) {
+    LOCAL_SCHEDULER.with(|s| *s.borrow_mut() = scheduler);
+}
+
+/// `Scheduler::GetCurrent(init = true)`: creates the thread's RunLoop if it
+/// has no scheduler yet.
+pub fn get_current() -> SchedulerPtr {
+    if let Some(scheduler) = try_get_current() {
+        return scheduler;
+    }
+    // `static thread_local util::RunLoop runLoop; SetCurrent(&runLoop);`
+    let _ = crate::run_loop::RunLoop::get();
+    try_get_current().expect("RunLoop sets the current scheduler")
+}
+
+/// `Scheduler::GetCurrent(false)`.
+pub fn try_get_current() -> Option<SchedulerPtr> {
+    LOCAL_SCHEDULER.with(|s| s.borrow().clone())
+}
+
+/// `Scheduler::GetBackground()`: the process-wide thread pool, created on
+/// first use and kept alive by its users.
+pub fn get_background() -> SchedulerPtr {
+    static WEAK: Mutex<Option<Weak<ThreadPool>>> = Mutex::new(None);
+    let mut weak = WEAK.lock().unwrap();
+    if let Some(scheduler) = weak.as_ref().and_then(Weak::upgrade) {
+        return scheduler;
+    }
+    let scheduler = Arc::new(ThreadPool::new());
+    *weak = Some(Arc::downgrade(&scheduler));
+    scheduler
+}
+
+/// `Scheduler::bindOnce(fn)`: a function that, when called, schedules `fn`
+/// on `scheduler` (if it is still alive). Repeated calls do nothing.
+pub fn bind_once(scheduler: &SchedulerPtr, task: Task) -> impl FnMut() + Send + 'static {
+    let scheduler = Arc::downgrade(scheduler);
+    let mut scheduled = Some(task);
+    move || {
+        let Some(task) = scheduled.take() else {
+            return; // Repeated call.
+        };
+        if let Some(scheduler) = scheduler.upgrade() {
+            scheduler.schedule(task);
+        }
+    }
+}
+
+/// `scheduleAndReplyValue(tag, task, reply)`: runs `task` on `scheduler`
+/// and then `reply(result)` on the current thread's scheduler.
+///
+/// C++ captures `reply` in the closure that travels through the pool; here
+/// it stays on the calling thread (it usually holds thread-local state such
+/// as `Rc`s, which C++ reaches through raw pointers) and the result is
+/// handed back to it.
+pub fn schedule_and_reply_value<R, TaskFn, ReplyFn>(
+    scheduler: &dyn Scheduler,
+    tag: SimpleIdentity,
+    task: TaskFn,
+    reply: ReplyFn,
+) where
+    R: Send + 'static,
+    TaskFn: FnOnce() -> R + Send + 'static,
+    ReplyFn: FnOnce(R) + 'static,
+{
+    let reply_scheduler = Arc::downgrade(&get_current());
+    let reply = LocalObject::new(RefCell::new(Some(reply)));
+    scheduler.schedule_tagged(
+        tag,
+        Box::new(move || {
+            if let Some(reply_scheduler) = reply_scheduler.upgrade() {
+                let result = task();
+                reply_scheduler.schedule_tagged(
+                    tag,
+                    Box::new(move || {
+                        if let Some(reply) = reply.take() {
+                            if let Some(reply) = reply.borrow_mut().take() {
+                                reply(result);
+                            }
+                        }
+                    }),
+                );
+            }
+        }),
+    );
+}
+
+/// `TaggedScheduler`: a scheduler plus the tag its tasks are queued under.
+#[derive(Clone)]
+pub struct TaggedScheduler {
+    pub tag: SimpleIdentity,
+    scheduler: SchedulerPtr,
+}
+
+impl TaggedScheduler {
+    pub fn new(scheduler: SchedulerPtr, tag: SimpleIdentity) -> Self {
+        TaggedScheduler { tag, scheduler }
+    }
+
+    pub fn get(&self) -> &SchedulerPtr {
+        &self.scheduler
+    }
+
+    pub fn schedule(&self, task: Task) {
+        self.scheduler.schedule_tagged(self.tag, task);
+    }
+
+    pub fn wait_for_empty(&self) {
+        self.scheduler.wait_for_empty_tagged(self.tag);
+    }
+
+    pub fn schedule_and_reply_value<R, TaskFn, ReplyFn>(&self, task: TaskFn, reply: ReplyFn)
+    where
+        R: Send + 'static,
+        TaskFn: FnOnce() -> R + Send + 'static,
+        ReplyFn: FnOnce(R) + 'static,
+    {
+        schedule_and_reply_value(&*self.scheduler, self.tag, task, reply);
+    }
+}

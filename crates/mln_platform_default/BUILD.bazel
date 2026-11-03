@@ -1,0 +1,38 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Ports platform/default (headless frontend and backend, file sources).
+rust_library(
+    name = "mln_platform_default",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/mln_actor",
+        "//crates/mln_gfx",
+        "//crates/mln_map",
+        "//crates/mln_renderer",
+        "//crates/mln_util",
+        "//crates/mln_webgpu",
+    ],
+)
+
+rust_test(
+    name = "mln_platform_default_test",
+    crate = ":mln_platform_default",
+)
+
+# The M1 background render tests through Map -> HeadlessFrontend, without the
+# render-test runner (see the file comment).
+rust_test(
+    name = "m1_background_render_test",
+    srcs = ["tests/m1_background_render_test.rs"],
+    data = ["@maplibre//metrics:render-test-files"],
+    deps = [
+        ":mln_platform_default",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_util",
+        "//vendor/pixelmatch",
+        "@next_crates//:serde_json",
+    ],
+)

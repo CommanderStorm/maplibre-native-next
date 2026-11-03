@@ -1,0 +1,21 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+# The C++ pixelmatch is header-only: compiled here directly instead of
+# depending on @maplibre//:mbgl-core.
+cc_library(
+    name = "reference",
+    srcs = ["reference.cpp"],
+    copts = ["-std=c++20"],
+    deps = ["@maplibre//vendor:maplibre-native-base"],
+)
+
+rust_test(
+    name = "pixelmatch_difftest",
+    srcs = ["pixelmatch_difftest.rs"],
+    deps = [
+        ":reference",
+        "//vendor/pixelmatch",
+        "@next_crates//:proptest",
+    ],
+)

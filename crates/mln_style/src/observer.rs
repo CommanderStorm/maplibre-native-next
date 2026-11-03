@@ -1,0 +1,41 @@
+// Ports src/mln/style/observer.hpp, src/mln/style/source_observer.hpp,
+// src/mln/style/layer_observer.hpp and src/mln/style/light_observer.hpp.
+//
+// The observer methods take `&self` (C++: non-const virtuals): the style
+// holds an `Rc<dyn Observer>`, and the map's implementation uses interior
+// mutability. `LayerObserver` / `LightObserver` are implemented by
+// `Style::Impl` itself in C++; here they are the `on_layer_changed` /
+// `on_light_changed` methods the `LayerRefMut` / `LightRefMut` guards call
+// (see layer.rs).
+
+use crate::source::Source;
+use crate::sprite::Sprite;
+use mln_util::exception::ExceptionPtr;
+
+/// `style::SourceObserver`.
+pub trait SourceObserver {
+    fn on_source_loaded(&self, _source: &dyn Source) {}
+    fn on_source_changed(&self, _source: &dyn Source) {}
+    fn on_source_error(&self, _source: &dyn Source, _error: ExceptionPtr) {}
+    fn on_source_description_changed(&self, _source: &dyn Source) {}
+}
+
+/// `style::Observer`.
+pub trait Observer: SourceObserver {
+    fn on_style_loading(&self) {}
+    fn on_style_loaded(&self) {}
+    fn on_update(&self) {}
+    fn on_style_error(&self, _error: ExceptionPtr) {}
+    fn on_resource_error(&self, _error: ExceptionPtr) {}
+
+    fn on_sprite_loaded(&self, _sprite: Option<&Sprite>) {}
+    fn on_sprite_error(&self, _sprite: Option<&Sprite>, _error: ExceptionPtr) {}
+    fn on_sprite_requested(&self, _sprite: Option<&Sprite>) {}
+}
+
+/// The default `Observer nullObserver`.
+#[derive(Default)]
+pub struct NullObserver;
+
+impl SourceObserver for NullObserver {}
+impl Observer for NullObserver {}

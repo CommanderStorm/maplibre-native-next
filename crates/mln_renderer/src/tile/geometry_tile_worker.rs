@@ -1,0 +1,529 @@
+// Ports src/mln/tile/geometry_tile_worker.hpp and
+// src/mln/tile/geometry_tile_worker.cpp.
+//
+// The worker is a pool actor (mln_actor::actor::Actor) on the map's thread
+// pool, as in C++. Its parent GeometryTile lives on the render thread and
+// is reached through a mailbox (`ActorRef<GeometryTileInner>`).
+//
+// C++ wraps each message handler in `try { ... } catch (...)` and reports
+// the exception to the tile (`GeometryTile::onError`). Rust code that would
+// throw panics (e.g. malformed MVT data in mln_tile, a failing wagyu
+// fixup), so the handlers catch the panic and report its message.
+//
+// TODO(port): glyph and image dependencies of symbol layouts
+// (onGlyphsAvailable, requestNewGlyphs, the glyph/image atlases in
+// finalizeLayout; M5), the ErrorScope for symbol errors, `setObserver`.
+
+use crate::bucket_parameters::BucketParameters;
+use crate::geometry::feature_index::FeatureIndex;
+use crate::group_by_layout::group_layers;
+use crate::layermanager;
+use crate::layout::layout::{Layout, LayoutParameters};
+use crate::render_layer::LayerRenderData;
+use crate::tile::geometry_tile::{GeometryTileInner, LayoutResult};
+use mln_actor::ActorRef;
+use mln_actor::actor::PoolActorRef;
+use mln_map_types::MapMode;
+use mln_style::expression::GlobalStateMap;
+use mln_style::layer::layer_type_info;
+use mln_style::layer_properties::LayerProperties;
+use mln_style_types::image::{ImageDependencies, ImageMap, ImagePositions};
+use mln_tile_id::OverscaledTileID;
+use mln_tile_id::geometry_tile_data::GeometryTileData;
+use mln_util::exception::{ExceptionPtr, RuntimeError};
+use mln_util::immutable::Immutable;
+use mln_util::logging::{Event, Log};
+use std::collections::{BTreeSet, HashMap};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The tile data the worker parses (C++ `std::unique_ptr<const
+/// GeometryTileData>`, shared here with the feature index instead of
+/// cloned).
+pub type SharedTileData = Arc<dyn GeometryTileData + Send + Sync>;
+
+/// `ImageVersionMap`.
+pub type ImageVersionMap = HashMap<String, u32>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum State {
+    Idle,
+    Coalescing,
+    NeedsParse,
+    NeedsSymbolLayout,
+}
+
+/// The message of a caught panic (C++: the caught exception).
+fn panic_to_exception(payload: Box<dyn std::any::Any + Send>) -> ExceptionPtr {
+    let message = if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown error".to_owned()
+    };
+    RuntimeError::ptr(message)
+}
+
+/// `GeometryTileWorker`.
+pub struct GeometryTileWorker {
+    self_ref: PoolActorRef<GeometryTileWorker>,
+    parent: ActorRef<GeometryTileInner>,
+
+    id: OverscaledTileID,
+    source_id: String,
+    obsolete: Arc<AtomicBool>,
+    mode: MapMode,
+    pixel_ratio: f32,
+    capture_rendered_features: bool,
+
+    feature_index: Option<Box<FeatureIndex>>,
+    render_data: HashMap<String, LayerRenderData>,
+
+    state: State,
+    correlation_id: u64,
+    image_correlation_id: u64,
+
+    // Outer Option indicates whether we've received it or not.
+    layers: Option<Vec<Immutable<dyn LayerProperties>>>,
+    data: Option<Option<SharedTileData>>,
+
+    // The style's global state, used by "global-state" expressions during
+    // layout.
+    global_state: Option<Arc<GlobalStateMap>>,
+
+    // TODO(port): `std::vector<std::unique_ptr<Layout>> layouts`: layouts
+    // with pending image/glyph dependencies (patterns, symbols), kept until
+    // the dependencies arrive. The layouts borrow the tile data
+    // (COORDINATION.md), so none are kept yet.
+    layouts_pending: bool,
+
+    pending_image_dependencies: ImageDependencies,
+    icon_map: ImageMap,
+    pattern_map: ImageMap,
+    version_map: ImageVersionMap,
+    available_images: Immutable<BTreeSet<String>>,
+
+    show_collision_boxes: bool,
+    first_load: bool,
+}
+
+impl GeometryTileWorker {
+    /// `GeometryTileWorker(self, parent, scheduler, id, sourceID, obsolete,
+    /// mode, pixelRatio, showCollisionBoxes, dynamicTextureAtlas, fontFaces,
+    /// captureRenderedFeatures, observer)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        self_ref: PoolActorRef<GeometryTileWorker>,
+        parent: ActorRef<GeometryTileInner>,
+        id: OverscaledTileID,
+        source_id: String,
+        obsolete: Arc<AtomicBool>,
+        mode: MapMode,
+        pixel_ratio: f32,
+        show_collision_boxes: bool,
+        capture_rendered_features: bool,
+    ) -> Self {
+        GeometryTileWorker {
+            self_ref,
+            parent,
+            id,
+            source_id,
+            obsolete,
+            mode,
+            pixel_ratio,
+            capture_rendered_features,
+            feature_index: None,
+            render_data: HashMap::new(),
+            state: State::Idle,
+            correlation_id: 0,
+            image_correlation_id: 0,
+            layers: None,
+            data: None,
+            global_state: None,
+            layouts_pending: false,
+            pending_image_dependencies: ImageDependencies::new(),
+            icon_map: ImageMap::new(),
+            pattern_map: ImageMap::new(),
+            version_map: ImageVersionMap::new(),
+            available_images: Arc::new(BTreeSet::new()),
+            show_collision_boxes,
+            first_load: true,
+        }
+    }
+
+    fn obsolete(&self) -> bool {
+        self.obsolete.load(Ordering::SeqCst)
+    }
+
+    /// Runs `f` as the C++ `try { f } catch (...) { parent.invoke(
+    /// &GeometryTile::onError, std::current_exception(), correlationID); }`.
+    fn guarded(&mut self, f: impl FnOnce(&mut Self)) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| f(self))) {
+            let error = panic_to_exception(payload);
+            let correlation_id = self.correlation_id;
+            self.parent
+                .invoke(move |tile: &GeometryTileInner| tile.on_error(error, correlation_id));
+        }
+    }
+
+    /*
+       GeometryTileWorker is a state machine. This is its transition diagram.
+       States are indicated by [state], lines are transitions triggered by
+       messages, (parentheses) are actions taken on transition.
+
+                             [Idle] <-------------------------.
+                                |                             |
+            set{Data,Layers}, symbolDependenciesChanged,      |
+                        setShowCollisionBoxes                 |
+                                |                             |
+       (do parse and/or symbol layout; self-send "coalesced") |
+                                v                             |
+                          [Coalescing] --- coalesced ---------.
+                             |   |
+                 .-----------.   .---------------------.
+                 |                                     |
+       .--- set{Data,Layers}                setShowCollisionBoxes,
+       |         |                         symbolDependenciesChanged --.
+       |         |                                     |               |
+       |         v                                     v               |
+       .-- [NeedsParse] <-- set{Data,Layers} -- [NeedsSymbolLayout] ---.
+                 |                                     |
+             coalesced                             coalesced
+                 |                                     |
+                 v                                     v
+       (do parse or symbol layout; self-send "coalesced"; goto [coalescing])
+
+       See the C++ file for the full description.
+    */
+
+    /// `setData(data, availableImages, correlationID)`.
+    pub fn set_data(
+        &mut self,
+        data: Option<SharedTileData>,
+        available_images: Immutable<BTreeSet<String>>,
+        correlation_id: u64,
+    ) {
+        self.guarded(|this| {
+            this.data = Some(data);
+            this.correlation_id = correlation_id;
+            this.available_images = available_images;
+
+            match this.state {
+                State::Idle => {
+                    this.parse();
+                    this.coalesce();
+                }
+                State::Coalescing | State::NeedsParse | State::NeedsSymbolLayout => {
+                    this.state = State::NeedsParse;
+                }
+            }
+        });
+    }
+
+    /// `setLayers(layers, globalState, availableImages, correlationID)`.
+    pub fn set_layers(
+        &mut self,
+        layers: Vec<Immutable<dyn LayerProperties>>,
+        global_state: Option<Arc<GlobalStateMap>>,
+        available_images: Immutable<BTreeSet<String>>,
+        correlation_id: u64,
+    ) {
+        self.guarded(|this| {
+            this.layers = Some(layers);
+            this.global_state = global_state;
+            this.correlation_id = correlation_id;
+            this.available_images = available_images;
+
+            match this.state {
+                State::Idle => {
+                    this.parse();
+                    this.coalesce();
+                }
+                State::Coalescing | State::NeedsSymbolLayout => {
+                    this.state = State::NeedsParse;
+                }
+                State::NeedsParse => {}
+            }
+        });
+    }
+
+    /// `reset(correlationID)`.
+    pub fn reset(&mut self, correlation_id: u64) {
+        self.layers = None;
+        self.data = None;
+        self.correlation_id = correlation_id;
+
+        match self.state {
+            State::Idle | State::NeedsParse => {}
+            State::Coalescing | State::NeedsSymbolLayout => {
+                self.state = State::NeedsParse;
+            }
+        }
+    }
+
+    /// `setShowCollisionBoxes(showCollisionBoxes, correlationID)`.
+    pub fn set_show_collision_boxes(&mut self, show_collision_boxes: bool, correlation_id: u64) {
+        self.guarded(|this| {
+            this.show_collision_boxes = show_collision_boxes;
+            this.correlation_id = correlation_id;
+
+            match this.state {
+                State::Idle => {
+                    if !this.has_pending_parse_result() {
+                        // Trigger parse if nothing is in flight, otherwise
+                        // symbol layout will automatically pick up the change
+                        this.parse();
+                        this.coalesce();
+                    }
+                }
+                State::Coalescing => {
+                    this.state = State::NeedsSymbolLayout;
+                }
+                State::NeedsSymbolLayout | State::NeedsParse => {}
+            }
+        });
+    }
+
+    /// `symbolDependenciesChanged()`.
+    fn symbol_dependencies_changed(&mut self) {
+        self.guarded(|this| match this.state {
+            State::Idle => {
+                if this.layouts_pending {
+                    // Layouts are created only by parsing and the parse
+                    // result can only be cleared by performLayout, which
+                    // also clears the layouts.
+                    debug_assert!(this.has_pending_parse_result());
+                    this.finalize_layout();
+                    this.coalesce();
+                }
+            }
+            State::Coalescing => {
+                if this.layouts_pending {
+                    this.state = State::NeedsSymbolLayout;
+                }
+            }
+            State::NeedsSymbolLayout | State::NeedsParse => {}
+        });
+    }
+
+    /// `coalesced()`.
+    fn coalesced(&mut self) {
+        self.guarded(|this| match this.state {
+            State::Idle => {
+                debug_assert!(false);
+            }
+            State::Coalescing => {
+                this.state = State::Idle;
+            }
+            State::NeedsParse => {
+                this.parse();
+                this.coalesce();
+            }
+            State::NeedsSymbolLayout => {
+                // We may have entered NeedsSymbolLayout while coalescing
+                // after a performLayout. In that case, we need to start over
+                // with parsing in order to do another layout.
+                if this.has_pending_parse_result() {
+                    this.finalize_layout();
+                } else {
+                    this.parse();
+                }
+                this.coalesce();
+            }
+        });
+    }
+
+    /// `coalesce()`.
+    fn coalesce(&mut self) {
+        self.state = State::Coalescing;
+        self.self_ref.invoke(|worker: &mut GeometryTileWorker| worker.coalesced());
+    }
+
+    /// `onImagesAvailable(iconMap, patternMap, versionMap, imageCorrelationID)`.
+    pub fn on_images_available(
+        &mut self,
+        new_icon_map: ImageMap,
+        new_pattern_map: ImageMap,
+        new_version_map: ImageVersionMap,
+        image_correlation_id: u64,
+    ) {
+        if self.image_correlation_id != image_correlation_id {
+            return; // Ignore outdated image request replies.
+        }
+        self.icon_map = new_icon_map;
+        self.pattern_map = new_pattern_map;
+        self.version_map = new_version_map;
+        self.pending_image_dependencies.clear();
+        self.symbol_dependencies_changed();
+    }
+
+    /// `requestNewImages(imageDependencies)`.
+    fn request_new_images(&mut self, image_dependencies: ImageDependencies) {
+        self.pending_image_dependencies = image_dependencies;
+
+        if !self.pending_image_dependencies.is_empty() {
+            self.image_correlation_id += 1;
+            // TODO(port): parent.invoke(&GeometryTile::getImages, {pending,
+            // imageCorrelationID}) once the ImageManager hands out images
+            // (patterns).
+            Log::error(
+                Event::General,
+                "TODO(port): GeometryTile::getImages (image dependencies of patterns)",
+            );
+        }
+    }
+
+    /// `parse()`.
+    fn parse(&mut self) {
+        let (Some(data), Some(layers)) = (&self.data, &self.layers) else {
+            return;
+        };
+        let data = data.clone();
+        let layers = layers.clone();
+
+        self.render_data.clear();
+        self.layouts_pending = false;
+
+        let mut feature_index = Box::new(FeatureIndex::new(data.clone()));
+
+        // Avoid small reallocations for populated cells. If we had a total
+        // feature count, this could be based on that and the cell count.
+        const ESTIMATED_ELEMENTS_PER_CELL: usize = 8;
+        feature_index.reserve(ESTIMATED_ELEMENTS_PER_CELL);
+        self.feature_index = Some(feature_index);
+
+        // TODO(port): GlyphDependencies glyphDependencies (symbols, M5).
+        let mut image_dependencies = ImageDependencies::new();
+
+        // Create render layers and group by layout
+        let group_map = group_layers(&layers);
+
+        for (_, group) in &group_map {
+            if self.obsolete() {
+                return;
+            }
+
+            let Some(data) = &data else {
+                continue; // Tile has no data.
+            };
+
+            let leader_impl = &group[0].base_impl;
+            let parameters = BucketParameters {
+                tile_id: self.id,
+                mode: self.mode,
+                pixel_ratio: self.pixel_ratio,
+                layer_type: leader_impl.get_type_info(),
+                global_state: self.global_state.clone(),
+                retain_features_by_id: self.capture_rendered_features,
+            };
+
+            let Some(geometry_layer) = data.get_layer(&leader_impl.source_layer) else {
+                continue;
+            };
+
+            let layer_ids: Vec<String> = group.iter().map(|layer| layer.base_impl.id.clone()).collect();
+
+            let feature_index = self.feature_index.as_mut().expect("feature index");
+            feature_index.set_bucket_layer_ids(&leader_impl.id, &layer_ids);
+
+            // Symbol layers and layers that support pattern properties have
+            // an extra step at layout time to figure out what images/glyphs
+            // are needed to render the layer. They use the intermediate
+            // Layout data structure to accomplish this, and either
+            // immediately create a bucket if no images/glyphs are used, or
+            // the Layout is stored until the images/glyphs are available to
+            // add the features to the buckets.
+            if leader_impl.get_type_info().layout == layer_type_info::Layout::Required {
+                let layout = layermanager::create_layout(
+                    LayoutParameters {
+                        bucket_parameters: &parameters,
+                        image_dependencies: &mut image_dependencies,
+                        available_images: &self.available_images,
+                    },
+                    geometry_layer,
+                    group,
+                );
+                let Some(mut layout) = layout else {
+                    continue;
+                };
+                if layout.has_dependencies() {
+                    // TODO(port): layouts.push_back(std::move(layout)) (see
+                    // the `layouts_pending` member).
+                    self.layouts_pending = true;
+                    Log::error(
+                        Event::General,
+                        format!(
+                            "TODO(port): deferred layout for layer '{}' (image/glyph dependencies)",
+                            leader_impl.id
+                        ),
+                    );
+                } else {
+                    layout.create_bucket(
+                        &ImagePositions::new(),
+                        feature_index,
+                        &mut self.render_data,
+                        self.first_load,
+                        self.show_collision_boxes,
+                        &self.id.canonical,
+                    );
+                }
+            } else {
+                // TODO(port): the createBucket path for layout-free layer
+                // types (heatmap; none in M3): filter each feature, then
+                // bucket->addFeature and featureIndex->insert.
+                Log::error(
+                    Event::General,
+                    format!(
+                        "TODO(port): bucket for layer type '{}'",
+                        leader_impl.get_type_info().type_
+                    ),
+                );
+            }
+        }
+
+        self.request_new_images(image_dependencies);
+
+        self.finalize_layout();
+    }
+
+    fn has_pending_dependencies(&self) -> bool {
+        // TODO(port): pendingGlyphDependencies (symbols, M5).
+        !self.pending_image_dependencies.is_empty()
+    }
+
+    fn has_pending_parse_result(&self) -> bool {
+        self.feature_index.is_some()
+    }
+
+    /// `finalizeLayout()`.
+    fn finalize_layout(&mut self) {
+        if self.data.is_none()
+            || self.layers.is_none()
+            || !self.has_pending_parse_result()
+            || self.has_pending_dependencies()
+        {
+            return;
+        }
+
+        // TODO(port): imageAtlas = dynamicTextureAtlas->uploadIconsAndPatterns,
+        // glyphAtlas, layout->prepareSymbols and createBucket for the
+        // deferred layouts (patterns and symbols).
+        self.layouts_pending = false;
+
+        self.first_load = false;
+
+        let layout_result = LayoutResult::new(
+            std::mem::take(&mut self.render_data),
+            Arc::from(self.feature_index.take().expect("feature index")),
+        );
+        let correlation_id = self.correlation_id;
+        self.parent
+            .invoke(move |tile: &GeometryTileInner| tile.on_layout(layout_result, correlation_id));
+    }
+
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+}

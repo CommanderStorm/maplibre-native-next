@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Ports src/mln/style/expression + include/mln/style/expression (minus
+# format_section_override, which lives with the renderer; see PLAN.md).
+rust_library(
+    name = "mln_expression",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/mln_conversion",
+        "//crates/mln_math",
+        "//crates/mln_style_types",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/nunicode",
+        "//vendor/rapidjson",
+        "@next_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "mln_expression_test",
+    crate = ":mln_expression",
+)

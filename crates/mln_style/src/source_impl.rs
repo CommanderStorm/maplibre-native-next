@@ -1,0 +1,117 @@
+// Ports src/mln/style/source_impl.hpp and src/mln/style/source_impl.cpp.
+//
+// C++ `Source::Impl` is an abstract class with data members; the data is
+// `ImplBase` and the virtual interface is the `Impl` trait (as for
+// `Layer::Impl`). `dyn Impl` derefs to its `ImplBase`.
+
+use crate::util::AsAny;
+use mln_style_types::SourceType;
+use mln_util::chrono::Duration;
+use mln_util::constants;
+use mln_util::immutable::Immutable;
+use mln_util::logging::{Event, Log};
+use std::sync::Arc;
+
+/// `WarnIfOverscaleFactorCapsPrefetchDelta`.
+fn warn_if_overscale_factor_caps_prefetch_delta(overscale: &Option<u8>, prefetch: &Option<u8>) {
+    let prefetch_delta = std::cmp::max(constants::DEFAULT_PREFETCH_ZOOM_DELTA, prefetch.unwrap_or(0));
+    if let Some(overscale) = overscale {
+        if *overscale < prefetch_delta {
+            Log::warning(
+                Event::Style,
+                format!(
+                    "Parent tile overscale factor will cap prefetch delta to {}",
+                    i32::from(*overscale)
+                ),
+            );
+        }
+    }
+}
+
+/// The data members of `Source::Impl`.
+#[derive(Clone, Debug)]
+pub struct ImplBase {
+    pub type_: SourceType,
+    pub id: String,
+    pub prefetch_zoom_delta: Option<u8>,
+    pub max_overscale_factor: Option<u8>,
+    pub minimum_tile_update_interval: Duration,
+    pub volatile_flag: bool,
+}
+
+impl ImplBase {
+    /// `Impl(SourceType, std::string)`.
+    pub fn new(type_: SourceType, id: String) -> Self {
+        ImplBase {
+            type_,
+            id,
+            prefetch_zoom_delta: None,
+            max_overscale_factor: None,
+            minimum_tile_update_interval: Duration::zero(),
+            volatile_flag: false,
+        }
+    }
+
+    pub fn set_prefetch_zoom_delta(&mut self, delta: Option<u8>) {
+        self.prefetch_zoom_delta = delta;
+        warn_if_overscale_factor_caps_prefetch_delta(&self.max_overscale_factor, &self.prefetch_zoom_delta);
+    }
+
+    pub fn get_prefetch_zoom_delta(&self) -> Option<u8> {
+        self.prefetch_zoom_delta
+    }
+
+    pub fn set_minimum_tile_update_interval(&mut self, interval: Duration) {
+        self.minimum_tile_update_interval = interval;
+    }
+
+    pub fn get_minimum_tile_update_interval(&self) -> Duration {
+        self.minimum_tile_update_interval
+    }
+
+    pub fn set_max_overscale_factor_for_parent_tiles(&mut self, overscale_factor: Option<u8>) {
+        self.max_overscale_factor = overscale_factor;
+        warn_if_overscale_factor_caps_prefetch_delta(&self.max_overscale_factor, &self.prefetch_zoom_delta);
+    }
+
+    pub fn get_max_overscale_factor_for_parent_tiles(&self) -> Option<u8> {
+        self.max_overscale_factor
+    }
+
+    pub fn is_volatile(&self) -> bool {
+        self.volatile_flag
+    }
+
+    pub fn set_volatile(&mut self, set: bool) {
+        self.volatile_flag = set;
+    }
+}
+
+/// The virtual interface of `Source::Impl`.
+pub trait Impl: AsAny + std::fmt::Debug {
+    fn base(&self) -> &ImplBase;
+    fn base_mut(&mut self) -> &mut ImplBase;
+
+    fn get_attribution(&self) -> Option<String>;
+
+    fn is_update_synchronous(&self) -> bool {
+        false
+    }
+}
+
+impl std::ops::Deref for dyn Impl {
+    type Target = ImplBase;
+    fn deref(&self) -> &ImplBase {
+        self.base()
+    }
+}
+
+/// `staticImmutableCast<T>(impl)` for source impls. C++ static_casts; this
+/// panics on a type mismatch.
+pub fn static_immutable_cast<T: Impl>(impl_: &Immutable<dyn Impl>) -> Arc<T> {
+    impl_
+        .clone()
+        .into_any_arc()
+        .downcast::<T>()
+        .unwrap_or_else(|_| panic!("source impl type mismatch"))
+}

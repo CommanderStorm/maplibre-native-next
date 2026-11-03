@@ -1,0 +1,60 @@
+// Ports src/mln/style/layers/background_layer_impl.hpp +
+// src/mln/style/layers/background_layer_impl.cpp. `staticTypeInfo()` and
+// `stringifyLayout` are generated in C++ (layer.cpp.ejs); the first is in
+// background_layer.rs.
+
+use crate::layer::{self, ImplBase, LayerTypeInfo};
+use crate::layers::background_layer_properties::BackgroundPaintProperties;
+
+/// `BackgroundLayer::Impl`.
+#[derive(Clone, Debug)]
+pub struct Impl {
+    pub base: ImplBase,
+    pub paint: BackgroundPaintProperties::Transitionable,
+}
+
+impl Impl {
+    /// `using Layer::Impl::Impl;` (`Impl(std::string layerID, std::string sourceID)`).
+    pub fn new(layer_id: String, source_id: String) -> Self {
+        Impl {
+            base: ImplBase::new(layer_id, source_id),
+            paint: BackgroundPaintProperties::Transitionable::default(),
+        }
+    }
+}
+
+/// `BackgroundLayer::Impl : public Layer::Impl`: the base members read as
+/// `impl_.id`, `impl_.visibility`, ... as in C++.
+impl std::ops::Deref for Impl {
+    type Target = ImplBase;
+    fn deref(&self) -> &ImplBase {
+        &self.base
+    }
+}
+
+impl std::ops::DerefMut for Impl {
+    fn deref_mut(&mut self) -> &mut ImplBase {
+        &mut self.base
+    }
+}
+
+impl layer::Impl for Impl {
+    fn base(&self) -> &ImplBase {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut ImplBase {
+        &mut self.base
+    }
+
+    fn has_layout_difference(&self, _other: &dyn layer::Impl) -> bool {
+        false
+    }
+
+    fn stringify_layout(&self, _writer: &mut String) {
+    }
+
+    fn get_type_info(&self) -> &'static LayerTypeInfo {
+        Impl::static_type_info()
+    }
+}

@@ -1,0 +1,130 @@
+// Ports include/mln/gfx/color_mode.hpp
+
+use crate::types::{ColorBlendEquationType, ColorBlendFactorType};
+use mln_util::Color;
+
+/// `ColorMode::LinearBlend<E>`: the equation is the variant of
+/// `BlendFunction`; the factors are data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearBlend {
+    pub src_factor: ColorBlendFactorType,
+    pub dst_factor: ColorBlendFactorType,
+}
+
+/// `ColorMode::BlendFunction = variant<Replace, Add, Subtract, ReverseSubtract>`
+/// (same variant order, so `which()` is the discriminant).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BlendFunction {
+    Replace,
+    Add(LinearBlend),
+    Subtract(LinearBlend),
+    ReverseSubtract(LinearBlend),
+}
+
+impl BlendFunction {
+    /// `variant::which()`
+    pub fn which(&self) -> usize {
+        match self {
+            BlendFunction::Replace => 0,
+            BlendFunction::Add(_) => 1,
+            BlendFunction::Subtract(_) => 2,
+            BlendFunction::ReverseSubtract(_) => 3,
+        }
+    }
+
+    /// The static `equation` member of the active alternative.
+    pub fn equation(&self) -> ColorBlendEquationType {
+        match self {
+            BlendFunction::Replace | BlendFunction::Add(_) => ColorBlendEquationType::Add,
+            BlendFunction::Subtract(_) => ColorBlendEquationType::Subtract,
+            BlendFunction::ReverseSubtract(_) => ColorBlendEquationType::ReverseSubtract,
+        }
+    }
+
+    /// `srcFactor` of the active alternative (`Replace`: One).
+    pub fn src_factor(&self) -> ColorBlendFactorType {
+        match self {
+            BlendFunction::Replace => ColorBlendFactorType::One,
+            BlendFunction::Add(b) | BlendFunction::Subtract(b) | BlendFunction::ReverseSubtract(b) => b.src_factor,
+        }
+    }
+
+    /// `dstFactor` of the active alternative (`Replace`: Zero).
+    pub fn dst_factor(&self) -> ColorBlendFactorType {
+        match self {
+            BlendFunction::Replace => ColorBlendFactorType::Zero,
+            BlendFunction::Add(b) | BlendFunction::Subtract(b) | BlendFunction::ReverseSubtract(b) => b.dst_factor,
+        }
+    }
+}
+
+/// `ColorMode::Mask`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mask {
+    pub r: bool,
+    pub g: bool,
+    pub b: bool,
+    pub a: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorMode {
+    pub blend_function: BlendFunction,
+    pub blend_color: Color,
+    pub mask: Mask,
+}
+
+impl ColorMode {
+    const ALL: Mask = Mask { r: true, g: true, b: true, a: true };
+
+    pub fn disabled() -> ColorMode {
+        ColorMode {
+            blend_function: BlendFunction::Replace,
+            blend_color: Color::default(),
+            mask: Mask { r: false, g: false, b: false, a: false },
+        }
+    }
+
+    pub fn unblended() -> ColorMode {
+        ColorMode { blend_function: BlendFunction::Replace, blend_color: Color::default(), mask: Self::ALL }
+    }
+
+    pub fn alpha_blended() -> ColorMode {
+        ColorMode {
+            blend_function: BlendFunction::Add(LinearBlend {
+                src_factor: ColorBlendFactorType::One,
+                dst_factor: ColorBlendFactorType::OneMinusSrcAlpha,
+            }),
+            blend_color: Color::default(),
+            mask: Self::ALL,
+        }
+    }
+
+    pub fn additive() -> ColorMode {
+        ColorMode {
+            blend_function: BlendFunction::Add(LinearBlend {
+                src_factor: ColorBlendFactorType::One,
+                dst_factor: ColorBlendFactorType::One,
+            }),
+            blend_color: Color::default(),
+            mask: Self::ALL,
+        }
+    }
+
+    /// `ColorMode::hash()`.
+    // TODO(port): C++ uses util::hash (boost hash_combine); the value is only
+    // used as a pipeline cache key, so any stable combination works.
+    pub fn hash(&self) -> u64 {
+        crate::util_hash::hash(&[
+            self.blend_function.which() as u64,
+            u64::from(self.blend_color.r.to_bits()),
+            u64::from(self.blend_color.g.to_bits()),
+            u64::from(self.blend_color.b.to_bits()),
+            u64::from(self.blend_color.a.to_bits()),
+            u64::from(self.mask.r),
+            u64::from(self.mask.g),
+            u64::from(self.mask.b),
+            u64::from(self.mask.a),
+        ])
+    }
+}

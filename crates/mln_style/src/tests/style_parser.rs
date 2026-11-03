@@ -1,0 +1,292 @@
+// Ports test/style/style_parser.test.cpp.
+
+use super::util::FixtureLog;
+use crate::parser::Parser;
+use mln_util::enum_::Enum;
+use mln_util::logging::{Event, EventSeverity, Log};
+use crate::layer::FontStack;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+fn fixtures_dir() -> PathBuf {
+    let base = std::env::var("RUNFILES_DIR")
+        .or_else(|_| std::env::var("TEST_SRCDIR"))
+        .expect("RUNFILES_DIR or TEST_SRCDIR");
+    PathBuf::from(base).join("maplibre+/test/fixtures/style_parser")
+}
+
+/// TEST_P(StyleParserTest, ParseStyle) fixtures that need code the port does
+/// not have yet, with the reason.
+// TODO(port): enable these with source conversion (style/conversion/source.cpp
+// and the source types).
+const TODO_FIXTURES: &[(&str, &str)] = &[
+    ("geojson-invalid-data", "expects the GeoJSON source conversion's error"),
+    ("geojson-missing-data", "expects the GeoJSON source conversion's error"),
+    ("image-coordinates", "expects the image source conversion's error"),
+    ("image-url", "expects the image source conversion's error"),
+];
+
+/// Until sources are ported, the parser logs (and skips) every source with
+/// this warning, which no fixture expects. The other messages, from the
+/// layers, are checked as in C++.
+// TODO(port): drop with source conversion.
+fn is_unported_source_warning(message: &super::util::LogMessage) -> bool {
+    message.severity == EventSeverity::Warning
+        && message.event == Event::ParseStyle
+        && message.msg.starts_with("source type '")
+        && message.msg.ends_with("' is not ported yet")
+}
+
+/// `populateNames`: every `<name>.info.json` in the fixture directory.
+fn fixture_names() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(fixtures_dir())
+        .unwrap()
+        .filter_map(|entry| {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            name.strip_suffix(".info.json").map(str::to_owned)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// TEST_P(StyleParserTest, ParseStyle). Returns the failure, if any.
+fn parse_style_fixture(name: &str) -> Result<(), String> {
+    let base = fixtures_dir().join(name);
+    let log = FixtureLog::new();
+
+    let info_doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(base.with_extension("info.json")).unwrap()).unwrap();
+    let style_json = std::fs::read_to_string(base.with_extension("style.json")).unwrap();
+
+    let mut parser = Parser::default();
+    if let Err(error) = parser.parse(&style_json) {
+        Log::error(Event::ParseStyle, format!("Failed to parse style: {error}"));
+    }
+
+    for (property_name, value) in info_doc.as_object().unwrap() {
+        if let Some(js_log) = value.get("log") {
+            for js_entry in js_log.as_array().unwrap() {
+                let js_entry = js_entry.as_array().unwrap();
+                let count = js_entry[0].as_u64().unwrap() as usize;
+                let severity = EventSeverity::to_enum(js_entry[1].as_str().unwrap()).unwrap();
+                let event = Event::to_enum(js_entry[2].as_str().unwrap()).unwrap();
+                let msg = js_entry[3].as_str().unwrap();
+                let observed = log.count(severity, event, msg);
+                if count != observed {
+                    return Err(format!("{name}/{property_name}: Message: {msg}: expected {count}, got {observed}"));
+                }
+            }
+        }
+        let unchecked: Vec<_> = log.unchecked().into_iter().filter(|m| !is_unported_source_warning(m)).collect();
+        if !unchecked.is_empty() {
+            return Err(format!("Unchecked Log Messages ({name}/{property_name}): {unchecked:?}"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn parse_style() {
+    let names = fixture_names();
+    assert!(names.len() > 0);
+    let mut failures = Vec::new();
+    let mut passed = 0;
+    for name in &names {
+        if TODO_FIXTURES.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        match parse_style_fixture(name) {
+            Ok(()) => passed += 1,
+            Err(failure) => failures.push(failure),
+        }
+    }
+    eprintln!("ParseStyle: {passed} fixtures pass, {} skipped (TODO)", TODO_FIXTURES.len());
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn sprite_as_string() {
+    // TEST(StyleParser, SpriteAsString)
+    let mut parser = Parser::default();
+    parser
+        .parse(
+            r#"{
+        "version": 8,
+        "sprite": "https://example.com/default/markers"
+    }"#,
+        )
+        .unwrap();
+    let result = &parser.sprites;
+    assert_eq!(1, result.len());
+    assert_eq!("https://example.com/default/markers", result[0].sprite_url);
+    assert_eq!("default", result[0].id);
+}
+
+#[test]
+fn sprite_as_array_empty() {
+    // TEST(StyleParser, SpriteAsArrayEmpty)
+    let mut parser = Parser::default();
+    parser
+        .parse(
+            r#"{
+        "version": 8,
+        "sprite": []
+    }"#,
+        )
+        .unwrap();
+    assert_eq!(0, parser.sprites.len());
+}
+
+#[test]
+fn sprite_as_array_single() {
+    // TEST(StyleParser, SpriteAsArraySingle)
+    let mut parser = Parser::default();
+    parser
+        .parse(
+            r#"{
+        "version": 8,
+        "sprite": [{
+            "id": "default",
+            "url": "https://example.com/default/markers"
+        }]
+    }"#,
+        )
+        .unwrap();
+    let result = &parser.sprites;
+    assert_eq!(1, result.len());
+    assert_eq!("https://example.com/default/markers", result[0].sprite_url);
+    assert_eq!("default", result[0].id);
+}
+
+#[test]
+fn sprite_as_array_multiple() {
+    // TEST(StyleParser, SpriteAsArrayMultiple)
+    let mut parser = Parser::default();
+    parser
+        .parse(
+            r#"{
+        "version": 8,
+        "sprite": [{
+            "id": "default",
+            "url": "https://example.com/default/markers"
+        },{
+            "id": "hiking",
+            "url": "https://example.com/hiking/markers"
+        }]
+    }"#,
+        )
+        .unwrap();
+    let result = &parser.sprites;
+    assert_eq!(2, result.len());
+    assert_eq!("https://example.com/default/markers", result[0].sprite_url);
+    assert_eq!("default", result[0].id);
+    assert_eq!("https://example.com/hiking/markers", result[1].sprite_url);
+    assert_eq!("hiking", result[1].id);
+}
+
+#[test]
+fn font_stacks() {
+    // TEST(StyleParser, FontStacks)
+    let mut parser = Parser::default();
+    let _ = parser.parse(&std::fs::read_to_string(fixtures_dir().join("font_stacks.json")).unwrap());
+    let expected: BTreeSet<FontStack> = [vec!["a"], vec!["a", "b"], vec!["a", "b", "c"]]
+        .into_iter()
+        .map(|v| v.into_iter().map(str::to_owned).collect())
+        .collect();
+    let result = parser.font_stacks();
+    assert_eq!(expected, result);
+}
+
+fn symbol_font_stacks(layout: &str) -> BTreeSet<FontStack> {
+    let mut parser = Parser::default();
+    let _ = parser.parse(&format!(
+        r#"{{
+        "version": 8,
+        "layers": [{{
+            "id": "symbol",
+            "type": "symbol",
+            "source": "vector",
+            "layout": {layout}
+        }}]
+    }}"#
+    ));
+    parser.font_stacks()
+}
+
+fn arial_helvetica() -> BTreeSet<FontStack> {
+    [vec!["Arial".to_owned()], vec!["Helvetica".to_owned()]].into_iter().collect()
+}
+
+#[test]
+fn font_stacks_no_text_field() {
+    // TEST(StyleParser, FontStacksNoTextField)
+    let result = symbol_font_stacks(r#"{"text-font": ["a"]}"#);
+    assert_eq!(0, result.len());
+}
+
+#[test]
+fn font_stacks_case_expression() {
+    // TEST(StyleParser, FontStacksCaseExpression)
+    let result = symbol_font_stacks(
+        r#"{
+                "text-field": "a",
+                "text-font": ["case", ["==", "a", ["string", ["get", "text-font"]]], ["literal", ["Arial"]], ["literal", ["Helvetica"]]]
+            }"#,
+    );
+    assert_eq!(arial_helvetica(), result);
+}
+
+#[test]
+fn font_stacks_match_expression() {
+    // TEST(StyleParser, FontStacksMatchExpression)
+    let result = symbol_font_stacks(
+        r#"{
+                "text-field": "a",
+                "text-font": ["match", ["get", "text-font"], "a", ["literal", ["Arial"]], ["literal", ["Helvetica"]]]
+            }"#,
+    );
+    assert_eq!(arial_helvetica(), result);
+}
+
+#[test]
+fn font_stacks_step_expression() {
+    // TEST(StyleParser, FontStacksStepExpression)
+    let result = symbol_font_stacks(
+        r#"{
+                "text-field": "a",
+                "text-font": ["array", "string", ["step", ["get", "text-font"], ["literal", ["Arial"]], 0, ["literal", ["Helvetica"]]]]
+            }"#,
+    );
+    assert_eq!(arial_helvetica(), result);
+}
+
+#[test]
+fn font_stacks_get_expression() {
+    // TEST(StyleParser, FontStacksGetExpression)
+    // Invalid style, but not currently validated.
+    let result = symbol_font_stacks(
+        r#"{
+                "text-field": "a",
+                "text-font": ["array", "string", ["get", "text-font"]]
+            }"#,
+    );
+    assert_eq!(0, result.len());
+}
+
+#[test]
+fn zoom_curve() {
+    // TEST(StyleParser, ZoomCurve)
+    use crate::expression::dsl::{interpolate, linear, literal, zoom};
+    use crate::expression::find_zoom_curve_checked;
+    use mln_expression::value::Value;
+
+    let zoom_interp = || interpolate(linear(), zoom(), vec![(0.0, literal(Value::Number(0.0))), (0.0, literal(Value::Number(0.0)))]);
+
+    let expr1 = interpolate(linear(), literal(Value::Number(0.0)), vec![(0.0, zoom_interp()), (0.0, zoom_interp())]);
+    assert!(find_zoom_curve_checked(expr1.as_ref()).is_null());
+
+    let expr2 = interpolate(linear(), zoom(), vec![(0.0, literal(Value::Number(0.0))), (0.0, zoom_interp())]);
+    assert!(find_zoom_curve_checked(expr2.as_ref()).is_null());
+}
+

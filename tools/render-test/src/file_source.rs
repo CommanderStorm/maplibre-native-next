@@ -1,0 +1,181 @@
+// Ports render-test/file_source.hpp and render-test/file_source.cpp
+// (`ProxyFileSource`), plus `TestRunner::registerProxyFileSource`
+// (render-test/runner.cpp).
+
+use maplibre_native_base::Value;
+use mln_storage::file_source::READ_ONLY_MODE_KEY;
+use mln_storage::{
+    AsyncRequest, Callback, ClientOptions, FileSource, FileSourceManager, FileSourceType, Kind, LoadingMethod,
+    Resource, ResourceOptions, Response,
+};
+use mln_util::logging::{Event, Log};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Once};
+
+static REQUEST_COUNT: AtomicUsize = AtomicUsize::new(0);
+static TRANSFERRED_SIZE: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+static OFFLINE: AtomicBool = AtomicBool::new(true);
+
+/// `ProxyFileSource`: loads everything cache-only from the database while
+/// offline and maps the test URLs (`local://`, `http://localhost:2900/`) to
+/// the `http://` URLs the cache stores.
+pub struct ProxyFileSource {
+    default_resource_loader: Arc<dyn FileSource>,
+    resource_options: Mutex<ResourceOptions>,
+    client_options: Mutex<ClientOptions>,
+}
+
+impl ProxyFileSource {
+    /// `ProxyFileSource(std::shared_ptr<FileSource>, const ResourceOptions&, const ClientOptions&)`.
+    pub fn new(
+        default_resource_loader: Arc<dyn FileSource>,
+        resource_options: &ResourceOptions,
+        client_options: &ClientOptions,
+    ) -> Self {
+        if OFFLINE.load(Ordering::SeqCst) {
+            if let Some(dbfs) =
+                FileSourceManager::get().get_file_source(FileSourceType::Database, resource_options, client_options)
+            {
+                dbfs.set_property(READ_ONLY_MODE_KEY, &Value::Bool(true));
+            }
+        }
+        ProxyFileSource {
+            default_resource_loader,
+            resource_options: Mutex::new(resource_options.clone()),
+            client_options: Mutex::new(client_options.clone()),
+        }
+    }
+
+    /// Flag to change the networking mode of the file source.
+    pub fn set_offline(status: bool) {
+        OFFLINE.store(status, Ordering::SeqCst);
+    }
+
+    /// Starts/stops metrics tracking.
+    pub fn set_tracking_active(active: bool) {
+        ACTIVE.store(active, Ordering::SeqCst);
+        REQUEST_COUNT.store(0, Ordering::SeqCst);
+        TRANSFERRED_SIZE.store(0, Ordering::SeqCst);
+    }
+
+    /// Returns metrics tracking status.
+    pub fn is_tracking_active() -> bool {
+        ACTIVE.load(Ordering::SeqCst)
+    }
+
+    /// Returns the total amount of requests.
+    pub fn get_request_count() -> usize {
+        REQUEST_COUNT.load(Ordering::SeqCst)
+    }
+
+    /// Returns the size of transferred data (in bytes).
+    pub fn get_transferred_size() -> usize {
+        TRANSFERRED_SIZE.load(Ordering::SeqCst)
+    }
+}
+
+/// `str.compare(0, prefix.size(), prefix) == 0` + `replace(0, n, "http://")`.
+fn replace_prefix(s: &mut String, prefix: &str) -> bool {
+    if s.starts_with(prefix) {
+        s.replace_range(..prefix.len(), "http://");
+        true
+    } else {
+        false
+    }
+}
+
+impl FileSource for ProxyFileSource {
+    fn request(&self, resource: &Resource, mut callback: Callback) -> Box<dyn AsyncRequest> {
+        let mut transformed = resource.clone();
+
+        // If offline, force always loading the resource from the cache so we
+        // don't make any network request.
+        if OFFLINE.load(Ordering::SeqCst) {
+            transformed.loading_method = LoadingMethod::CacheOnly;
+        }
+
+        // This is needed for compatibility with the style tests that are
+        // using local:// instead of http:// which is the schema we support
+        // for cached files.
+        if replace_prefix(&mut transformed.url, "local://") && transformed.kind == Kind::Tile {
+            if let Some(tile_data) = &mut transformed.tile_data {
+                // C++ replaces the first 8 characters unconditionally.
+                tile_data.url_template.replace_range(..8.min(tile_data.url_template.len()), "http://");
+            }
+        }
+
+        if replace_prefix(&mut transformed.url, "http://localhost:2900/") && transformed.kind == Kind::Tile {
+            if let Some(tile_data) = &mut transformed.tile_data {
+                // C++ replaces the first 22 characters unconditionally.
+                tile_data.url_template.replace_range(..22.min(tile_data.url_template.len()), "http://");
+            }
+        }
+
+        let logged = transformed.clone();
+        self.default_resource_loader.request(
+            &transformed,
+            Box::new(move |response: Response| {
+                if logged.loading_method == LoadingMethod::CacheOnly && response.no_content {
+                    match (&logged.tile_data, logged.kind) {
+                        (Some(tile_data), Kind::Tile) => Log::info(
+                            Event::Database,
+                            format!(
+                                "Resource not found in cache: {}({})",
+                                logged.url, tile_data.url_template
+                            ),
+                        ),
+                        _ => Log::info(Event::Database, format!("Resource not found in cache: {}", logged.url)),
+                    }
+                }
+
+                let size = response.data.as_ref().map_or(0, |data| data.len());
+                if ACTIVE.load(Ordering::SeqCst) {
+                    REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
+                    TRANSFERRED_SIZE.fetch_add(size, Ordering::SeqCst);
+                }
+                callback(response);
+            }),
+        )
+    }
+
+    fn can_request(&self, _resource: &Resource) -> bool {
+        true
+    }
+
+    fn set_resource_options(&self, options: ResourceOptions) {
+        *self.resource_options.lock().unwrap() = options;
+    }
+
+    fn get_resource_options(&self) -> ResourceOptions {
+        self.resource_options.lock().unwrap().clone()
+    }
+
+    fn set_client_options(&self, options: ClientOptions) {
+        *self.client_options.lock().unwrap() = options;
+    }
+
+    fn get_client_options(&self) -> ClientOptions {
+        self.client_options.lock().unwrap().clone()
+    }
+}
+
+/// `TestRunner::registerProxyFileSource()`: wraps the default
+/// `ResourceLoader` factory (once per process).
+pub fn register_proxy_file_source() {
+    static REGISTER_PROXY_FLAG: Once = Once::new();
+    REGISTER_PROXY_FLAG.call_once(|| {
+        let file_source_manager = FileSourceManager::get();
+
+        let resource_loader_factory = file_source_manager
+            .un_register_file_source_factory(FileSourceType::ResourceLoader)
+            .expect("default ResourceLoader factory");
+        file_source_manager.register_file_source_factory(
+            FileSourceType::ResourceLoader,
+            Arc::new(move |resource_options: &ResourceOptions, client_options: &ClientOptions| {
+                let file_source = resource_loader_factory(resource_options, client_options);
+                Arc::new(ProxyFileSource::new(file_source, resource_options, client_options)) as Arc<dyn FileSource>
+            }),
+        );
+    });
+}

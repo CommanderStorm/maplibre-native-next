@@ -1,0 +1,445 @@
+// Ports src/mln/style/parser.hpp + src/mln/style/parser.cpp.
+//
+// C++ parses with rapidjson; the port parses with serde_json (with
+// `preserve_order`, so members iterate in document order as in rapidjson).
+// Deviation: the message of a JSON syntax error is serde_json's, not
+// rapidjson's `GetParseError_En(code) + " at offset " + offset` (see
+// DEVIATIONS.md).
+
+use crate::conversion::layer::{convert_layer, set_paint_properties};
+use crate::conversion::{Converter, convert, convert_source};
+use crate::expression::GlobalStateMap;
+use crate::layer::{FontStack, Layer};
+use crate::light::Light;
+use crate::source::Source;
+use crate::sprite::Sprite;
+use crate::transition_options::TransitionOptions;
+use maplibre_native_base::{Value, ValueObject};
+use mln_conversion::{Convertible, Error};
+use mln_util::LatLng;
+use mln_util::constants::DEFAULT_TRANSITION_DURATION;
+use mln_util::exception::{ExceptionPtr, RuntimeError};
+use mln_util::logging::{Event, Log};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+
+/// `using StyleParseResult = std::exception_ptr`: `Err` holds the exception.
+pub type StyleParseResult = Result<(), ExceptionPtr>;
+
+pub struct Parser {
+    pub sprites: Vec<Sprite>,
+    pub glyph_url: String,
+    // TODO(port): fontFaces (MLN_TEXT_SHAPING_HARFBUZZ, M5).
+    pub sources: Vec<Box<dyn Source>>,
+    pub layers: Vec<Box<dyn Layer>>,
+
+    pub transition: TransitionOptions,
+    pub light: Light,
+
+    /// Default values of the root "state" property, keyed by state property
+    /// name, used by the "global-state" expression.
+    pub global_state_defaults: GlobalStateMap,
+
+    pub name: String,
+    pub lat_lng: LatLng,
+    pub zoom: f64,
+    pub bearing: f64,
+    pub pitch: f64,
+    pub roll: f64,
+    pub center_altitude: f64,
+}
+
+impl Default for Parser {
+    fn default() -> Self {
+        Parser {
+            sprites: Vec::new(),
+            glyph_url: String::new(),
+            sources: Vec::new(),
+            layers: Vec::new(),
+            transition: TransitionOptions::with_duration(DEFAULT_TRANSITION_DURATION),
+            light: Light::new(),
+            global_state_defaults: GlobalStateMap::new(),
+            name: String::new(),
+            lat_lng: LatLng::default(),
+            zoom: 0.0,
+            bearing: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+            center_altitude: 0.0,
+        }
+    }
+}
+
+fn is_number(value: &serde_json::Value) -> bool {
+    value.is_number()
+}
+
+fn get_double(value: &serde_json::Value) -> f64 {
+    value.as_f64().unwrap_or(0.0)
+}
+
+impl Parser {
+    pub fn parse(&mut self, json: &str) -> StyleParseResult {
+        let document: serde_json::Value = match serde_json::from_str(json) {
+            Ok(document) => document,
+            Err(error) => return Err(RuntimeError::ptr(format_json_parse_error(&error))),
+        };
+
+        let Some(object) = document.as_object() else {
+            return Err(RuntimeError::ptr("style must be an object"));
+        };
+
+        if let Some(version_value) = object.get("version") {
+            // rapidjson GetInt() on a number.
+            let version = if is_number(version_value) {
+                version_value.as_i64().unwrap_or_else(|| get_double(version_value) as i64)
+            } else {
+                0
+            };
+            if version != 8 {
+                Log::warning(
+                    Event::ParseStyle,
+                    "current renderer implementation only supports style spec version 8; using an outdated style will cause rendering errors",
+                );
+            }
+        }
+
+        if let Some(value) = object.get("name") {
+            if let Some(name) = value.as_str() {
+                self.name = name.to_owned();
+            }
+        }
+
+        if let Some(value) = object.get("center") {
+            let mut error = Error::default();
+            match convert::<LatLng>(&Convertible::from(value), &mut error) {
+                Some(lat_lng) => self.lat_lng = lat_lng,
+                None => Log::warning(Event::ParseStyle, "center coordinate must be a longitude, latitude pair"),
+            }
+        }
+
+        if let Some(value) = object.get("centerAltitude") {
+            if is_number(value) {
+                self.center_altitude = get_double(value);
+            }
+        }
+
+        if let Some(value) = object.get("zoom") {
+            if is_number(value) {
+                self.zoom = get_double(value);
+            }
+        }
+
+        if let Some(value) = object.get("bearing") {
+            if is_number(value) {
+                self.bearing = get_double(value);
+            }
+        }
+
+        if let Some(value) = object.get("pitch") {
+            if is_number(value) {
+                self.pitch = get_double(value);
+            }
+        }
+
+        if let Some(value) = object.get("roll") {
+            if is_number(value) {
+                self.roll = get_double(value);
+            }
+        }
+
+        if let Some(value) = object.get("transition") {
+            self.parse_transition(value);
+        }
+
+        if let Some(value) = object.get("light") {
+            self.parse_light(value);
+        }
+
+        if let Some(value) = object.get("state") {
+            self.parse_state(value);
+        }
+
+        if let Some(value) = object.get("sources") {
+            self.parse_sources(value);
+        }
+
+        if let Some(value) = object.get("layers") {
+            self.parse_layers(value);
+        }
+
+        if let Some(value) = object.get("sprite") {
+            self.parse_sprites(value);
+        }
+
+        if let Some(glyphs) = object.get("glyphs") {
+            if let Some(glyphs) = glyphs.as_str() {
+                self.glyph_url = glyphs.to_owned();
+            }
+        }
+
+        // TODO(port): "font-faces" (MLN_TEXT_SHAPING_HARFBUZZ, M5).
+
+        // Call for side effect of logging warnings for invalid values.
+        self.font_stacks();
+
+        Ok(())
+    }
+
+    fn parse_transition(&mut self, value: &serde_json::Value) {
+        let mut error = Error::default();
+        let Some(converted) = convert::<TransitionOptions>(&Convertible::from(value), &mut error) else {
+            Log::warning(Event::ParseStyle, &error.message);
+            return;
+        };
+
+        self.transition = converted;
+    }
+
+    fn parse_light(&mut self, value: &serde_json::Value) {
+        let mut error = Error::default();
+        let Some(converted) = <Light as Converter>::convert(&Convertible::from(value), &mut error) else {
+            Log::warning(Event::ParseStyle, &error.message);
+            return;
+        };
+
+        self.light = converted;
+    }
+
+    fn parse_state(&mut self, value: &serde_json::Value) {
+        let Some(object) = value.as_object() else {
+            Log::warning(Event::ParseStyle, "state must be an object");
+            return;
+        };
+
+        for (property_name, member) in object {
+            let Some(member_object) = member.as_object() else {
+                Log::warning(
+                    Event::ParseStyle,
+                    format!("state property \"{property_name}\" must be an object"),
+                );
+                continue;
+            };
+            let Some(default) = member_object.get("default") else {
+                continue;
+            };
+            // emplace: the first definition wins.
+            self.global_state_defaults
+                .entry(property_name.clone())
+                .or_insert_with(|| parse_state_value(default));
+        }
+    }
+
+    fn parse_sources(&mut self, value: &serde_json::Value) {
+        let Some(object) = value.as_object() else {
+            Log::warning(Event::ParseStyle, "sources must be an object");
+            return;
+        };
+
+        for (id, property) in object {
+            let mut error = Error::default();
+            let Some(source) = convert_source(&Convertible::from(property), &mut error, id) else {
+                Log::warning(Event::ParseStyle, &error.message);
+                continue;
+            };
+
+            self.sources.push(source);
+        }
+    }
+
+    fn parse_sprites(&mut self, value: &serde_json::Value) {
+        if let Some(url) = value.as_str() {
+            let sprite = Sprite::new("default", url);
+            self.sprites.push(sprite);
+        } else if let Some(array) = value.as_array() {
+            let mut sprite_ids = HashSet::new();
+            for sprite_value in array {
+                if !sprite_value.is_object() {
+                    Log::warning(Event::ParseStyle, "sprite child must be an object");
+                    continue;
+                }
+
+                let mut error = Error::default();
+                let Some(sprite) = convert::<Sprite>(&Convertible::from(sprite_value), &mut error) else {
+                    Log::warning(Event::ParseStyle, &error.message);
+                    continue;
+                };
+
+                if sprite_ids.contains(&sprite.id) {
+                    Log::warning(Event::ParseStyle, "sprite ids must be unique");
+                    continue;
+                }
+
+                sprite_ids.insert(sprite.id.clone());
+                self.sprites.push(sprite);
+            }
+        } else {
+            Log::warning(Event::ParseStyle, "sprite must be an object or string");
+        }
+    }
+
+    fn parse_layers(&mut self, value: &serde_json::Value) {
+        let mut ids: Vec<String> = Vec::new();
+
+        let Some(array) = value.as_array() else {
+            Log::warning(Event::ParseStyle, "layers must be an array");
+            return;
+        };
+
+        let mut layers_map: HashMap<String, LayerEntry<'_>> = HashMap::new();
+
+        for layer_value in array {
+            let Some(layer_object) = layer_value.as_object() else {
+                Log::warning(Event::ParseStyle, "layer must be an object");
+                continue;
+            };
+
+            let Some(id) = layer_object.get("id") else {
+                Log::warning(Event::ParseStyle, "layer must have an id");
+                continue;
+            };
+
+            let Some(id) = id.as_str() else {
+                Log::warning(Event::ParseStyle, "layer id must be a string");
+                continue;
+            };
+
+            let layer_id = id.to_owned();
+            if layers_map.contains_key(&layer_id) {
+                Log::warning(Event::ParseStyle, format!("duplicate layer id {layer_id}"));
+                continue;
+            }
+
+            layers_map.insert(
+                layer_id.clone(),
+                LayerEntry {
+                    value: layer_value,
+                    layer: None,
+                },
+            );
+            ids.push(layer_id);
+        }
+
+        // Store a stack of layer IDs we're parsing right now. This is to
+        // prevent reference cycles.
+        let mut stack: Vec<String> = Vec::new();
+
+        for id in &ids {
+            if layers_map.contains_key(id) {
+                parse_layer(id, &mut layers_map, &mut stack);
+            }
+        }
+
+        for id in &ids {
+            if let Some(entry) = layers_map.get_mut(id) {
+                if let Some(layer) = entry.layer.take() {
+                    self.layers.push(layer);
+                }
+            }
+        }
+    }
+
+    /// Statically evaluate layer properties to determine what font stacks are used.
+    pub fn font_stacks(&self) -> BTreeSet<FontStack> {
+        // mln::fontStacks(impls) (src/mln/util/font_stack.cpp).
+        let mut result = BTreeSet::new();
+        for layer in &self.layers {
+            layer.base_impl().populate_font_stack(&mut result);
+        }
+        result
+    }
+}
+
+struct LayerEntry<'a> {
+    value: &'a serde_json::Value,
+    layer: Option<Box<dyn Layer>>,
+}
+
+/// `Parser::parseLayer(id, value, layer)`.
+fn parse_layer(id: &str, layers_map: &mut HashMap<String, LayerEntry<'_>>, stack: &mut Vec<String>) {
+    let Some(entry) = layers_map.get(id) else {
+        return;
+    };
+    if entry.layer.is_some() {
+        // Skip parsing this again. We already have a valid layer definition.
+        return;
+    }
+    let value = entry.value;
+
+    // Make sure we have not previously attempted to parse this layer.
+    if stack.iter().any(|s| s == id) {
+        Log::warning(Event::ParseStyle, format!("layer reference of '{id}' is circular"));
+        return;
+    }
+
+    if let Some(ref_val) = value.get("ref") {
+        // This layer is referencing another layer. Recursively parse that layer.
+        let Some(ref_) = ref_val.as_str() else {
+            Log::warning(Event::ParseStyle, format!("layer ref of '{id}' must be a string"));
+            return;
+        };
+
+        if !layers_map.contains_key(ref_) {
+            Log::warning(Event::ParseStyle, format!("layer '{id}' references unknown layer {ref_}"));
+            return;
+        }
+
+        // Recursively parse the referenced layer.
+        stack.insert(0, id.to_owned());
+        parse_layer(ref_, layers_map, stack);
+        stack.remove(0);
+
+        let Some(reference) = layers_map.get(ref_).and_then(|e| e.layer.as_ref()) else {
+            return;
+        };
+
+        let mut layer = reference.clone_ref(id);
+        // C++ ignores the returned error.
+        let _ = set_paint_properties(layer.as_mut(), &Convertible::from(value));
+        if let Some(entry) = layers_map.get_mut(id) {
+            entry.layer = Some(layer);
+        }
+    } else {
+        let mut error = Error::default();
+        let Some(converted) = convert_layer(&Convertible::from(value), &mut error) else {
+            Log::warning(Event::ParseStyle, &error.message);
+            return;
+        };
+        if let Some(entry) = layers_map.get_mut(id) {
+            entry.layer = Some(converted);
+        }
+    }
+}
+
+/// Deep conversion of a style JSON value to an mln::Value (unlike
+/// conversion::toValue, which only handles scalar values).
+fn parse_state_value(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                Value::Uint(u)
+            } else if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Double(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::Array(array) => Value::Array(array.iter().map(parse_state_value).collect()),
+        serde_json::Value::Object(object) => {
+            let mut result = ValueObject::new();
+            for (key, member) in object {
+                result.entry(key.clone()).or_insert_with(|| parse_state_value(member));
+            }
+            Value::Object(result)
+        }
+    }
+}
+
+/// `formatJSONParseError` (src/mln/util/rapidjson.cpp), with serde_json's
+/// message instead of rapidjson's (see the file comment).
+fn format_json_parse_error(error: &serde_json::Error) -> String {
+    error.to_string()
+}

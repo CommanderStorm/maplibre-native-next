@@ -1,0 +1,162 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# Ports render-test/ (manifest_parser, metadata, parser, runner,
+# render_test). The map is reached through runner::TestRunnerImpl, so this
+# library does not depend on the map crates.
+rust_library(
+    name = "render_test",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/mln_platform_default_image",
+        "//crates/mln_storage",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/pixelmatch",
+        "@next_crates//:regex",
+        "@next_crates//:serde",
+        "@next_crates//:serde_json",
+    ],
+)
+
+TEST_DATA = [
+    "manifests/linux-wgpu.json",
+    "ignores/rust-port.json",
+    "@maplibre//metrics:render-test-files",
+]
+
+rust_test(
+    name = "render_test_unit_test",
+    size = "small",
+    crate = ":render_test",
+    data = TEST_DATA,
+)
+
+# Runs the whole shared render suite with each test's expected image as the
+# rendered one: manifest, metadata and operation parsing, the pixelmatch
+# comparison and the reports. Every test that runs must pass.
+rust_test(
+    name = "self_check",
+    size = "large",
+    srcs = ["src/main.rs"],
+    args = [
+        "--self-check",
+        "--manifestPath",
+        "tools/render-test/manifests/linux-wgpu.json",
+        "--filter",
+        "/render-tests/",
+    ],
+    crate_root = "src/main.rs",
+    data = TEST_DATA,
+    use_libtest_harness = False,
+    deps = [":render_test"],
+)
+
+# The style half of the operations, over mln_style::Style. Manual like the
+# map targets (mln_style is mid-port); run it by name.
+rust_library(
+    name = "render_test_style",
+    srcs = ["map/style_ops.rs"],
+    crate_root = "map/style_ops.rs",
+    tags = ["manual"],
+    deps = [
+        ":render_test",
+        "//crates/mln_conversion",
+        "//crates/mln_map_types",
+        "//crates/mln_style",
+        "@next_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "render_test_style_test",
+    size = "small",
+    crate = ":render_test_style",
+    data = ["@maplibre//metrics:render-test-files"],
+    tags = ["manual"],
+)
+
+# TestRunnerImpl over mln_map + mln_platform_default. Manual: it builds the
+# map crates, which are mid-port (`//tools/render-test/...` stays green).
+rust_library(
+    name = "render_test_map",
+    srcs = ["map/lib.rs"],
+    crate_root = "map/lib.rs",
+    tags = ["manual"],
+    deps = [
+        ":render_test",
+        ":render_test_style",
+        "//crates/mln_actor",
+        "//crates/mln_gfx",
+        "//crates/mln_map",
+        "//crates/mln_platform_default",
+        "//crates/mln_storage",
+        "//crates/mln_util",
+        "@next_crates//:serde_json",
+    ],
+)
+
+# `bazel run //tools/render-test -- --manifestPath tools/render-test/manifests/linux-wgpu.json --output <dir>`
+rust_binary(
+    name = "render-test",
+    srcs = ["src/main.rs"],
+    crate_features = ["map"],
+    crate_name = "render_test_bin",
+    crate_root = "src/main.rs",
+    data = TEST_DATA,
+    tags = ["manual"],
+    deps = [
+        ":render_test",
+        ":render_test_map",
+    ],
+)
+
+# The M1 render tests (PLAN.md), a regression gate: colorSpace-hcl and
+# transition fail in C++ too and are "ignored failed" through
+# platform-all.json; background-opacity/color loads its sprite from
+# metrics/cache-style.db (ProxyFileSource). (`args` are make-variable
+# expanded and shell-tokenized: `$$` is `$`, and no backslashes.)
+M1_FILTER = "/render-tests/(background-color/(default|literal|function|colorSpace-hcl|colorSpace-lab|transition)|background-opacity/color|background-visibility/(none|visible))/style[.]json$$"
+
+rust_test(
+    name = "m1_render_tests",
+    srcs = ["src/main.rs"],
+    args = [
+        "--manifestPath",
+        "tools/render-test/manifests/linux-wgpu.json",
+        "--filter",
+        M1_FILTER,
+    ],
+    crate_features = ["map"],
+    crate_root = "src/main.rs",
+    data = TEST_DATA,
+    use_libtest_harness = False,
+    deps = [
+        ":render_test",
+        ":render_test_map",
+    ],
+)
+
+# The whole suite on the Rust renderer; the port's ignore file lists what is
+# expected to fail (about 45 s). Manual: run it by name.
+rust_test(
+    name = "render_tests",
+    size = "enormous",
+    srcs = ["src/main.rs"],
+    args = [
+        "--manifestPath",
+        "tools/render-test/manifests/linux-wgpu.json",
+    ],
+    crate_features = ["map"],
+    crate_root = "src/main.rs",
+    data = TEST_DATA,
+    tags = ["manual"],
+    use_libtest_harness = False,
+    deps = [
+        ":render_test",
+        ":render_test_map",
+    ],
+)

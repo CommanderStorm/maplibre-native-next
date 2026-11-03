@@ -1,0 +1,28 @@
+// Ports src/mln/renderer/tile_parameters.hpp.
+
+use mln_actor::TaggedScheduler;
+use mln_map_types::{MapDebugOptions, MapMode, TileLodMode, TransformState};
+use mln_storage::FileSource;
+use mln_style::expression::GlobalStateMap;
+use std::sync::Arc;
+
+/// `TileParameters`.
+// TODO(port): annotationManager, imageManager, glyphManager,
+// dynamicTextureAtlas (images and symbols).
+pub struct TileParameters<'a> {
+    pub pixel_ratio: f32,
+    pub debug_options: MapDebugOptions,
+    pub transform_state: &'a TransformState,
+    pub file_source: Option<Arc<dyn FileSource>>,
+    pub mode: MapMode,
+    pub prefetch_zoom_delta: u8,
+    pub thread_pool: TaggedScheduler,
+    pub tile_lod_min_radius: f64,
+    pub tile_lod_scale: f64,
+    pub tile_lod_pitch_threshold: f64,
+    pub tile_lod_zoom_shift: f64,
+    pub tile_lod_mode: TileLodMode,
+    pub global_state: Option<Arc<GlobalStateMap>>,
+    pub is_update_synchronous: bool,
+    pub capture_rendered_features: bool,
+}

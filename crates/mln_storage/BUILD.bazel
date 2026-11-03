@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Ports src/mln/storage, include/mln/storage and the cache-only part of
+# platform/default/src/mln/storage (database file source, offline database
+# read path, main resource loader).
+rust_library(
+    name = "mln_storage",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/mln_actor",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:rusqlite",
+    ],
+)
+
+rust_test(
+    name = "mln_storage_test",
+    crate = ":mln_storage",
+    data = [
+        "@maplibre//metrics:render-test-files",
+        "@maplibre//test:fixtures",
+    ],
+)

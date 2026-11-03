@@ -1,0 +1,364 @@
+// Ports src/mln/util/bounding_volumes.hpp and src/mln/util/bounding_volumes.cpp
+// (C++ namespace mln::util).
+
+use crate::mat3::{vec3_cross, vec3_dot, vec3_normalize, vec3_sub};
+use crate::mat4::{Mat4, matrix};
+use crate::vectors::{Vec3, Vec3i, Vec4};
+use maplibre_native_base::Point;
+
+/// `std::min(a, b)`: `(b < a) ? b : a`.
+fn std_min(a: f64, b: f64) -> f64 {
+    if b < a { b } else { a }
+}
+
+/// `std::max(a, b)`: `(a < b) ? b : a`.
+fn std_max(a: f64, b: f64) -> f64 {
+    if a < b { b } else { a }
+}
+
+fn to_vec3(v: &Vec4) -> Vec3 {
+    [v[0], v[1], v[2]]
+}
+
+fn vec4_dot(a: &Vec4, b: &Vec4) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+}
+
+fn project_points_to_axis<const N: usize>(
+    points: &[Vec3; N],
+    origin: &Vec3,
+    axis: &Vec3,
+) -> Point<f64> {
+    let mut min = f64::MAX;
+    let mut max = -f64::MAX;
+
+    for point in points {
+        let projected_point = vec3_dot(&vec3_sub(point, origin), axis);
+        min = std_min(projected_point, min);
+        max = std_max(projected_point, max);
+    }
+
+    Point::new(min, max)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum IntersectionResult {
+    Separate,
+    Intersects,
+    Contains,
+}
+
+/// The derived PartialEq is the C++ operator==: `min == aabb.min && max ==
+/// aabb.max` (std::array element-wise ==).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AABB {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+impl AABB {
+    pub fn new(min: Vec3, max: Vec3) -> Self {
+        AABB { min, max }
+    }
+
+    pub fn closest_point(&self, point: &Vec3) -> Vec3 {
+        [
+            std_max(std_min(self.max[0], point[0]), self.min[0]),
+            std_max(std_min(self.max[1], point[1]), self.min[1]),
+            std_max(std_min(self.max[2], point[2]), self.min[2]),
+        ]
+    }
+
+    /// Computes the shortest manhattan distance to the provided point
+    pub fn distance_xyz(&self, point: &Vec3) -> Vec3 {
+        let mut vec = vec3_sub(&self.closest_point(point), point);
+
+        vec[0] = vec[0].abs();
+        vec[1] = vec[1].abs();
+        vec[2] = vec[2].abs();
+
+        vec
+    }
+
+    /// Creates an aabb covering one quadrant of the aabb on XZ-plane.
+    pub fn quadrant(&self, idx: i32) -> AABB {
+        debug_assert!((0..4).contains(&idx));
+        let mut quadrant_min = self.min;
+        let mut quadrant_max = self.max;
+        let x_center = 0.5 * (self.max[0] + self.min[0]);
+        let y_center = 0.5 * (self.max[1] + self.min[1]);
+
+        // This aabb is split into 4 quadrants. For each axis define in which side
+        // of the split "idx" is The result for indices 0, 1, 2, 3 is: { 0, 0 }, {
+        // 1, 0 }, { 0, 1 }, { 1, 1 }
+        let x_split: [i32; 4] = [0, 1, 0, 1];
+        let y_split: [i32; 4] = [0, 0, 1, 1];
+        let idx = idx as usize;
+
+        quadrant_min[0] = if x_split[idx] != 0 { x_center } else { quadrant_min[0] };
+        quadrant_max[0] = if x_split[idx] != 0 { quadrant_max[0] } else { x_center };
+
+        quadrant_min[1] = if y_split[idx] != 0 { y_center } else { quadrant_min[1] };
+        quadrant_max[1] = if y_split[idx] != 0 { quadrant_max[1] } else { y_center };
+
+        AABB::new(quadrant_min, quadrant_max)
+    }
+
+    pub fn intersects(&self, aabb: &AABB) -> bool {
+        if self.min[0] > aabb.max[0] || aabb.min[0] > self.max[0] {
+            return false;
+        }
+        if self.min[1] > aabb.max[1] || aabb.min[1] > self.max[1] {
+            return false;
+        }
+        if self.min[2] > aabb.max[2] || aabb.min[2] > self.max[2] {
+            return false;
+        }
+        true
+    }
+}
+
+// Named index values for frustum::points array
+const NEAR_TL: i32 = 0;
+const NEAR_TR: i32 = 1;
+const NEAR_BR: i32 = 2;
+const NEAR_BL: i32 = 3;
+const FAR_TL: i32 = 4;
+const FAR_TR: i32 = 5;
+const FAR_BR: i32 = 6;
+const FAR_BL: i32 = 7;
+
+/// `Frustum::Projection`.
+#[derive(Clone, Copy, Debug, Default)]
+struct Projection {
+    axis: Vec3,
+    projection: Point<f64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Frustum {
+    bounds: AABB,
+    points: [Vec3; 8],
+    planes: [Vec4; 6],
+    projections: [Projection; 12],
+}
+
+impl Frustum {
+    pub fn new(points: &[Vec3; 8], planes: &[Vec4; 6]) -> Self {
+        let points = *points;
+        let planes = *planes;
+
+        let x_bounds = project_points_to_axis(&points, &[0.0, 0.0, 0.0], &[1.0, 0.0, 0.0]);
+        let y_bounds = project_points_to_axis(&points, &[0.0, 0.0, 0.0], &[0.0, 1.0, 0.0]);
+        let z_bounds = project_points_to_axis(&points, &[0.0, 0.0, 0.0], &[0.0, 0.0, 1.0]);
+
+        let bounds = AABB::new(
+            [x_bounds.x, y_bounds.x, z_bounds.x],
+            [x_bounds.y, y_bounds.y, z_bounds.y],
+        );
+
+        // Precompute a set of separating axis candidates for precise intersection
+        // tests. Remaining axes not covered in basic intersection tests are: axis[]
+        // = (edges of aabb) x (edges of frustum)
+        let p = |i: i32| &points[i as usize];
+        let frustum_edges: [Vec3; 6] = [
+            vec3_sub(p(NEAR_BR), p(NEAR_BL)),
+            vec3_sub(p(NEAR_TL), p(NEAR_BL)),
+            vec3_sub(p(FAR_TL), p(NEAR_TL)),
+            vec3_sub(p(FAR_TR), p(NEAR_TR)),
+            vec3_sub(p(FAR_BR), p(NEAR_BR)),
+            vec3_sub(p(FAR_BL), p(NEAR_BL)),
+        ];
+
+        let mut projections = [Projection::default(); 12];
+        for (i, edge) in frustum_edges.iter().enumerate() {
+            // Cross product [1, 0, 0] x [a, b, c] == [0, -c, b]
+            // Cross product [0, 1, 0] x [a, b, c] == [c, 0, -a]
+            let axis0: Vec3 = [0.0, -edge[2], edge[1]];
+            let axis1: Vec3 = [edge[2], 0.0, -edge[0]];
+
+            projections[i * 2] = Projection {
+                axis: axis0,
+                projection: project_points_to_axis(&points, &points[0], &axis0),
+            };
+            projections[i * 2 + 1] = Projection {
+                axis: axis1,
+                projection: project_points_to_axis(&points, &points[0], &axis1),
+            };
+        }
+
+        Frustum {
+            bounds,
+            points,
+            planes,
+            projections,
+        }
+    }
+
+    /// C++ default: `flippedY = false`.
+    pub fn from_inv_proj_matrix(
+        inv_proj: &Mat4,
+        world_size: f64,
+        zoom: f64,
+        flipped_y: bool,
+    ) -> Frustum {
+        // Define frustum corner points in normalized clip space
+        let mut corner_coords: [Vec4; 8] = [
+            [-1.0, 1.0, -1.0, 1.0],
+            [1.0, 1.0, -1.0, 1.0],
+            [1.0, -1.0, -1.0, 1.0],
+            [-1.0, -1.0, -1.0, 1.0],
+            [-1.0, 1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [1.0, -1.0, 1.0, 1.0],
+            [-1.0, -1.0, 1.0, 1.0],
+        ];
+
+        let scale = 2.0f64.powf(zoom);
+
+        // Transform points to tile space
+        for coord in corner_coords.iter_mut() {
+            let a = *coord;
+            matrix::transform_mat4(coord, &a, inv_proj);
+            // `component *= 1.0 / coord[3] / worldSize * scale` for each
+            // component in order: coord[3] is the last one written.
+            for i in 0..4 {
+                coord[i] *= 1.0 / coord[3] / world_size * scale;
+            }
+        }
+
+        let mut frustum_plane_point_indices: [Vec3i; 6] = [
+            [NEAR_BL, NEAR_BR, FAR_BR], // bottom
+            [NEAR_TL, NEAR_BL, FAR_BL], // left
+            [NEAR_BR, NEAR_TR, FAR_TR], // right
+            [NEAR_TL, FAR_TL, FAR_TR],  // top
+            [NEAR_TL, NEAR_TR, NEAR_BR], // near
+            [FAR_BR, FAR_TR, FAR_TL],   // far
+        ];
+
+        if flipped_y {
+            for tri in frustum_plane_point_indices.iter_mut() {
+                tri.swap(1, 2);
+            }
+        }
+
+        let mut frustum_planes: [Vec4; 6] = [[0.0; 4]; 6];
+
+        for (i, indices) in frustum_plane_point_indices.iter().enumerate() {
+            // Compute plane equation using 3 points on the plane
+            let p0 = to_vec3(&corner_coords[indices[0] as usize]);
+            let p1 = to_vec3(&corner_coords[indices[1] as usize]);
+            let p2 = to_vec3(&corner_coords[indices[2] as usize]);
+
+            let a = vec3_sub(&p0, &p1);
+            let b = vec3_sub(&p2, &p1);
+            let n = vec3_normalize(&vec3_cross(&a, &b));
+
+            frustum_planes[i] = [n[0], n[1], n[2], -vec3_dot(&n, &p1)];
+        }
+
+        let mut frustum_points: [Vec3; 8] = [[0.0; 3]; 8];
+
+        for i in 0..corner_coords.len() {
+            frustum_points[i] = to_vec3(&corner_coords[i]);
+        }
+
+        Frustum::new(&frustum_points, &frustum_planes)
+    }
+
+    /// Performs conservative intersection test using separating axis theorem.
+    /// Some accuracy is traded for better performance. False positive rate is < 1%
+    pub fn intersects(&self, aabb: &AABB) -> IntersectionResult {
+        // Execute separating axis test between two convex objects to find intersections
+        // Each frustum plane together with 3 major axes define the separating axes
+        // This implementation is conservative as it's not checking all possible axes.
+        // False positive rate is ~0.5% of all cases (see intersectsPrecise).
+        // Note: test only 4 points as both min and max points have zero elevation
+        debug_assert!(aabb.min[2] == 0.0 && aabb.max[2] == 0.0);
+
+        if !self.bounds.intersects(aabb) {
+            return IntersectionResult::Separate;
+        }
+
+        let aabb_points: [Vec4; 4] = [
+            [aabb.min[0], aabb.min[1], 0.0, 1.0],
+            [aabb.max[0], aabb.min[1], 0.0, 1.0],
+            [aabb.max[0], aabb.max[1], 0.0, 1.0],
+            [aabb.min[0], aabb.max[1], 0.0, 1.0],
+        ];
+
+        let mut fully_inside = true;
+
+        let epsilon = 1e-10;
+
+        for plane in &self.planes {
+            let mut points_inside: usize = 0;
+
+            points_inside += (vec4_dot(plane, &aabb_points[0]) >= -epsilon) as usize;
+            points_inside += (vec4_dot(plane, &aabb_points[1]) >= -epsilon) as usize;
+            points_inside += (vec4_dot(plane, &aabb_points[2]) >= -epsilon) as usize;
+            points_inside += (vec4_dot(plane, &aabb_points[3]) >= -epsilon) as usize;
+
+            if points_inside == 0 {
+                // Separating axis found, no intersection
+                return IntersectionResult::Separate;
+            }
+
+            if points_inside != aabb_points.len() {
+                fully_inside = false;
+            }
+        }
+
+        if fully_inside {
+            IntersectionResult::Contains
+        } else {
+            IntersectionResult::Intersects
+        }
+    }
+
+    /// Performs precise intersection test using separating axis theorem.
+    /// It is possible run only edge cases that were not covered in intersects()
+    /// (C++ default: `edgeCasesOnly = false`).
+    pub fn intersects_precise(&self, aabb: &AABB, edge_cases_only: bool) -> IntersectionResult {
+        if !edge_cases_only {
+            let result = self.intersects(aabb);
+
+            if result == IntersectionResult::Separate {
+                return result;
+            }
+        }
+
+        let aabb_points: [Vec3; 4] = [
+            [aabb.min[0], aabb.min[1], 0.0],
+            [aabb.max[0], aabb.min[1], 0.0],
+            [aabb.max[0], aabb.max[1], 0.0],
+            [aabb.min[0], aabb.max[1], 0.0],
+        ];
+
+        // For a precise SAT-test all edge cases needs to be covered
+        // Projections of the frustum on separating axis candidates have been precomputed already
+        for proj in &self.projections {
+            let projected_aabb = project_points_to_axis(&aabb_points, &self.points[0], &proj.axis);
+            let projected_frustum = &proj.projection;
+
+            if projected_frustum.y < projected_aabb.x || projected_frustum.x > projected_aabb.y {
+                return IntersectionResult::Separate;
+            }
+        }
+
+        IntersectionResult::Intersects
+    }
+
+    pub fn get_points(&self) -> &[Vec3; 8] {
+        &self.points
+    }
+
+    pub fn get_planes(&self) -> &[Vec4; 6] {
+        &self.planes
+    }
+}
+
+#[cfg(test)]
+#[path = "bounding_volumes_test.rs"]
+mod bounding_volumes_test;

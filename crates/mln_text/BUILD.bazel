@@ -1,0 +1,23 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Ports src/mln/text: HarfBuzz shaping on HarfRust (with the FreeType
+# charmap/advance semantics ported in src/ft), glyphs, glyph PBFs.
+rust_library(
+    name = "mln_text",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/mln_math",
+        "//crates/mln_util",
+        "//vendor/protozero",
+        "@next_crates//:harfrust",
+        "@next_crates//:skrifa",
+    ],
+)
+
+rust_test(
+    name = "mln_text_test",
+    crate = ":mln_text",
+    data = ["@maplibre//test:fixtures"],
+)
+

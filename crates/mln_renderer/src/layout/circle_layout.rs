@@ -1,0 +1,250 @@
+// Ports src/mln/layout/circle_layout.hpp
+//
+// As in pattern_layout.rs, the layout keeps the indices (and sort keys) of
+// the features its filter accepted and gets the features again from the
+// source layer in `create_bucket`.
+
+use crate::bucket::{Bucket, BucketPtr};
+use crate::bucket_parameters::BucketParameters;
+use crate::buckets::circle_bucket::CircleBucket;
+use crate::render_layer::LayerRenderData;
+use mln_map_types::MapMode;
+use mln_style::expression::{EvaluationContext, Value};
+use mln_style::layer_properties::LayerProperties;
+use mln_style::layers::circle_layer_properties::{CircleLayerProperties, CircleSortKey};
+use mln_style::properties::Property;
+use mln_style::PropertyEvaluationParameters;
+use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryTileFeature, GeometryTileLayer};
+use mln_tile_id::CanonicalTileID;
+use mln_util::constants::EXTENT;
+use mln_util::exception::ExceptionPtr;
+use mln_util::immutable::Immutable;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+/// `CircleLayout::CircleFeature` (without the feature, see above).
+#[derive(Clone, Copy, Debug)]
+pub struct CircleFeature {
+    pub i: usize,
+    pub sort_key: f32,
+}
+
+/// `CircleLayout`.
+pub struct CircleLayout {
+    pub layer_properties_map: BTreeMap<String, Immutable<dyn LayerProperties>>,
+    pub bucket_leader_id: String,
+
+    /// `std::list<CircleFeature> features`.
+    pub features: Vec<CircleFeature>,
+
+    pub zoom: f32,
+    pub mode: MapMode,
+    pub source_layer_id: String,
+    pub retain_features_by_id: bool,
+}
+
+static EMPTY_FORMATTED_SECTION: Value = Value::Null;
+
+impl CircleLayout {
+    /// `CircleLayout(parameters, group, sourceLayer)`.
+    pub fn new(
+        parameters: &BucketParameters,
+        group: &[Immutable<dyn LayerProperties>],
+        source_layer: &dyn GeometryTileLayer,
+    ) -> Self {
+        debug_assert!(!group.is_empty());
+        let zoom = parameters.tile_id.overscaled_z as f32;
+        let leader_layer_properties = (*group[0])
+            .as_any()
+            .downcast_ref::<CircleLayerProperties>()
+            .expect("CircleLayout: not circle layer properties");
+        let leader_impl = leader_layer_properties.layer_impl();
+        let unevaluated_layout = &leader_impl.layout;
+        let sort_features_by_key = !unevaluated_layout.get::<CircleSortKey>().is_undefined();
+        let mut evaluation_parameters = PropertyEvaluationParameters::new(zoom);
+        evaluation_parameters.global_state = parameters.global_state.clone();
+        let layout = unevaluated_layout.evaluate(&evaluation_parameters);
+        let source_layer_id = leader_impl.source_layer.clone();
+        let bucket_leader_id = leader_impl.id.clone();
+
+        let mut layer_properties_map: BTreeMap<String, Immutable<dyn LayerProperties>> = BTreeMap::new();
+        for layer_properties in group {
+            let layer_id = layer_properties.base_impl.id.clone();
+            layer_properties_map.entry(layer_id).or_insert_with(|| layer_properties.clone());
+        }
+
+        let mut features: Vec<CircleFeature> = Vec::new();
+        let feature_count = source_layer.feature_count();
+        for i in 0..feature_count {
+            let feature = source_layer.get_feature(i);
+            if !leader_impl.filter.evaluate(
+                &EvaluationContext::with_zoom_feature(zoom, Some(&*feature))
+                    .with_canonical_tile_id(Some(&parameters.tile_id.canonical))
+                    .with_global_state(parameters.global_state.as_deref()),
+            ) {
+                continue;
+            }
+
+            if !sort_features_by_key {
+                features.push(CircleFeature { i, sort_key: CircleSortKey::default_value() });
+                continue;
+            }
+
+            let sort_key_property = layout.get::<CircleSortKey>();
+            let sort_key = sort_key_property.evaluate_feature(&*feature, zoom, CircleSortKey::default_value());
+            let circle_feature = CircleFeature { i, sort_key };
+            // std::lower_bound: the first feature whose key is not less.
+            let sort_position = features.partition_point(|f| f.sort_key < sort_key);
+            features.insert(sort_position, circle_feature);
+        }
+
+        CircleLayout {
+            layer_properties_map,
+            bucket_leader_id,
+            features,
+            zoom,
+            mode: parameters.mode,
+            source_layer_id,
+            retain_features_by_id: parameters.retain_features_by_id,
+        }
+    }
+
+    /// `hasDependencies()`.
+    pub fn has_dependencies(&self) -> bool {
+        false
+    }
+
+    /// `createBucket(..., featureIndex, renderData, ..., canonical)`;
+    /// `insert_feature` is `featureIndex->insert(geometries, i,
+    /// sourceLayerID, bucketLeaderID)`.
+    pub fn create_bucket_with(
+        &mut self,
+        source_layer: &dyn GeometryTileLayer,
+        insert_feature: &mut dyn FnMut(&GeometryCollection, usize, &str, &str),
+        render_data: &mut HashMap<String, LayerRenderData>,
+        canonical: &CanonicalTileID,
+    ) -> Result<(), ExceptionPtr> {
+        let mut bucket = CircleBucket::new(&self.layer_properties_map, self.mode, self.zoom);
+        bucket.set_retain_features_by_id(self.retain_features_by_id);
+        bucket.reserve_features(self.features.len());
+
+        for circle_feature in &self.features {
+            let i = circle_feature.i;
+            let feature = source_layer.get_feature(i);
+            let geometries = feature.get_geometries();
+            let vertex_offset = bucket.vertices.len();
+
+            Self::add_circle(&mut bucket, self.mode, &*feature, geometries, i, circle_feature.sort_key, canonical);
+
+            if self.retain_features_by_id {
+                let vertex_count = bucket.vertices.len() - vertex_offset;
+                if vertex_count > 0 {
+                    bucket.retain_feature(&*feature, vertex_offset, vertex_count);
+                }
+            }
+
+            insert_feature(geometries, i, &self.source_layer_id, &self.bucket_leader_id);
+        }
+
+        if !bucket.has_data() {
+            return Ok(());
+        }
+
+        let bucket: BucketPtr = Arc::new(bucket);
+        for (layer_id, layer_properties) in &self.layer_properties_map {
+            render_data.entry(layer_id.clone()).or_insert_with(|| LayerRenderData {
+                bucket: bucket.clone(),
+                layer_properties: layer_properties.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `addCircle(bucket, feature, geometry, featureIndex, sortKey, canonical)`.
+    fn add_circle(
+        bucket: &mut CircleBucket,
+        mode: MapMode,
+        feature: &dyn GeometryTileFeature,
+        geometry: &GeometryCollection,
+        feature_index: usize,
+        sort_key: f32,
+        canonical: &CanonicalTileID,
+    ) {
+        const VERTEX_LENGTH: usize = 4;
+
+        for circle in geometry.iter() {
+            for point in circle {
+                let x = point.x;
+                let y = point.y;
+
+                // Do not include points that are outside the tile
+                // boundaries. Include all points in Still mode. You need to
+                // include points from neighbouring tiles so that they are
+                // not clipped at tile boundaries.
+                if mode == MapMode::Continuous
+                    && (x < 0 || x as i32 >= EXTENT || y < 0 || y as i32 >= EXTENT)
+                {
+                    continue;
+                }
+
+                let needs_segment = match bucket.segments.last() {
+                    None => true,
+                    Some(last) => last.vertex_length + VERTEX_LENGTH > u16::MAX as usize,
+                };
+                if needs_segment {
+                    // Move to a new segments because the old one can't hold
+                    // the geometry.
+                    let mut segment = mln_gfx::shaders::segment::SegmentBase::new(bucket.vertices.len(), bucket.triangles.len());
+                    segment.sort_key = sort_key;
+                    bucket.segments.push(segment);
+                }
+
+                // this geometry will be of the Point type, and we'll derive
+                // two triangles from it.
+                //
+                // ┌─────────┐
+                // │ 4     3 │
+                // │         │
+                // │ 1     2 │
+                // └─────────┘
+                //
+                bucket.vertices.push(CircleBucket::vertex(*point, -1.0, -1.0)); // 1
+                bucket.vertices.push(CircleBucket::vertex(*point, 1.0, -1.0)); // 2
+                bucket.vertices.push(CircleBucket::vertex(*point, 1.0, 1.0)); // 3
+                bucket.vertices.push(CircleBucket::vertex(*point, -1.0, 1.0)); // 4
+
+                let segment = bucket.segments.last_mut().expect("segment");
+                debug_assert!(segment.vertex_length <= u16::MAX as usize);
+                let index = segment.vertex_length as u16;
+
+                // 1, 2, 3
+                // 1, 4, 3
+                // (`index + 1` etc. are `int`s narrowed to uint16_t)
+                bucket.triangles.extend_from_slice(&[
+                    index,
+                    (index as i32 + 1) as u16,
+                    (index as i32 + 2) as u16,
+                    index,
+                    (index as i32 + 3) as u16,
+                    (index as i32 + 2) as u16,
+                ]);
+
+                segment.vertex_length += VERTEX_LENGTH;
+                segment.index_length += 6;
+            }
+        }
+
+        let length = bucket.vertices.len();
+        for binders in bucket.paint_property_binders.values_mut() {
+            binders.populate_vertex_vectors(
+                feature,
+                length,
+                feature_index,
+                &Default::default(),
+                None,
+                canonical,
+                &EMPTY_FORMATTED_SECTION,
+            );
+        }
+    }
+}

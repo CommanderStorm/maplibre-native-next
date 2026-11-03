@@ -1,0 +1,311 @@
+// Ports include/mln/style/image.hpp, src/mln/style/image.cpp,
+// src/mln/style/image_impl.hpp and src/mln/style/image_impl.cpp.
+//
+// Cut point (added by storage): the sprite loader (mln_sprite) creates
+// `style::Image::Impl`s and the style (mln_style) stores them, so the types
+// live below both; `mln_style::image` re-exports them.
+//
+// ImageType, ImageMap, ImageDependencies, ImagePosition and ImagePositions
+// (image_impl.hpp) were added by `layers` (M3: buckets and paint property
+// binders take ImagePositions).
+
+use mln_util::exception::StyleImageException;
+use mln_util::image::PremultipliedImage;
+use mln_util::immutable::Immutable;
+use mln_util::size::Size;
+use std::sync::Arc;
+
+/// `style::ImageStretch`.
+pub type ImageStretch = (f32, f32);
+/// `style::ImageStretches`.
+pub type ImageStretches = Vec<ImageStretch>;
+
+/// `style::TextFit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextFit {
+    StretchOrShrink,
+    StretchOnly,
+    Proportional,
+}
+
+/// `style::ImageContent`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ImageContent {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// `style::Image::Impl`.
+#[derive(Clone, Debug)]
+pub struct Impl {
+    pub id: String,
+    pub image: PremultipliedImage,
+    /// Pixel ratio of the sprite image.
+    pub pixel_ratio: f32,
+    /// Whether this image should be interpreted as a signed distance field
+    /// icon.
+    pub sdf: bool,
+    /// Stretch areas of this image.
+    pub stretch_x: ImageStretches,
+    pub stretch_y: ImageStretches,
+    /// The space where text can be fit into this image.
+    pub content: Option<ImageContent>,
+    /// If `icon-text-fit` is used in a layer with this image, this option
+    /// defines constraints on the horizontal scaling of the image.
+    pub text_fit_width: Option<TextFit>,
+    /// If `icon-text-fit` is used in a layer with this image, this option
+    /// defines constraints on the vertical scaling of the image.
+    pub text_fit_height: Option<TextFit>,
+}
+
+impl PartialEq for Impl {
+    /// C++ `operator<` / `==` on image impls compare ids.
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+fn validate_stretch(stretches: &ImageStretches, size: f32) -> bool {
+    if stretches.is_empty() {
+        return true;
+    }
+    let mut last = 0.0f32;
+    for part in stretches {
+        if part.0 < last || part.1 < part.0 || size < part.1 {
+            return false;
+        }
+        last = part.1;
+    }
+    true
+}
+
+fn validate_content(content: &ImageContent, size: &Size) -> bool {
+    let (width, height) = (size.width as f32, size.height as f32);
+    if content.left < 0.0 || width < content.left {
+        return false;
+    }
+    if content.top < 0.0 || height < content.top {
+        return false;
+    }
+    if content.right < 0.0 || width < content.right {
+        return false;
+    }
+    if content.bottom < 0.0 || height < content.bottom {
+        return false;
+    }
+    if content.right < content.left {
+        return false;
+    }
+    if content.bottom < content.top {
+        return false;
+    }
+    true
+}
+
+impl Impl {
+    /// `Image::Impl(id, image, pixelRatio, sdf, stretchX, stretchY, content,
+    /// textFitWidth, textFitHeight)`; C++ throws `util::StyleImageException`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        image: PremultipliedImage,
+        pixel_ratio: f32,
+        sdf: bool,
+        stretch_x: ImageStretches,
+        stretch_y: ImageStretches,
+        content: Option<ImageContent>,
+        text_fit_width: Option<TextFit>,
+        text_fit_height: Option<TextFit>,
+    ) -> Result<Self, StyleImageException> {
+        if !image.valid() {
+            return Err(StyleImageException::new("dimensions may not be zero"));
+        } else if pixel_ratio <= 0.0 {
+            return Err(StyleImageException::new("pixelRatio may not be <= 0"));
+        } else if !validate_stretch(&stretch_x, image.size.width as f32) {
+            return Err(StyleImageException::new("stretchX is out of bounds or overlapping"));
+        } else if !validate_stretch(&stretch_y, image.size.height as f32) {
+            return Err(StyleImageException::new("stretchY is out of bounds or overlapping"));
+        } else if content.as_ref().is_some_and(|content| !validate_content(content, &image.size)) {
+            return Err(StyleImageException::new("content area is invalid"));
+        }
+        Ok(Impl {
+            id,
+            image,
+            pixel_ratio,
+            sdf,
+            stretch_x,
+            stretch_y,
+            content,
+            text_fit_width,
+            text_fit_height,
+        })
+    }
+}
+
+/// `style::Image`.
+#[derive(Clone, Debug)]
+pub struct Image {
+    pub base_impl: Immutable<Impl>,
+}
+
+impl Image {
+    /// `Image(id, image, pixelRatio, sdf, stretchX, stretchY, content,
+    /// textFitWidth, textFitHeight)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        image: PremultipliedImage,
+        pixel_ratio: f32,
+        sdf: bool,
+        stretch_x: ImageStretches,
+        stretch_y: ImageStretches,
+        content: Option<ImageContent>,
+        text_fit_width: Option<TextFit>,
+        text_fit_height: Option<TextFit>,
+    ) -> Result<Self, StyleImageException> {
+        Ok(Image {
+            base_impl: Arc::new(Impl::new(
+                id,
+                image,
+                pixel_ratio,
+                sdf,
+                stretch_x,
+                stretch_y,
+                content,
+                text_fit_width,
+                text_fit_height,
+            )?),
+        })
+    }
+
+    /// `explicit Image(Immutable<Impl>)`.
+    pub fn from_impl(base_impl: Immutable<Impl>) -> Self {
+        Image { base_impl }
+    }
+
+    pub fn get_id(&self) -> String {
+        self.base_impl.id.clone()
+    }
+
+    pub fn get_image(&self) -> &PremultipliedImage {
+        &self.base_impl.image
+    }
+
+    pub fn get_pixel_ratio(&self) -> f32 {
+        self.base_impl.pixel_ratio
+    }
+
+    pub fn is_sdf(&self) -> bool {
+        self.base_impl.sdf
+    }
+
+    pub fn get_stretch_x(&self) -> &ImageStretches {
+        &self.base_impl.stretch_x
+    }
+
+    pub fn get_stretch_y(&self) -> &ImageStretches {
+        &self.base_impl.stretch_y
+    }
+
+    pub fn get_content(&self) -> &Option<ImageContent> {
+        &self.base_impl.content
+    }
+
+    pub fn get_text_fit_width(&self) -> &Option<TextFit> {
+        &self.base_impl.text_fit_width
+    }
+
+    pub fn get_text_fit_height(&self) -> &Option<TextFit> {
+        &self.base_impl.text_fit_height
+    }
+}
+
+/// `enum class ImageType : bool`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ImageType {
+    Icon,
+    Pattern,
+}
+
+/// `ImageMap = mln::unordered_map<std::string, Immutable<style::Image::Impl>>`.
+pub type ImageMap = std::collections::HashMap<String, Immutable<Impl>>;
+/// `ImageDependencies = mln::unordered_map<std::string, ImageType>`.
+pub type ImageDependencies = std::collections::HashMap<String, ImageType>;
+
+/// `Rect<uint16_t>` (util/rect.hpp).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RectU16 {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+}
+
+/// `ImagePosition`: an image's place in an atlas.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImagePosition {
+    pub padded_rect: RectU16,
+    pub pixel_ratio: f32,
+    pub sdf: bool,
+    pub stretch_x: ImageStretches,
+    pub stretch_y: ImageStretches,
+    pub content: Option<ImageContent>,
+    pub text_fit_width: Option<TextFit>,
+    pub text_fit_height: Option<TextFit>,
+    pub version: u32,
+}
+
+impl ImagePosition {
+    pub const PADDING: u16 = 1;
+
+    /// `ImagePosition(const Rect<uint16_t>&, const style::Image::Impl&, uint32_t version = 0)`.
+    pub fn new(rect: RectU16, image: &Impl, version: u32) -> Self {
+        ImagePosition {
+            padded_rect: rect,
+            pixel_ratio: image.pixel_ratio,
+            sdf: image.sdf,
+            stretch_x: image.stretch_x.clone(),
+            stretch_y: image.stretch_y.clone(),
+            content: image.content,
+            text_fit_width: image.text_fit_width,
+            text_fit_height: image.text_fit_height,
+            version,
+        }
+    }
+
+    /// `tl()`: the `int` sums narrowed to `uint16_t`.
+    pub fn tl(&self) -> [u16; 2] {
+        [
+            (self.padded_rect.x as i32 + Self::PADDING as i32) as u16,
+            (self.padded_rect.y as i32 + Self::PADDING as i32) as u16,
+        ]
+    }
+
+    /// `br()`.
+    pub fn br(&self) -> [u16; 2] {
+        [
+            (self.padded_rect.x as i32 + self.padded_rect.w as i32 - Self::PADDING as i32) as u16,
+            (self.padded_rect.y as i32 + self.padded_rect.h as i32 - Self::PADDING as i32) as u16,
+        ]
+    }
+
+    /// `tlbr()`.
+    pub fn tlbr(&self) -> [u16; 4] {
+        let tl = self.tl();
+        let br = self.br();
+        [tl[0], tl[1], br[0], br[1]]
+    }
+
+    /// `displaySize()`.
+    pub fn display_size(&self) -> [f32; 2] {
+        [
+            (self.padded_rect.w as i32 - Self::PADDING as i32 * 2) as f32 / self.pixel_ratio,
+            (self.padded_rect.h as i32 - Self::PADDING as i32 * 2) as f32 / self.pixel_ratio,
+        ]
+    }
+}
+
+/// `ImagePositions = mln::unordered_map<std::string, ImagePosition>`.
+pub type ImagePositions = std::collections::HashMap<String, ImagePosition>;

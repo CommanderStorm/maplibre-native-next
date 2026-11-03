@@ -1,0 +1,42 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Ports src/mln/renderer + include/mln/renderer and util/tile_cover.
+rust_library(
+    name = "mln_renderer",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/mln_actor",
+        "//crates/mln_gfx",
+        "//crates/mln_map_types",
+        "//crates/mln_math",
+        "//crates/mln_style",
+        "//crates/mln_style_types",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:bytemuck",
+    ],
+)
+
+rust_test(
+    name = "mln_renderer_test",
+    crate = ":mln_renderer",
+)
+
+# test/util/tile_cover.test.cpp: needs mln_map's Transform, which is above
+# this crate, so it is an integration test rather than a unit test.
+rust_test(
+    name = "tile_cover_test",
+    srcs = ["tests/tile_cover_test.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_map",
+        "//crates/mln_map_types",
+        "//crates/mln_math",
+        "//crates/mln_style_types",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)

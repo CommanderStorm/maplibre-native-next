@@ -1,0 +1,20 @@
+// Ports include/mln/layermanager/fill_extrusion_layer_factory.hpp +
+// src/mln/layermanager/fill_extrusion_layer_factory.cpp (style half).
+
+use super::layer_factory::{LayerFactory, get_source};
+use crate::layer::{Layer, LayerTypeInfo};
+use crate::layers::fill_extrusion_layer::{FillExtrusionLayer, Impl};
+use mln_conversion::Convertible;
+
+pub struct FillExtrusionLayerFactory;
+
+impl LayerFactory for FillExtrusionLayerFactory {
+    fn get_type_info(&self) -> &'static LayerTypeInfo {
+        Impl::static_type_info()
+    }
+
+    fn create_layer(&self, id: &str, value: &Convertible<'_>) -> Option<Box<dyn Layer>> {
+        let source = get_source(value)?;
+        Some(Box::new(FillExtrusionLayer::new(id, &source)))
+    }
+}

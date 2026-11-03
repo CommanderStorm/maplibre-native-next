@@ -1,0 +1,232 @@
+// Ports src/mln/tile/vector_mvt_tile_data.hpp and
+// src/mln/tile/vector_mvt_tile_data.cpp.
+//
+// Exceptions: the C++ `getLayer`, `getFeature`, `getValue`,
+// `getProperties` and `getGeometries` can throw (malformed tiles). The
+// mln_tile_id traits they implement have no error channel, so each has a
+// `try_*` inherent method returning `Result<_, vector_tile::Error>` with the
+// C++ exception, and the trait method panics with its `what()` text where
+// the C++ exception would escape (the C++ GeometryTileWorker catches
+// everything around parsing; its port needs `catch_unwind` or the `try_*`
+// methods). See DEVIATIONS.md.
+
+use crate::geometry_tile_data::fixup_polygons;
+use maplibre_native_base::{Identifier, PropertyMap, Value};
+use mln_tile_id::{GeometryCollection, GeometryTileData, GeometryTileFeature, GeometryTileLayer};
+use mln_util::constants::EXTENT;
+use mln_util::geometry::FeatureType;
+use mln_util::logging::{Event, Log};
+use std::cell::OnceCell;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use vector_tile::{Error, GeomType};
+
+fn unwrap_or_throw<T>(r: Result<T, Error>) -> T {
+    match r {
+        Ok(v) => v,
+        // An uncaught C++ exception; see the file comment.
+        Err(e) => panic!("{e}"),
+    }
+}
+
+/// `VectorMVTTileFeature`.
+pub struct VectorMVTTileFeature<'l> {
+    feature: vector_tile::Feature<'l, 'l>,
+    lines: OnceCell<GeometryCollection>,
+    properties: OnceCell<PropertyMap>,
+}
+
+impl<'l> VectorMVTTileFeature<'l> {
+    /// `VectorMVTTileFeature(const mapbox::vector_tile::layer&, const protozero::data_view&)`.
+    pub fn new(layer: &'l vector_tile::Layer<'l>, view: &'l [u8]) -> Result<Self, Error> {
+        Ok(VectorMVTTileFeature {
+            feature: vector_tile::Feature::new(view, layer)?,
+            lines: OnceCell::new(),
+            properties: OnceCell::new(),
+        })
+    }
+
+    /// `getValue`: `nullopt` for a null value.
+    pub fn try_get_value(&self, key: &str) -> Result<Option<Value>, Error> {
+        let value = self.feature.get_value(key)?;
+        Ok(if value == Value::Null { None } else { Some(value) })
+    }
+
+    /// `getProperties` (computed once; a throwing call is retried next time).
+    pub fn try_get_properties(&self) -> Result<&PropertyMap, Error> {
+        if let Some(properties) = self.properties.get() {
+            return Ok(properties);
+        }
+        let properties = self.feature.get_properties()?;
+        Ok(self.properties.get_or_init(|| properties))
+    }
+
+    /// `getGeometries`: scaled to `util::EXTENT`; `std::runtime_error`s of
+    /// the decoder are logged and give an empty collection, other exceptions
+    /// propagate (and the next call retries). Version 1 polygons go through
+    /// `fixupPolygons`; if that throws, the unfixed lines are kept for the
+    /// next call, as in C++.
+    pub fn try_get_geometries(&self) -> Result<&GeometryCollection, Error> {
+        if let Some(lines) = self.lines.get() {
+            return Ok(lines);
+        }
+
+        let scale = EXTENT as f32 / self.feature.get_extent() as f32;
+
+        let mut lines = match self.feature.get_geometries::<i16>(scale) {
+            Ok(paths) => GeometryCollection::from(paths),
+            Err(Error::Runtime(what)) => {
+                Log::error(Event::ParseTile, format!("Could not get geometries: {what}"));
+                GeometryCollection::new()
+            }
+            Err(e) => return Err(e),
+        };
+
+        if self.feature.get_version() < 2 && self.feature.get_type() == GeomType::POLYGON {
+            match fixup_polygons(&lines) {
+                Ok(fixed) => lines = fixed,
+                Err(e) => {
+                    // C++ has already stored the decoded lines when
+                    // fixupPolygons throws: the next call returns them.
+                    let _ = self.lines.set(lines);
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(self.lines.get_or_init(|| lines))
+    }
+
+    /// The `mapbox::vector_tile::feature` (for the difftest and the worker).
+    pub fn feature(&self) -> &vector_tile::Feature<'l, 'l> {
+        &self.feature
+    }
+}
+
+impl GeometryTileFeature for VectorMVTTileFeature<'_> {
+    fn get_type(&self) -> FeatureType {
+        match self.feature.get_type() {
+            GeomType::POINT => FeatureType::Point,
+            GeomType::LINESTRING => FeatureType::LineString,
+            GeomType::POLYGON => FeatureType::Polygon,
+            _ => FeatureType::Unknown,
+        }
+    }
+
+    fn get_value(&self, key: &str) -> Option<Value> {
+        unwrap_or_throw(self.try_get_value(key))
+    }
+
+    fn get_properties(&self) -> &PropertyMap {
+        unwrap_or_throw(self.try_get_properties())
+    }
+
+    fn get_id(&self) -> Identifier {
+        self.feature.get_id().clone()
+    }
+
+    fn get_geometries(&self) -> &GeometryCollection {
+        unwrap_or_throw(self.try_get_geometries())
+    }
+}
+
+/// `VectorMVTTileLayer`. C++ also holds the tile data (`shared_ptr`); here
+/// the layer borrows it from the [`VectorMVTTileData`].
+pub struct VectorMVTTileLayer<'d> {
+    layer: vector_tile::Layer<'d>,
+}
+
+impl<'d> VectorMVTTileLayer<'d> {
+    /// `VectorMVTTileLayer(std::shared_ptr<const std::string>, const protozero::data_view&)`.
+    pub fn new(view: &'d [u8]) -> Result<Self, Error> {
+        Ok(VectorMVTTileLayer { layer: vector_tile::Layer::new(view)? })
+    }
+
+    /// `getFeature(i)`: `std::out_of_range` past the end, protozero
+    /// exceptions for a malformed feature.
+    pub fn try_get_feature(&self, i: usize) -> Result<VectorMVTTileFeature<'_>, Error> {
+        VectorMVTTileFeature::new(&self.layer, self.layer.get_feature(i)?)
+    }
+
+    /// The `mapbox::vector_tile::layer`.
+    pub fn layer(&self) -> &vector_tile::Layer<'d> {
+        &self.layer
+    }
+}
+
+impl GeometryTileLayer for VectorMVTTileLayer<'_> {
+    fn feature_count(&self) -> usize {
+        self.layer.feature_count()
+    }
+
+    fn get_feature(&self, index: usize) -> Box<dyn GeometryTileFeature + '_> {
+        Box::new(unwrap_or_throw(self.try_get_feature(index)))
+    }
+
+    fn get_name(&self) -> String {
+        self.layer.get_name()
+    }
+}
+
+/// `VectorMVTTileData`: the layers are indexed lazily, on the first
+/// `getLayer`, so the object can be made on the main thread cheaply.
+pub struct VectorMVTTileData {
+    /// C++ `std::shared_ptr<const std::string>`.
+    data: Arc<Vec<u8>>,
+    /// C++ `mutable bool parsed` + `mutable std::map<std::string, const
+    /// protozero::data_view> layers`; views as (offset, length) into `data`.
+    layers: OnceCell<BTreeMap<Vec<u8>, (usize, usize)>>,
+}
+
+impl VectorMVTTileData {
+    pub fn new(data: Arc<Vec<u8>>) -> Self {
+        VectorMVTTileData { data, layers: OnceCell::new() }
+    }
+
+    pub fn data(&self) -> &Arc<Vec<u8>> {
+        &self.data
+    }
+
+    /// `getLayer`: `None` for an unknown layer. Errors: the
+    /// `mapbox::vector_tile::buffer` errors (only the first successful parse
+    /// is cached, as C++ sets `parsed` after it) and the
+    /// `mapbox::vector_tile::layer` constructor errors.
+    pub fn try_get_layer(&self, name: &str) -> Result<Option<VectorMVTTileLayer<'_>>, Error> {
+        let layers = match self.layers.get() {
+            Some(layers) => layers,
+            None => {
+                // We're parsing this lazily so that we can construct VectorTileData
+                // objects on the main thread without incurring the overhead of parsing
+                // immediately.
+                let base = self.data.as_ptr() as usize;
+                let layers = vector_tile::Buffer::new(&self.data)?
+                    .get_layers()
+                    .into_iter()
+                    .map(|(name, view)| (name, (view.as_ptr() as usize - base, view.len())))
+                    .collect();
+                self.layers.get_or_init(|| layers)
+            }
+        };
+
+        match layers.get(name.as_bytes()) {
+            Some(&(offset, len)) => Ok(Some(VectorMVTTileLayer::new(&self.data[offset..offset + len])?)),
+            None => Ok(None),
+        }
+    }
+
+    /// `layerNames()` (parses the buffer again, as C++ does).
+    pub fn layer_names(&self) -> Result<Vec<String>, Error> {
+        Ok(vector_tile::Buffer::new(&self.data)?.layer_names())
+    }
+}
+
+impl GeometryTileData for VectorMVTTileData {
+    /// `clone()`: shares the data, not the parsed index.
+    fn clone_data(&self) -> Box<dyn GeometryTileData> {
+        Box::new(VectorMVTTileData::new(self.data.clone()))
+    }
+
+    fn get_layer(&self, name: &str) -> Option<Box<dyn GeometryTileLayer + '_>> {
+        unwrap_or_throw(self.try_get_layer(name)).map(|layer| Box::new(layer) as Box<dyn GeometryTileLayer + '_>)
+    }
+}

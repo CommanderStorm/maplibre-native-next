@@ -1,0 +1,226 @@
+// Ports include/mln/style/conversion.hpp (Error) and the Convertible part of
+// include/mln/style/conversion_impl.hpp.
+//
+// C++ builds its own vtable over inline storage so that one `Convertible`
+// can wrap rapidjson values, NSDictionary, QVariant, JNI values, ... The Rust
+// equivalent is a trait object: `ConversionTraits` is the C++
+// `ConversionTraits<T>` specialization (one impl per front end), and
+// `Convertible` holds either a borrowed or an owned `dyn ConversionTraits`.
+// Front ends whose members are views into the parent (serde_json) return
+// borrowed members; front ends that create new handles per member (JNI) can
+// return owned ones.
+
+use maplibre_native_base::Value;
+
+/// `mln::style::conversion::Error`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Error {
+    pub message: String,
+}
+
+impl Error {
+    pub fn new(message: impl Into<String>) -> Self {
+        Error {
+            message: message.into(),
+        }
+    }
+}
+
+/// The per-front-end operations (`ConversionTraits<T>` in C++). The
+/// preconditions are the C++ ones: `array_length`/`array_member` only if
+/// `is_array`, `object_member`/`each_member` only if `is_object`.
+pub trait ConversionTraits {
+    /// Whether the value is undefined or a JSON null.
+    fn is_undefined(&self) -> bool;
+
+    fn is_array(&self) -> bool;
+    fn array_length(&self) -> usize;
+    fn array_member(&self, i: usize) -> Convertible<'_>;
+
+    fn is_object(&self) -> bool;
+    fn object_member(&self, name: &str) -> Option<Convertible<'_>>;
+    /// Calls `f` once per key and value; stops at, and returns, the first
+    /// error `f` returns.
+    fn each_member(
+        &self,
+        f: &mut dyn FnMut(&str, &Convertible<'_>) -> Option<Error>,
+    ) -> Option<Error>;
+
+    fn to_bool(&self) -> Option<bool>;
+    /// A JSON number as `float`.
+    fn to_number(&self) -> Option<f32>;
+    fn to_double(&self) -> Option<f64>;
+    fn to_string(&self) -> Option<String>;
+    /// A boolean, number or string as a `Value`; numbers prefer `u64`, then
+    /// `i64`, then `f64`.
+    fn to_value(&self) -> Option<Value>;
+
+    /// `toGeoJSON(value, error)`: the front end's GeoJSON conversion. The
+    /// JSON front end runs `mapbox::geojson::convert` and reports its
+    /// exception message in `error`. A front end without one reports an
+    /// error (added by `sources` for the GeoJSON source).
+    fn to_geojson(&self, error: &mut Error) -> Option<geojson::GeoJSON> {
+        error.message = "GeoJSON conversion is not supported by this value type".to_owned();
+        None
+    }
+}
+
+enum Inner<'a> {
+    Borrowed(&'a dyn ConversionTraits),
+    Owned(Box<dyn ConversionTraits + 'a>),
+}
+
+/// `mln::style::conversion::Convertible`: a type-erased, read-only view of a
+/// JSON-like value.
+pub struct Convertible<'a> {
+    inner: Inner<'a>,
+}
+
+impl<'a> Convertible<'a> {
+    /// Wraps a borrowed front-end value.
+    pub fn new(value: &'a dyn ConversionTraits) -> Self {
+        Convertible {
+            inner: Inner::Borrowed(value),
+        }
+    }
+
+    /// Wraps an owned front-end value (a handle the front end created).
+    pub fn owned(value: impl ConversionTraits + 'a) -> Self {
+        Convertible {
+            inner: Inner::Owned(Box::new(value)),
+        }
+    }
+
+    fn traits(&self) -> &dyn ConversionTraits {
+        match &self.inner {
+            Inner::Borrowed(v) => *v,
+            Inner::Owned(v) => v.as_ref(),
+        }
+    }
+
+    pub fn is_undefined(&self) -> bool {
+        self.traits().is_undefined()
+    }
+
+    pub fn is_array(&self) -> bool {
+        self.traits().is_array()
+    }
+
+    pub fn array_length(&self) -> usize {
+        self.traits().array_length()
+    }
+
+    pub fn array_member(&self, i: usize) -> Convertible<'_> {
+        self.traits().array_member(i)
+    }
+
+    pub fn is_object(&self) -> bool {
+        self.traits().is_object()
+    }
+
+    pub fn object_member(&self, name: &str) -> Option<Convertible<'_>> {
+        self.traits().object_member(name)
+    }
+
+    pub fn each_member(
+        &self,
+        mut f: impl FnMut(&str, &Convertible<'_>) -> Option<Error>,
+    ) -> Option<Error> {
+        self.traits().each_member(&mut f)
+    }
+
+    pub fn to_bool(&self) -> Option<bool> {
+        self.traits().to_bool()
+    }
+
+    pub fn to_number(&self) -> Option<f32> {
+        self.traits().to_number()
+    }
+
+    pub fn to_double(&self) -> Option<f64> {
+        self.traits().to_double()
+    }
+
+    pub fn to_string(&self) -> Option<String> {
+        self.traits().to_string()
+    }
+
+    pub fn to_value(&self) -> Option<Value> {
+        self.traits().to_value()
+    }
+
+    /// `toGeoJSON(value, error)`.
+    pub fn to_geojson(&self, error: &mut Error) -> Option<geojson::GeoJSON> {
+        self.traits().to_geojson(error)
+    }
+}
+
+impl std::fmt::Debug for Convertible<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Convertible")
+    }
+}
+
+impl<'a, T: ConversionTraits> From<&'a T> for Convertible<'a> {
+    fn from(value: &'a T) -> Self {
+        Convertible::new(value)
+    }
+}
+
+// The C++ free (friend) functions, for code ported call-for-call.
+
+pub fn is_undefined(v: &Convertible<'_>) -> bool {
+    v.is_undefined()
+}
+
+pub fn is_array(v: &Convertible<'_>) -> bool {
+    v.is_array()
+}
+
+pub fn array_length(v: &Convertible<'_>) -> usize {
+    v.array_length()
+}
+
+pub fn array_member<'b>(v: &'b Convertible<'_>, i: usize) -> Convertible<'b> {
+    v.array_member(i)
+}
+
+pub fn is_object(v: &Convertible<'_>) -> bool {
+    v.is_object()
+}
+
+pub fn object_member<'b>(v: &'b Convertible<'_>, name: &str) -> Option<Convertible<'b>> {
+    v.object_member(name)
+}
+
+pub fn each_member(
+    v: &Convertible<'_>,
+    f: impl FnMut(&str, &Convertible<'_>) -> Option<Error>,
+) -> Option<Error> {
+    v.each_member(f)
+}
+
+pub fn to_bool(v: &Convertible<'_>) -> Option<bool> {
+    v.to_bool()
+}
+
+pub fn to_number(v: &Convertible<'_>) -> Option<f32> {
+    v.to_number()
+}
+
+pub fn to_double(v: &Convertible<'_>) -> Option<f64> {
+    v.to_double()
+}
+
+pub fn to_string(v: &Convertible<'_>) -> Option<String> {
+    v.to_string()
+}
+
+pub fn to_value(v: &Convertible<'_>) -> Option<Value> {
+    v.to_value()
+}
+
+/// `toGeoJSON(value, error)`.
+pub fn to_geojson(v: &Convertible<'_>, error: &mut Error) -> Option<geojson::GeoJSON> {
+    v.to_geojson(error)
+}

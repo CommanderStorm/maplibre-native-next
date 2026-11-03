@@ -1,0 +1,40 @@
+// Ports include/mln/shaders/shader_program_base.hpp
+
+use crate::shader::Shader;
+use crate::vertex_attribute::{ElementType, VertexAttributeArray};
+use mln_util::identity::SimpleIdentity;
+use std::rc::Rc;
+
+/// `gfx::ShaderProgramBase`
+pub trait ShaderProgramBase: Shader {
+    /// `getID()`: the `shaderProgramID` assigned at construction.
+    fn get_id(&self) -> SimpleIdentity;
+    /// Gets the sampler location for a texture id
+    fn get_sampler_location(&self, id: usize) -> Option<usize>;
+    /// Get the available vertex attributes and their default values
+    fn get_vertex_attributes(&self) -> &VertexAttributeArray;
+    /// Get the available instance attributes and their default values
+    fn get_instance_attributes(&self) -> &VertexAttributeArray;
+}
+
+pub type ShaderProgramBasePtr = Rc<dyn ShaderProgramBase>;
+
+/// The protected `set<T>(attrs, id, i, value)` helper.
+pub fn set_attribute(attrs: &mut VertexAttributeArray, id: usize, i: usize, value: ElementType) -> bool {
+    if let Some(item) = attrs.get_mut(id)
+        && i < item.get_count()
+    {
+        item.set(i, value);
+        return true;
+    }
+    false
+}
+
+/// Pointer equality for shader handles (`shader == value` in C++).
+pub fn same_shader(a: &Option<ShaderProgramBasePtr>, b: &Option<ShaderProgramBasePtr>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => std::ptr::addr_eq(Rc::as_ptr(a), Rc::as_ptr(b)),
+        (None, None) => true,
+        _ => false,
+    }
+}

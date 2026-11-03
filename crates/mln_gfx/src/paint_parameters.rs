@@ -1,0 +1,41 @@
+// The gfx-facing part of `mln::PaintParameters` (src/mln/renderer/paint_parameters.hpp).
+//
+// Crate cut: `PaintParameters` is a renderer type (it holds the transform
+// state, atlases, static data), but gfx and the backends call into it from
+// `Drawable::draw`, `LayerGroupBase::render` and `DrawableTweaker::execute`.
+// The renderer's struct implements this trait; the backends only see it.
+
+use crate::command_encoder::CommandEncoder;
+use crate::context::Context;
+use crate::depth_mode::DepthMode;
+use crate::render_pass::RenderPass as GfxRenderPass;
+use crate::renderer::render_pass::RenderPass;
+use crate::scissor_rect::ScissorRect;
+use crate::stencil_mode::StencilMode;
+use crate::types::DepthMaskType;
+use mln_tile_id::UnwrappedTileID;
+
+pub trait PaintParameters {
+    /// `gfx::Context& context`
+    fn context(&self) -> &dyn Context;
+    /// `std::unique_ptr<gfx::CommandEncoder> encoder`
+    fn encoder(&self) -> Option<&dyn CommandEncoder>;
+    /// `std::unique_ptr<gfx::RenderPass> renderPass`
+    fn render_pass(&self) -> Option<&dyn GfxRenderPass>;
+    /// `RenderPass pass`: the pass being drawn (Opaque/Translucent/Pass3D)
+    fn pass(&self) -> RenderPass;
+    /// `gfx::ScissorRect scissorRect`
+    fn scissor_rect(&self) -> ScissorRect;
+
+    fn depth_mode_for_sublayer(&self, n: u8, mask: DepthMaskType) -> DepthMode;
+    fn depth_mode_for_3d(&self) -> DepthMode;
+
+    /// `renderTileClippingMasks(const RenderTiles&)`. C++ passes the render
+    /// tiles; only their tile ids are used (`GetTileIDFunc`), so the port
+    /// passes the ids. Returns true when the clipping mask state is ready.
+    fn render_tile_clipping_masks(&mut self, tile_ids: &[UnwrappedTileID]) -> bool;
+    /// Get a stencil mode for rendering constrained to the specified tile ID.
+    fn stencil_mode_for_clipping(&self, tile_id: &UnwrappedTileID) -> StencilMode;
+    /// Initialize a stencil mode for 3D rendering (each value is unique).
+    fn stencil_mode_for_3d(&mut self) -> StencilMode;
+}

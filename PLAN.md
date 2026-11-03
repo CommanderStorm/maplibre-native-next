@@ -1,0 +1,184 @@
+# maplibre-native-next: porting the MapLibre Native core to Rust
+
+This repository is a **port** of the MapLibre Native C++ core
+(`src/mln`, `include/mln` in `../maplibre-native`, about 167k lines). It is a
+port, not a redesign:
+
+- Modules, types, files and names carry over. Every Rust file starts with the
+  C++ file(s) it ports, so a review is always a side-by-side diff.
+- The architecture in `../maplibre-native/ARCHITECTURE.md` is kept: the Impl
+  idiom, `Immutable<T>` snapshots diffed by the render objects, actor-based
+  threading, the `gfx` backend abstraction.
+- Quirks are ported, not fixed (premultiplied `Color`, rapidjson number
+  formatting, `strtof`-based CSS parsing, `fmin`/`fmax` NaN behaviour). A
+  necessary deviation goes in `DEVIATIONS.md`.
+- **Done means identical to C++**, checked by differential tests that link the
+  C++ core as an oracle, plus the shared render, query and expression suites.
+
+`PORTING.md` holds the working rules; this file holds the plan.
+
+## 1. Build
+
+- **Bazel only** (rules_rust 0.74, Rust edition 2024). `MODULE.bazel` depends
+  on the C++ repo as the `maplibre` module through
+  `local_path_override(path = "../maplibre-native")`, so tests see uncommitted
+  C++ changes. CI pins a commit with `git_override` instead.
+- Third-party crates are `crate.spec`s in `MODULE.bazel` (`@next_crates`).
+  Crates in this repo are plain `rust_library` targets, so adding one never
+  touches shared files.
+- The C++ core is never linked into the port. Only `//difftest/...` links
+  `@maplibre//:mbgl-core`, as the reference implementation.
+- On NixOS everything runs through `scripts/bazel` (the C++ repo's `#linux`
+  flake shell plus bazelisk) with machine-local flags in `user.bazelrc`.
+- Test data comes from the C++ repo as Bazel data deps:
+  `@maplibre//metrics:render-test-files` and
+  `@maplibre//metrics:expression-test-files`. Nothing is copied.
+
+Changes made in `../maplibre-native` so it works as a dependency (to upstream
+as one PR):
+
+1. `MODULE.bazel`: `node`/`npm` extensions are no longer dev dependencies
+   (`//:BUILD.bazel` loads `@npm`); the rustutils `crate` extension is (a
+   non-root crate_universe call would have to ship a generated lockfile).
+2. `BUILD.bazel`: the style and shader code generators get their root from
+   `repo_name()`, because in a dependency their files live under
+   `external/<repo>`.
+3. `metrics/BUILD.bazel`: the render and expression test filegroups are
+   public.
+
+## 2. Crate map
+
+Measured with `tools/cycles/include_graph.py`: **26 of the 29 C++ modules form
+a single include cycle** (only `math`, `i18n` and `programs` are acyclic).
+That works for one C++ library but not for Cargo crates. The cycle is held
+together by a few shared vocabulary headers plus a handful of `util/` files
+that really belong to higher modules (`tools/cycles/back_edges.py` lists them
+all). Cutting there gives this layering, bottom to top:
+
+| Crate | Ports | Notes |
+|---|---|---|
+| `//vendor/maplibre-native-base` | `mapbox::geometry`, `mapbox::feature`, `mapbox::base::Value` | own types, not `geo-types`: the `u64`/`i64`/`f64` distinction is load-bearing |
+| `//vendor/csscolorparser` | `vendor/csscolorparser` | port of the C++ parser; the Rust crate of the same name accepts different input |
+| `//vendor/rapidjson` | `rapidjson/internal/{dtoa,diyfp,ieee754}.h` only | number formatting for `util::toString(double)`; JSON itself is serde_json |
+| `//vendor/pixelmatch` | the pixelmatch used by `render-test/` | image diff metric |
+| `mln_math` | `math/` | |
+| `mln_util` | `util/` minus the files below | `mat2/3/4`, `Color`, geo, `toString`, `interpolate` (generic part), image |
+| `mln_tile_id` | `tile/tile_id.hpp`, `tile/geometry_tile_data.hpp` (interfaces) | cut point: included by util, style and expression |
+| `mln_style_types` | `style/types.hpp`, `position`, `rotation`, `variable_anchor_offset_collection` | cut point: included by util and expression |
+| `mln_conversion` | `style/conversion.hpp`, `conversion_impl.hpp`, generic `conversion/*` helpers | cut point: `Convertible` over serde_json; JNI/Swift front ends plug in later as in C++ |
+| `mln_actor` | `actor/`, `util/{run_loop,thread,thread_pool}`, `platform/default` loop | std threads and channels, no async runtime |
+| `mln_expression` | `style/expression/` minus `format_section_override` | own corpus: `metrics/integration/expression-tests` |
+| `mln_style` | `style/` (layers, sources, properties, parser, light) | the `Interpolator` impls for style types live here (orphan rule) |
+| `mln_gfx` | `gfx/`, `shaders/` registry, `programs/` | backend-independent drawables, passes, uniform buffers |
+| `mln_webgpu` | `webgpu/` | the first backend: on the `wgpu` crate, using the C++ backend's WGSL sources unchanged |
+| `mln_renderer` | `renderer/`, `util/tile_cover`, `format_section_override` | |
+| `mln_tile`, `mln_storage`, `mln_text`, `mln_layout`, `mln_sprite`, `mln_algorithm`, `mln_geometry` | the matching modules | phases 3-5 |
+| `mln_map` | `map/`, `annotation/`, `layermanager/`, `util/{camera,action_journal}` | top of the core |
+| `mln_platform_default` | `platform/default` (headless frontend and backend, file sources) | |
+| `//tools/render-test`, `//tools/expression-test` | `render-test/`, `expression-test/` | run the shared suites |
+| `//difftest/<area>` | | Rust vs. C++ differential tests |
+
+Where the residual cycle in the middle (style, renderer, tile, text, layout)
+cannot be cut without moving more than a few files, those modules share one
+crate with a module tree that mirrors the directories. That decision is made
+per pair when we get there, from the measured edges.
+
+## 3. C++ → Rust idioms
+
+| C++ | Rust |
+|---|---|
+| `variant<...>` (+ `recursive_wrapper`) | `enum` (+ `Box`), same variant order |
+| `Immutable<T>`, `makeMutable`, pointer-identity diffing | `Arc<T>`, build-then-freeze, `Arc::ptr_eq` (no `Mutex`) |
+| Impl idiom (`Layer` holding `Immutable<Layer::Impl>`) | same split; mutators clone, modify, freeze |
+| `optional` / `expected` / `unique_ptr` / `shared_ptr` | `Option` / `Result` / `Box` / `Arc` |
+| constructors that throw | `Result`, same error messages |
+| observer interfaces | traits |
+| `Actor`, `Mailbox`, `ActorRef`, `Scheduler`, `RunLoop` | same names; messages are closures or enums |
+| rapidjson | serde_json behind `Convertible` |
+| `std::min`/`std::max` on floats; `util::min`/`util::max` | `if b < a { b } else { a }`; `fmin`/`fmax` with glibc semantics; never `f64::min` where signed zeros matter |
+| EJS style code generation | a Rust generator over the same `v8.json`, checked-in output |
+| gtest `TEST(Group, Name)` | `#[test] fn name()` in `group.rs`, same fixtures |
+
+## 4. Dependency map (vendor → Rust)
+
+| C++ | Rust | Parity |
+|---|---|---|
+| **harfbuzz** (`text/harfbuzz*.cpp`, `HBShaper`) | **[HarfRust](https://github.com/harfbuzz/harfrust)** (`harfrust` 0.15, locally patched for two HarfRust bugs found by the difftest, to upstream), with the C++ build's `HB_TINY` configuration emulated (hidden AAT tables, no FeatureVariations, HarfBuzz 8.2 UCD tables) | measured: 94.2% of 59,015 shaping cases bit-identical over 149 fonts; the rest is HarfRust's Unicode 18 data vs. HarfBuzz 8.2's Unicode 15 (1,691 cases) and fallback mark positioning that `HB_TINY` disables and HarfRust cannot (1,649), all classified in `DEVIATIONS.md` |
+| freetype (`text/freetype.cpp`: face loading, cmaps, rasterization) | the needed parts of FreeType 2.13 ported (face loading, cmap formats 0-14, charmap selection, the ftgrays rasterizer) plus hb-ft; outlines and hinting via `skrifa` | cmap lookups identical (19.1M); SDF step bit-identical; bitmaps 68% identical, 1.1% of pixels differ (skrifa vs. FreeType hinting) |
+| csscolorparser, rapidjson dtoa, pixelmatch, earcut, kdbush, supercluster, geojson-vt, polylabel, wagyu | ported | exact |
+| protozero + vector-tile | hand-rolled MVT reader | exact |
+| sqlite | `rusqlite` (same engine) | exact; offline databases interchangeable both ways |
+| nunicode (collation, case mapping) | ported (`//vendor/nunicode`, tables generated from the vendored sources) | exact: every code point compared against C++ |
+| icu (number-format, BiDi) | number-format reimplemented for the locales the tests use; BiDi: `unicode-bidi` or a port, decided in M5 | number-format exact on the corpus; other locales differ |
+| Dawn / wgpu-native (`webgpu/`) | `wgpu` 30 | WGSL from `include/mln/shaders/webgpu/*.hpp` used unchanged |
+| boost, eternal, expected-lite, unordered_dense, unique_resource | std | |
+
+## 5. Tests
+
+1. **Differential tests** (`//difftest/<area>`): a small `cc_library` on
+   `@maplibre//:mbgl-core` exposes the C++ functions through `extern "C"`
+   (POD and JSON strings across the boundary); a `rust_test` calls both
+   implementations on proptest-generated and edge-case inputs and requires
+   identical results. Comparisons are bit-exact; any NaN equals any NaN. They
+   run on Linux x86-64 at `-c fastbuild` and `--config=oracle-opt`. On arm64,
+   clang may contract `a*b+c` into an FMA, so a ULP tolerance may be needed there.
+2. **Shared data suites**, read in place from `@maplibre//metrics`:
+   - render tests (`integration/render-tests`, 184 groups) and query tests:
+     same `style.json` files, fixtures, `expected*.png` and pixelmatch metric
+     as the C++ runner. Baselines are never overwritten; a justified Rust
+     difference gets an alternate expectation, as Metal and Vulkan already do;
+   - expression tests (`integration/expression-tests`, 86 groups): the C++
+     runner's comparison rules (6 significant digits, serialization round
+     trip, `platform-all.json` ignores).
+3. **Ported gtests** (`test/**`), test by test, same group and name, same
+   fixtures. A script counts `TEST(` vs. `#[test]` per module to give a parity
+   number.
+4. **Benchmarks** (`benchmark/**`) via criterion, once subsystems exist.
+
+## 6. Milestones
+
+| | Milestone | Exit criterion |
+|---|---|---|
+| M0 | Scaffold | done: the C++ core builds as a dependency, seed crates pass |
+| **M1** | **First Rust render tests** (done: 6 pass with zero difference, 2 ignored-failed pixel-identical to C++; with storage `background-opacity/color` passes too, and the full suite runs 108 passed / 0 failed) | `background-color/{default,literal,function,colorSpace-lab}` and `background-visibility/*` pass in the Rust render-test runner through Map → Style → RenderOrchestrator → RenderBackgroundLayer → gfx → `mln_webgpu` → headless readback, with the C++ runner's metric, baselines and ignore lists. `background-color/{colorSpace-hcl,transition}` are in the C++ `platform-all.json` ignores because C++ fails them; a faithful port reports them "ignored failed" too. `background-opacity/{color,overlay}` need the sprite and raster tiles from `metrics/cache-style.db` (storage: M4); `background-pattern/*` needs sprites (M3) |
+| M2 | Expressions | expression corpus at the C++ pass rate; zoom/feature functions in paint properties |
+| M3 | GeoJSON fill, line and circle | the `circle-*`, `fill-*` (non-pattern) and `line-*` render tests on GeoJSON sources pass; tile pipeline (sources, tile pyramid, workers) and buckets ported. The C++ `tile/` and `renderer/` include each other heavily (38 and 50 includes), so the high tile files live in `mln_renderer::tile` (PLAN section 2 rule); `mln_tile` stays the low decoding crate |
+| M4 | Vector tiles and storage | MVT decoding difftests (done: 0 mismatches over 678,610 fixture features); local file and MBTiles sources; tile-based render tests (43 vector-tile line/fill tests, raster, `background-opacity/overlay`); MLT decoding (the C++ decoder is ~70k lines: separate decision) |
+| M5 | Symbols and text | HarfRust shaping difftests; glyph PBFs; collision and placement; `text-*` and `icon-*` render tests |
+| M6 | Rest of the style spec, query tests, platform shells | |
+
+## 7. Current workstreams
+
+Five parallel agents, each owning separate directories (see `PORTING.md`),
+all on the M1 critical path:
+
+| Agent | Owns | First deliverable |
+|---|---|---|
+| `runner` | `//tools/render-test`, `//vendor/pixelmatch`, `mln_util::image` (PremultipliedImage, PNG I/O) | runner over the shared fixtures (manifest, metadata, operations, pixelmatch metric), with a reference-image self-check (finished) |
+| `style` | `mln_style_types`, `mln_style` (incl. `style/conversion/*` converters and `PropertyExpression`) | parse the M1 test styles into `Style::Impl` with `BackgroundLayer` properties, transitions and functions (finished) |
+| `shaping` (M5 groundwork, replaces `text`) | `mln_text` (shaping.cpp, BiDi, glyph_manager), `mln_util::i18n`, `//difftest/shaping` | line breaking and positioning identical to C++; BiDi matched against ICU |
+| `sources` (M3) | `mln_style` sources (`source*.rs`, `sources/`, `conversion/source.rs`, GeoJSON conversion), `mln_renderer::{sources,tile}` (RenderSource, TilePyramid, Tile, GeometryTile, GeometryTileWorker, tile loaders, GeoJSON/vector tiles) | GeoJSON and vector sources load tiles and run the worker that creates buckets |
+| `layers` (M3) | `mln_renderer::{buckets,layers}` for circle, fill, line (+ raster), paint property binders, their tweakers; the matching `mln_webgpu`/`mln_gfx` additions (shader attribute tables, polyline building) | circle/fill/line drawables render; the M3 render tests pass |
+| `text` (second wave, replaces `render`) | `mln_text`, `//difftest/text` | HBShaper on HarfRust + skrifa, shaping difftest exact over HarfBuzz's 146 test fonts; glyph PBFs; rasterization (finished) |
+| `tile` (third wave, replaces `runner`) | `//vendor/{protozero,vector-tile}`, `mln_tile` (MVT path), `//difftest/tile` | MVT decoding identical to C++ on every fixture tile (finished; also ported wagyu) |
+| `geometry` (third wave, replaces `expression`) | `//vendor/{earcut,geojson-vt,supercluster,kdbush,polylabel,cheap-ruler,shelf-pack}` (wagyu went to `tile`), `//difftest/geometry` | the vendored geometry libraries, exact |
+| `codegen` (second wave, replaces `gfx`) | `//tools/style-codegen`, generated `mln_style/src/layers/*`, layer factories, `//difftest/style_codegen` | a Rust port of generate-style-code.mjs over the same v8.json; all layer types' style side; defaults and property round trips identical to C++ (finished) |
+| `storage` (second wave, replaces `style`) | `mln_storage`, `mln_sprite`, the sprite-loading path in `mln_style`, `//difftest/storage` | Resource/Response/FileSource, the database file source over `metrics/cache-style.db`, sprite loading; `background-opacity/color` passes (finished) |
+| `gfx` | `mln_gfx`, `mln_webgpu`, WGSL extraction | headless wgpu (lavapipe) offscreen render and readback, then the background shader on the drawable path (finished) |
+| `render` | `mln_util::{mat4,size,...}`, `mln_tile_id`, `mln_actor` (minimal), `mln_renderer`, `mln_map`, `mln_platform_default` | Map, Transform, HeadlessFrontend, RenderOrchestrator and RenderBackgroundLayer; integrates M1 (finished) |
+| `expression` | `mln_math`, existing `mln_util` files, `//vendor/{csscolorparser,rapidjson,maplibre-native-base}`, `mln_conversion`, `mln_expression`, `//tools/expression-test`, `//difftest/{util,expression}` | first `Convertible` + seed fixes, then the expressions M1 needs (literal, interpolate incl. HCL/LAB, step, zoom, coercions), then the corpus runner and difftests (finished) |
+
+Next wave (after M1): text with HarfRust (`mln_text` shaping difftests
+against `HBShaper`), MVT decoding (`mln_tile`), storage, codegen for all layer
+types.
+
+## 8. Risks
+
+- **Scale**: start with vertical slices (M1) so integration problems surface
+  early; generate the layer property code instead of porting it by hand.
+- **Float parity**: difftests catch differences per function; the render
+  suites' per-test `allowed` diff absorbs rasterizer differences.
+- **Text stack**: HarfRust shaping should match exactly; rasterization and
+  ICU-dependent behaviour are the expected deviations.
+- **Shared build server**: agents queue on one Bazel server (memory and disk
+  are limited on the dev machine); nobody builds `//...` or cleans.

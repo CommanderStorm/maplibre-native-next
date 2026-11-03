@@ -1,0 +1,170 @@
+// Ports include/mln/style/style.hpp + src/mln/style/style.cpp.
+
+use crate::expression::GlobalStateMap;
+use crate::image;
+use crate::layer::Layer;
+use crate::light::Light;
+use crate::source::Source;
+use crate::transition_options::TransitionOptions;
+use maplibre_native_base::Value;
+use crate::map::camera::CameraOptions;
+use mln_util::exception::{ExceptionPtr, MisuseException};
+use mln_util::immutable::Immutable;
+
+pub use crate::style_impl::{Impl, LayerRefMut, LightRefMut};
+
+#[derive(Debug)]
+pub struct Style {
+    // Private implementation
+    pub impl_: Box<Impl>,
+}
+
+impl Style {
+    /// A style without a file source (see `Impl::new`).
+    pub fn new(pixel_ratio: f32) -> Self {
+        Style {
+            impl_: Box::new(Impl::new(pixel_ratio)),
+        }
+    }
+
+    /// `Style(std::shared_ptr<FileSource>, float pixelRatio, const TaggedScheduler&)`.
+    pub fn with_file_source(
+        file_source: Option<std::sync::Arc<dyn mln_storage::FileSource>>,
+        pixel_ratio: f32,
+        thread_pool: mln_actor::TaggedScheduler,
+    ) -> Self {
+        Style {
+            impl_: Box::new(Impl::with_file_source(file_source, pixel_ratio, thread_pool)),
+        }
+    }
+
+    pub fn load_json(&mut self, json: &str) {
+        self.impl_.load_json(json);
+    }
+
+    pub fn load_url(&mut self, url: &str) {
+        self.impl_.load_url(url);
+    }
+
+    pub fn get_json(&self) -> String {
+        self.impl_.get_json()
+    }
+
+    pub fn get_url(&self) -> String {
+        self.impl_.get_url()
+    }
+
+    /// False while a style passed to load_json/load_url is still being fetched or parsed.
+    pub fn is_loaded(&self) -> bool {
+        self.impl_.loaded
+    }
+
+    // Defaults
+    pub fn get_name(&self) -> String {
+        self.impl_.get_name()
+    }
+
+    pub fn get_default_camera(&self) -> CameraOptions {
+        self.impl_.get_default_camera()
+    }
+
+    // TransitionOptions
+    pub fn get_transition_options(&self) -> TransitionOptions {
+        self.impl_.get_transition_options()
+    }
+
+    pub fn set_transition_options(&mut self, options: &TransitionOptions) {
+        self.impl_.mutated = true;
+        self.impl_.set_transition_options(options);
+    }
+
+    // Light
+    pub fn get_light_mut(&mut self) -> LightRefMut<'_> {
+        self.impl_.mutated = true;
+        self.impl_.get_light_mut()
+    }
+
+    pub fn get_light(&self) -> &Light {
+        self.impl_.get_light()
+    }
+
+    pub fn set_light(&mut self, light: Light) {
+        self.impl_.set_light(light);
+    }
+
+    // Global state, used by the "global-state" expression.
+    pub fn get_global_state(&self) -> GlobalStateMap {
+        self.impl_.get_global_state()
+    }
+
+    /// C++ throws `util::MisuseException` if the style has not finished loading.
+    pub fn set_global_state_property(&mut self, name: &str, value: &Value) -> Result<(), ExceptionPtr> {
+        if !self.impl_.loaded {
+            return Err(MisuseException::ptr("Style is not done loading."));
+        }
+
+        self.impl_.mutated = true;
+        self.impl_.set_global_state_property(name, value);
+        Ok(())
+    }
+
+    // Images
+    pub fn get_image(&self, name: &str) -> Option<Immutable<image::Impl>> {
+        self.impl_.get_image(name)
+    }
+
+    pub fn add_image(&mut self, image: Immutable<image::Impl>) {
+        self.impl_.mutated = true;
+        self.impl_.add_image(image);
+    }
+
+    pub fn remove_image(&mut self, name: &str) {
+        self.impl_.mutated = true;
+        self.impl_.remove_image(name);
+    }
+
+    // Sources
+    pub fn get_sources(&self) -> Vec<&dyn Source> {
+        self.impl_.get_sources()
+    }
+
+    pub fn get_source(&self, id: &str) -> Option<&dyn Source> {
+        self.impl_.get_source(id)
+    }
+
+    pub fn add_source(&mut self, source: Box<dyn Source>) -> Result<(), ExceptionPtr> {
+        self.impl_.mutated = true;
+        self.impl_.add_source(source)
+    }
+
+    pub fn remove_source(&mut self, source_id: &str) -> Option<Box<dyn Source>> {
+        self.impl_.mutated = true;
+        self.impl_.remove_source(source_id)
+    }
+
+    // Layers
+    pub fn get_layers(&self) -> Vec<&dyn Layer> {
+        self.impl_.get_layers()
+    }
+
+    pub fn get_layer(&self, layer_id: &str) -> Option<&dyn Layer> {
+        self.impl_.get_layer(layer_id)
+    }
+
+    /// The non-const `getLayer` (marks the style mutated). The guard notifies
+    /// the style of changes when dropped.
+    pub fn get_layer_mut(&mut self, layer_id: &str) -> Option<LayerRefMut<'_>> {
+        self.impl_.mutated = true;
+        self.impl_.get_layer_mut(layer_id)
+    }
+
+    pub fn add_layer(&mut self, layer: Box<dyn Layer>, before_layer_id: Option<&str>) -> Result<(), ExceptionPtr> {
+        self.impl_.mutated = true;
+        self.impl_.add_layer(layer, before_layer_id).map(|_| ())
+    }
+
+    pub fn remove_layer(&mut self, id: &str) -> Option<Box<dyn Layer>> {
+        self.impl_.mutated = true;
+        self.impl_.remove_layer(id)
+    }
+}

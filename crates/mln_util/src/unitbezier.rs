@@ -1,0 +1,139 @@
+// Ports include/mln/util/unitbezier.hpp (itself from WebKit, (C) 2008 Apple
+// Inc., BSD-2-Clause — retain that attribution when this ships).
+
+/// Cubic bezier with implicit control points (0,0) and (1,1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnitBezier {
+    cx: f64,
+    bx: f64,
+    ax: f64,
+    cy: f64,
+    by: f64,
+    ay: f64,
+}
+
+impl UnitBezier {
+    /// Calculate the polynomial coefficients.
+    pub const fn new(p1x: f64, p1y: f64, p2x: f64, p2y: f64) -> Self {
+        // C++ spells each coefficient out: bx = 3.0 * (p2x - p1x) - (3.0 *
+        // p1x), ax = 1.0 - (3.0 * p1x) - (3.0 * (p2x - p1x) - (3.0 * p1x));
+        // reusing the identical subexpressions gives the same values.
+        let cx = 3.0 * p1x;
+        let bx = 3.0 * (p2x - p1x) - cx;
+        let ax = 1.0 - cx - bx;
+        let cy = 3.0 * p1y;
+        let by = 3.0 * (p2y - p1y) - cy;
+        let ay = 1.0 - cy - by;
+        UnitBezier {
+            cx,
+            bx,
+            ax,
+            cy,
+            by,
+            ay,
+        }
+    }
+
+    /// `getP1()`.
+    pub fn get_p1(&self) -> (f64, f64) {
+        self.p1()
+    }
+
+    /// `getP2()`.
+    pub fn get_p2(&self) -> (f64, f64) {
+        self.p2()
+    }
+
+    pub fn p1(&self) -> (f64, f64) {
+        (self.cx / 3.0, self.cy / 3.0)
+    }
+
+    pub fn p2(&self) -> (f64, f64) {
+        (
+            (self.bx + (3.0 * self.cx / 3.0) + self.cx) / 3.0,
+            (self.by + (3.0 * self.cy / 3.0) + self.cy) / 3.0,
+        )
+    }
+
+    pub fn sample_curve_x(&self, t: f64) -> f64 {
+        // `ax t^3 + bx t^2 + cx t` expanded using Horner's rule.
+        ((self.ax * t + self.bx) * t + self.cx) * t
+    }
+
+    pub fn sample_curve_y(&self, t: f64) -> f64 {
+        ((self.ay * t + self.by) * t + self.cy) * t
+    }
+
+    pub fn sample_curve_derivative_x(&self, t: f64) -> f64 {
+        (3.0 * self.ax * t + 2.0 * self.bx) * t + self.cx
+    }
+
+    /// Given an x value, find a parametric value it came from.
+    pub fn solve_curve_x(&self, x: f64, epsilon: f64) -> f64 {
+        // First try a few iterations of Newton's method -- normally very fast.
+        let mut t2 = x;
+        for _ in 0..8 {
+            let x2 = self.sample_curve_x(t2) - x;
+            if x2.abs() < epsilon {
+                return t2;
+            }
+            let d2 = self.sample_curve_derivative_x(t2);
+            if d2.abs() < 1e-6 {
+                break;
+            }
+            t2 -= x2 / d2;
+        }
+
+        // Fall back to the bisection method for reliability.
+        let mut t0 = 0.0;
+        let mut t1 = 1.0;
+        t2 = x;
+
+        if t2 < t0 {
+            return t0;
+        }
+        if t2 > t1 {
+            return t1;
+        }
+
+        while t0 < t1 {
+            let x2 = self.sample_curve_x(t2);
+            if (x2 - x).abs() < epsilon {
+                return t2;
+            }
+            if x > x2 {
+                t0 = t2;
+            } else {
+                t1 = t2;
+            }
+            t2 = (t1 - t0) * 0.5 + t0;
+        }
+
+        // Failure.
+        t2
+    }
+
+    pub fn solve(&self, x: f64, epsilon: f64) -> f64 {
+        self.sample_curve_y(self.solve_curve_x(x, epsilon))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linear() {
+        let b = UnitBezier::new(0.0, 0.0, 1.0, 1.0);
+        assert!((b.solve(0.5, 1e-6) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ease() {
+        // The style spec's default ease curve.
+        let b = UnitBezier::new(0.25, 0.1, 0.25, 1.0);
+        assert!((b.solve(0.0, 1e-6)).abs() < 1e-6);
+        assert!((b.solve(1.0, 1e-6) - 1.0).abs() < 1e-6);
+        assert!(b.solve(0.5, 1e-6) > 0.5); // ease is above the diagonal at 0.5
+    }
+}

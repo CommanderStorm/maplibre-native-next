@@ -1,0 +1,97 @@
+// Ports include/mln/renderer/renderer.hpp and src/mln/renderer/renderer.cpp.
+//
+// C++ keeps a `gfx::RendererBackend&`; the frontend owns the backend, so the
+// renderer shares it through an `Rc`.
+
+use crate::renderer_impl::RendererImpl;
+use crate::renderer_observer::RendererObserver;
+use crate::update_parameters::UpdateParameters;
+use mln_gfx::{BackendScope, RendererBackend, ScopeType};
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+
+pub struct Renderer {
+    /// Always `Some` until `drop`, which destroys the impl inside a
+    /// BackendScope as C++ does.
+    impl_: Option<Box<RendererImpl>>,
+}
+
+impl Renderer {
+    /// `Renderer(gfx::RendererBackend&, float pixelRatio, const
+    /// std::optional<std::string>& localFontFamily = std::nullopt)`.
+    // TODO(port): localFontFamily (glyph rasterization, M5).
+    pub fn new(backend: Rc<dyn RendererBackend>, pixel_ratio: f32) -> Self {
+        Renderer {
+            impl_: Some(Box::new(RendererImpl::new(backend, pixel_ratio))),
+        }
+    }
+
+    fn impl_ref(&self) -> &RendererImpl {
+        self.impl_.as_deref().expect("renderer impl")
+    }
+
+    fn impl_mut(&mut self) -> &mut RendererImpl {
+        self.impl_.as_deref_mut().expect("renderer impl")
+    }
+
+    pub fn mark_context_lost(&mut self) {
+        self.impl_mut().orchestrator.mark_context_lost();
+    }
+
+    pub fn set_observer(&mut self, observer: Option<Weak<dyn RendererObserver>>) {
+        let impl_ = self.impl_mut();
+        impl_.set_observer(observer.clone());
+        impl_.orchestrator.set_observer(observer);
+    }
+
+    pub fn render(&mut self, update_parameters: &Arc<UpdateParameters>) {
+        // TODO(port): ErrorScope (SymbolErrorObserver routing).
+
+        let impl_ = self.impl_mut();
+        let _style_changed = impl_.style_loaded && !update_parameters.style_loaded;
+        impl_.style_loaded = update_parameters.style_loaded;
+        // TODO(port): dynamicTextureAtlas (re)creation on styleChanged.
+        if let Some(mut render_tree) = impl_.orchestrator.create_render_tree(update_parameters) {
+            render_tree.prepare();
+            impl_.render(&render_tree, update_parameters);
+        }
+    }
+
+    // TODO(port): queryRenderedFeatures, querySourceFeatures,
+    // queryPointAnnotations, queryShapeAnnotations, queryFeatureExtensions,
+    // feature state, dumpDebugLogs, getPlacedSymbolsData.
+
+    pub fn collect_placed_symbol_data(&mut self, enable: bool) {
+        self.impl_mut().orchestrator.collect_placed_symbol_data(enable);
+    }
+
+    pub fn set_tile_cache_enabled(&mut self, enable: bool) {
+        self.impl_mut().orchestrator.set_tile_cache_enabled(enable);
+    }
+
+    pub fn get_tile_cache_enabled(&self) -> bool {
+        self.impl_ref().orchestrator.get_tile_cache_enabled()
+    }
+
+    pub fn reduce_memory_use(&mut self) {
+        let backend = self.impl_ref().backend.clone();
+        let _guard = BackendScope::new(&*backend, ScopeType::Explicit);
+        self.impl_mut().reduce_memory_use();
+        // TODO(port): orchestrator.reduceMemoryUse().
+    }
+
+    pub fn clear_data(&mut self) {
+        self.impl_mut().orchestrator.clear_data();
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        // `gfx::BackendScope guard{impl->backend}; impl.reset();`
+        if let Some(impl_) = self.impl_.take() {
+            let backend = impl_.backend.clone();
+            let _guard = BackendScope::new(&*backend, ScopeType::Explicit);
+            drop(impl_);
+        }
+    }
+}

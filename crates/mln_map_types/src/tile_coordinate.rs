@@ -1,0 +1,63 @@
+// Ports src/mln/util/tile_coordinate.hpp (it includes map/transform_state.hpp,
+// so it lives next to TransformState).
+
+use crate::transform_state::TransformState;
+use maplibre_native_base::Point;
+use mln_tile_id::{GeometryCoordinate, UnwrappedTileID};
+use mln_util::constants;
+use mln_util::geo::{LatLng, ScreenCoordinate};
+use mln_util::projection::Projection;
+
+pub type TileCoordinatePoint = Point<f64>;
+
+/// Has floating point x/y coordinates. Used for computing the tiles that
+/// need to be visible in the viewport. In mapbox-gl-js, this is named
+/// MercatorCoordinate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TileCoordinate {
+    pub p: TileCoordinatePoint,
+    pub z: f64,
+}
+
+impl TileCoordinate {
+    pub fn from_lat_lng(zoom: f64, lat_lng: &LatLng) -> TileCoordinate {
+        let scale = 2.0f64.powf(zoom);
+        let p = Projection::project(lat_lng, scale);
+        TileCoordinate {
+            p: Point::new(p.x / constants::TILE_SIZE, p.y / constants::TILE_SIZE),
+            z: zoom,
+        }
+    }
+
+    pub fn from_screen_coordinate(
+        state: &TransformState,
+        zoom: u8,
+        screen_coordinate: &ScreenCoordinate,
+    ) -> TileCoordinate {
+        state.screen_coordinate_to_tile_coordinate(screen_coordinate, zoom)
+    }
+
+    pub fn zoom_to(&self, zoom: f64) -> TileCoordinate {
+        let scale_diff = 2.0f64.powf(zoom - self.z);
+        TileCoordinate {
+            p: Point::new(self.p.x * scale_diff, self.p.y * scale_diff),
+            z: zoom,
+        }
+    }
+
+    pub fn to_geometry_coordinate(tile_id: &UnwrappedTileID, point: &TileCoordinatePoint) -> GeometryCoordinate {
+        let scale = 2.0f64.powf(tile_id.canonical.z as f64);
+        let zoomed = TileCoordinate { p: *point, z: 0.0 }.zoom_to(tile_id.canonical.z as f64);
+        let clamp = |v: f64| -> i16 {
+            // util::clamp<int64_t>(static_cast<int64_t>(v), INT16_MIN, INT16_MAX)
+            let v = v as i64;
+            v.clamp(i16::MIN as i64, i16::MAX as i64) as i16
+        };
+        Point::new(
+            clamp(
+                (zoomed.p.x - tile_id.canonical.x as f64 - tile_id.wrap as f64 * scale) * constants::EXTENT as f64,
+            ),
+            clamp((zoomed.p.y - tile_id.canonical.y as f64) * constants::EXTENT as f64),
+        )
+    }
+}

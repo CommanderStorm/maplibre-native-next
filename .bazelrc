@@ -1,0 +1,20 @@
+# Mirrors the settings in ../maplibre-native/.bazelrc that the C++ core build
+# relies on; a dependency module's .bazelrc is not read.
+startup --host_jvm_args=-DBAZEL_TRACK_SOURCE_DIRECTORIES=1
+common --enable_platform_specific_config
+common --repo_env=DO_NOT_TRACK=1
+build:linux --repo_env=CC=gcc
+build:linux --repo_env=CXX=g++
+
+test --test_output=errors
+
+# Several agents/people share one Bazel server on a machine that also runs
+# other heavy work; leave headroom for it.
+build --local_resources=memory=HOST_RAM*.5
+build --local_resources=cpu=HOST_CPUS*.75
+
+# Build the C++ oracle with optimizations to match what ships; the
+# differential tests then also catch -O-dependent float behaviour.
+build:oracle-opt --compilation_mode=opt
+
+try-import %workspace%/user.bazelrc
