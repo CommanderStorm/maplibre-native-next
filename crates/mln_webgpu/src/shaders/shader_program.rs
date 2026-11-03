@@ -4,7 +4,8 @@
 // wgpu vs. Dawn: shader module creation runs inside a validation error scope
 // so that a WGSL compile error yields "no module" (the C++ null check); the
 // C++ backend gets null only on catastrophic failure and Dawn reports the
-// compile error asynchronously.
+// compile error asynchronously. On Emscripten the scope is skipped (see
+// `validated`).
 //
 // TODO(port): the `ShaderProgram(name, backend, vertexModule, fragmentModule)`
 // constructor for precompiled modules (unused on the M1 path).
@@ -46,6 +47,28 @@ pub struct BindingInfo {
     pub binding: u32,
     pub type_: BindingType,
     pub visibility: wgpu::ShaderStages,
+}
+
+/// Runs `create` inside a validation error scope and returns the error the
+/// scope caught, which stands in for the C++ null result. On Emscripten the
+/// scope is skipped: popping it waits in `wgpuInstanceWaitAny`, which yields
+/// to the browser in the middle of a frame and expires the canvas texture.
+/// Errors there reach the device's uncaptured-error callback instead.
+fn validated<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, wgpu::Error> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = device;
+        Ok(create())
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let value = create();
+        match pollster::block_on(scope.pop()) {
+            None => Ok(value),
+            Some(error) => Err(error),
+        }
+    }
 }
 
 fn is_space(b: u8) -> bool {
@@ -223,18 +246,13 @@ impl ShaderProgram {
         program.has_fragment_entry_point = !trim_string(fragment_source).is_empty();
 
         let create_module = |label: &str, source: &str| -> Option<wgpu::ShaderModule> {
-            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(source)),
+            let module = validated(&device, || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(label),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(source)),
+                })
             });
-            match pollster::block_on(scope.pop()) {
-                None => Some(module),
-                Some(error) => {
-                    eprintln!("{error}");
-                    None
-                }
-            }
+            module.map_err(|error| eprintln!("{error}")).ok()
         };
 
         // Get the prelude from common.hpp
@@ -701,33 +719,30 @@ impl ShaderProgram {
 
         // Create render pipeline (inside an error scope: a failure is the C++
         // null pipeline)
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(&self.shader_name),
-            layout: Some(pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: vertex_module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                buffers: &buffers,
-            },
-            primitive,
-            depth_stencil,
-            multisample: wgpu::MultisampleState { count: 1, mask: 0xFFFF_FFFF, alpha_to_coverage_enabled: false },
-            fragment: Some(wgpu::FragmentState {
-                module: fragment_module,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                targets: &targets,
-            }),
-            multiview_mask: None,
-            cache: None,
+        let pipeline = validated(&device, || {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&self.shader_name),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: vertex_module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive,
+                depth_stencil,
+                multisample: wgpu::MultisampleState { count: 1, mask: 0xFFFF_FFFF, alpha_to_coverage_enabled: false },
+                fragment: Some(wgpu::FragmentState {
+                    module: fragment_module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    targets: &targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
         });
-        if let Some(error) = pollster::block_on(scope.pop()) {
-            eprintln!("{} pipeline creation failed: {error}", self.shader_name);
-            return None;
-        }
-        Some(pipeline)
+        pipeline.map_err(|error| eprintln!("{} pipeline creation failed: {error}", self.shader_name)).ok()
     }
 }
 
