@@ -1,0 +1,23 @@
+# The crates.io release (RELEASING.md). tools/release/assemble.py merges every
+# rust_library under crates/ and vendor/ into one crate with this [package]
+# table; its dependencies come from the BUILD.bazel files, MODULE.bazel and
+# MODULE.bazel.lock, so they are not listed here.
+[package]
+name = "maplibre-native-next"
+# Bump before running the release workflow; it publishes this version and
+# tags the commit v<version>.
+version = "0.0.1"
+edition = "2024"
+description = "A Rust port of the MapLibre Native map rendering core"
+license = "BSD-2-Clause"
+repository = "https://github.com/louwers/maplibre-native-next"
+keywords = ["maplibre", "map", "vector-tiles", "gis", "rendering"]
+categories = ["graphics", "rendering::engine", "science::geo"]
+
+# Third-party crates that MODULE.bazel patches (crate.annotation patches) are
+# published as forks named <package.name>-<crate>, with the original library
+# name, so the code still says `harfrust::`. The upstream version, checksum and
+# patches come from MODULE.bazel.lock. Bump `version` whenever the patch or
+# the upstream version changes: crates.io never replaces a published version.
+[forks.harfrust]
+version = "0.15.0"

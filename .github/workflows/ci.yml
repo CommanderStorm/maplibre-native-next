@@ -68,3 +68,43 @@ jobs:
           name: testlogs
           path: maplibre-native-next/bazel-testlogs/**/test.log
           if-no-files-found: ignore
+
+  # The crates.io crate (RELEASING.md): assemble it and check that it
+  # compiles, so drift shows up here rather than in the release workflow.
+  release-crate:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: maplibre-native-next
+
+      # Only the WGSL headers, which the assembly turns into Rust.
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.MAPLIBRE_NATIVE_REPOSITORY }}
+          ref: ${{ env.MAPLIBRE_NATIVE_REF }}
+          path: maplibre-native
+          sparse-checkout: include/mln/shaders/webgpu
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            maplibre-native-next/target/release-crate/target
+          # Saved once per lockfile: the third-party crates dominate.
+          key: release-crate-${{ runner.os }}-${{ hashFiles('maplibre-native-next/MODULE.bazel.lock') }}
+          restore-keys: release-crate-${{ runner.os }}-
+
+      - name: Assemble
+        working-directory: maplibre-native-next
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          python3 -I tools/release/assemble.py assemble
+
+      - name: Check and package
+        working-directory: maplibre-native-next/target/release-crate
+        run: |
+          cargo check --workspace
+          cargo package --workspace --no-verify

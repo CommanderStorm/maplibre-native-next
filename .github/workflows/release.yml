@@ -1,0 +1,116 @@
+name: release
+
+# Publishes maplibre-native-next to crates.io at the version in
+# tools/release/package.toml, plus the patched third-party forks it depends
+# on, then tags the commit v<version> and creates a GitHub release. See
+# RELEASING.md. Rerunning after a partial failure finishes the job: packages
+# already on crates.io with the same contents are skipped.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # the tag and the GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - name: Require the default branch
+        if: github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          echo "::error::Run the release from ${{ github.event.repository.default_branch }}."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          path: maplibre-native-next
+          persist-credentials: false
+
+      # The WGSL sources are generated from the C++ shader headers: use the
+      # C++ core that ci.yml tests against.
+      - name: Read the C++ core version from ci.yml
+        id: cpp
+        run: |
+          ci=maplibre-native-next/.github/workflows/ci.yml
+          repository=$(sed -n 's/^  MAPLIBRE_NATIVE_REPOSITORY: *//p' "$ci")
+          ref=$(sed -n 's/^  MAPLIBRE_NATIVE_REF: *//p' "$ci")
+          test -n "$repository" && test -n "$ref"
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.cpp.outputs.repository }}
+          ref: ${{ steps.cpp.outputs.ref }}
+          path: maplibre-native
+          sparse-checkout: include/mln/shaders/webgpu
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Assemble
+        working-directory: maplibre-native-next
+        run: |
+          python3 -I tools/release/assemble.py assemble
+          version=$(python3 -I tools/release/assemble.py version)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Package
+        working-directory: maplibre-native-next/target/release-crate
+        run: cargo package --workspace --no-verify
+
+      # Prints the packages crates.io does not have yet; fails if it has one
+      # of these versions with different contents.
+      - name: Compare with crates.io
+        id: status
+        working-directory: maplibre-native-next
+        run: |
+          missing=$(python3 -I tools/release/assemble.py status)
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+
+      # Builds the packaged sources. Packages published together resolve each
+      # other locally, so the merged crate verifies before its forks are up.
+      - name: Dry run
+        if: steps.status.outputs.missing != ''
+        working-directory: maplibre-native-next/target/release-crate
+        env:
+          MISSING: ${{ steps.status.outputs.missing }}
+        run: |
+          read -ra packages <<< "$MISSING"
+          cargo publish --dry-run "${packages[@]/#/--package=}"
+
+      # In dependency order, waiting for each to reach the index. The dry run
+      # verified these exact packages, so skip the second build.
+      - name: Publish
+        if: steps.status.outputs.missing != ''
+        working-directory: maplibre-native-next/target/release-crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          MISSING: ${{ steps.status.outputs.missing }}
+        run: |
+          read -ra packages <<< "$MISSING"
+          cargo publish --no-verify "${packages[@]/#/--package=}"
+
+      - name: Tag and create the GitHub release
+        working-directory: maplibre-native-next
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "The $tag release exists."
+            exit 0
+          fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --notes "https://crates.io/crates/maplibre-native-next/$VERSION" \
+            target/release-crate/target/package/*.crate
