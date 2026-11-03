@@ -1,6 +1,6 @@
-# The browser build of maplibre-native-next without Emscripten: the port
-# compiled for wasm32-unknown-unknown and driven from JavaScript through
-# wasm-bindgen (build.sh runs wasm-pack). It depends on the crate that
+# The engine of the @bartlwrs/mln-next-web npm package: maplibre-native-next
+# compiled for wasm32-unknown-unknown and driven from JavaScript (js/)
+# through wasm-bindgen. build.sh builds the package. It depends on the crate that
 # tools/release/assemble.py writes to target/release-crate, so assemble first.
 #
 # Not a Bazel target: Bazel has no wasm-bindgen rules set up here.
@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 maplibre-native-next = { path = "../../target/release-crate/maplibre-native-next" }
 console_error_panic_hook = "0.1"
 js-sys = "0.3"
+serde_json = "1"
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas", "Performance", "Window", "console"] }

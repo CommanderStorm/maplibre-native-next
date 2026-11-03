@@ -93,6 +93,8 @@ fn write_json(w: &mut Writer, value: &Json) {
 
 /// `std::strtod(s, nullptr)`: the longest prefix that is a number, after
 /// leading whitespace; 0 when there is none.
+// Only the MBTiles source, which the browser build leaves out, uses it.
+#[cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), allow(dead_code))]
 pub(crate) fn strtod(s: &str) -> f64 {
     let s = s.trim_start();
     let mut best = 0.0;

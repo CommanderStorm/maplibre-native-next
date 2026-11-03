@@ -406,7 +406,9 @@ pub struct OfflineRegion {
 }
 
 impl OfflineRegion {
-    /// The private constructor (`friend class OfflineDatabase`).
+    /// The private constructor (`friend class OfflineDatabase`), which the
+    /// browser build leaves out.
+    #[cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), allow(dead_code))]
     pub(crate) fn new(id: i64, definition: OfflineRegionDefinition, metadata: OfflineRegionMetadata) -> Self {
         OfflineRegion {
             id,

@@ -711,12 +711,17 @@ impl TransformState {
         self.inv_projection_matrix.get()
     }
 
-    fn get_coord_matrix(&self) -> Mat4 {
+    /// The matrix from world coordinates (in tiles of the zoom-0 world, times
+    /// the scale) to screen pixels with a bottom-left origin. Port-only
+    /// public: the browser package mirrors `latLngToScreenCoordinate` with it.
+    pub fn get_coord_matrix(&self) -> Mat4 {
         self.update_matrices_if_needed();
         self.coord_matrix.get()
     }
 
-    fn get_inverted_matrix(&self) -> Mat4 {
+    /// The inverse of `get_coord_matrix`. Port-only public, for the browser
+    /// package's `screenCoordinateToLatLng` mirror.
+    pub fn get_inverted_matrix(&self) -> Mat4 {
         self.update_matrices_if_needed();
         self.inverted_matrix.get()
     }

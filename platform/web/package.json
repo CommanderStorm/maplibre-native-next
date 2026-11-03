@@ -1,0 +1,42 @@
+{
+  "name": "@bartlwrs/mln-next-web",
+  "version": "0.0.0",
+  "description": "maplibre-native-next, the Rust port of MapLibre Native, in the browser on WebGPU, with a trimmed-down MapLibre GL JS API",
+  "license": "BSD-2-Clause",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "*.js",
+    "*.d.ts",
+    "wasm/",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "maplibre",
+    "map",
+    "maps",
+    "webgpu",
+    "wasm",
+    "vector-tiles"
+  ],
+  "homepage": "https://github.com/louwers/maplibre-native-next/tree/main/platform/web#readme",
+  "bugs": "https://github.com/louwers/maplibre-native-next/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/louwers/maplibre-native-next.git",
+    "directory": "platform/web"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

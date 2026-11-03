@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>@bartlwrs/mln-next-web example</title>
+  <style>
+    html, body { margin: 0; height: 100%; }
+    #map { position: absolute; inset: 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <!-- Serve platform/web after build.sh; ?threads=0 or ?threads=1 overrides
+       the choice that cross-origin isolation makes. -->
+  <script type="module">
+    import { Map } from "../dist/index.js";
+
+    const threads = new URLSearchParams(location.search).get("threads");
+    const map = new Map({
+      container: "map",
+      style: "https://tiles.openfreemap.org/styles/liberty",
+      center: [4.9041, 52.3676],
+      zoom: 12.5,
+      threads: threads === null ? undefined : threads !== "0",
+    });
+    map.on("load", () => console.log("load"));
+    map.on("error", (event) => console.error("map error:", event.error?.message));
+    window.map = map;
+  </script>
+</body>
+</html>
