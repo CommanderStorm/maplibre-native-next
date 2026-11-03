@@ -79,14 +79,6 @@ jobs:
         with:
           path: maplibre-native-next
 
-      # Only the WGSL headers, which the assembly turns into Rust.
-      - uses: actions/checkout@v5
-        with:
-          repository: ${{ env.MAPLIBRE_NATIVE_REPOSITORY }}
-          ref: ${{ env.MAPLIBRE_NATIVE_REF }}
-          path: maplibre-native
-          sparse-checkout: include/mln/shaders/webgpu
-
       - uses: actions/cache@v4
         with:
           path: |

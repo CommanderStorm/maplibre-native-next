@@ -32,26 +32,6 @@ jobs:
           path: maplibre-native-next
           persist-credentials: false
 
-      # The WGSL sources are generated from the C++ shader headers: use the
-      # C++ core that ci.yml tests against.
-      - name: Read the C++ core version from ci.yml
-        id: cpp
-        run: |
-          ci=maplibre-native-next/.github/workflows/ci.yml
-          repository=$(sed -n 's/^  MAPLIBRE_NATIVE_REPOSITORY: *//p' "$ci")
-          ref=$(sed -n 's/^  MAPLIBRE_NATIVE_REF: *//p' "$ci")
-          test -n "$repository" && test -n "$ref"
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v5
-        with:
-          repository: ${{ steps.cpp.outputs.repository }}
-          ref: ${{ steps.cpp.outputs.ref }}
-          path: maplibre-native
-          sparse-checkout: include/mln/shaders/webgpu
-          persist-credentials: false
-
       - name: Install Rust
         run: |
           rustup toolchain install stable --profile minimal --no-self-update

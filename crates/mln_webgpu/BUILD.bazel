@@ -1,27 +1,18 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
-load(":wgsl_sources.bzl", "wgsl_sources")
 
-# The C++ headers holding the WGSL sources (include/mln/shaders/webgpu/*.hpp).
-WGSL_HEADERS = ["@maplibre//:webgpu-shader-headers"]
-
-# Extracts the WGSL raw string literals from the C++ headers, unchanged.
+# Extracts the WGSL raw string literals from the C++ headers
+# (include/mln/shaders/webgpu/*.hpp), unchanged. scripts/vendor-shaders runs
+# it to write src/shaders/wgsl_sources.rs, which is checked in.
 rust_binary(
     name = "extract_wgsl",
     srcs = ["tools/extract_wgsl.rs"],
-)
-
-wgsl_sources(
-    name = "wgsl_sources",
-    srcs = WGSL_HEADERS,
-    out = "src/shaders/wgsl_sources.rs",
-    tool = ":extract_wgsl",
 )
 
 # Ports src/mln/webgpu, include/mln/webgpu, include/mln/shaders/webgpu,
 # src/mln/shaders/webgpu and the WebGPU headless backend (platform/default).
 rust_library(
     name = "mln_webgpu",
-    srcs = glob(["src/**/*.rs"]) + [":wgsl_sources"],
+    srcs = glob(["src/**/*.rs"]),
     visibility = ["//visibility:public"],
     deps = [
         "//crates/mln_gfx",

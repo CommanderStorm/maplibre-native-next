@@ -29,9 +29,8 @@ existing GitHub release.
 
 `.github/workflows/release.yml`:
 
-1. Checks out this repository, and the C++ core at the
-   `MAPLIBRE_NATIVE_REPOSITORY`/`MAPLIBRE_NATIVE_REF` from `ci.yml` (only
-   `include/mln/shaders/webgpu`, the WGSL headers).
+1. Checks out this repository. It needs no C++ checkout: the WGSL shaders are
+   vendored in `crates/mln_webgpu/src/shaders/wgsl_sources.rs` (see below).
 2. Installs stable Rust and runs `tools/release/assemble.py assemble`. This
    writes a Cargo workspace to `target/release-crate`:
    - `maplibre-native-next`: the `src/` of every `rust_library` under
@@ -39,9 +38,7 @@ existing GitHub release.
      rewritten for the new crate root: `crate::` becomes `crate::<name>::`,
      `$crate::` becomes `$crate::<name>::`, and `mln_util::…` becomes
      `crate::mln_util::…`. `#[macro_export]` macros end up at the crate root and
-     are re-exported from their old crate module. `mln_webgpu`'s
-     `wgsl_sources.rs` is generated with `crates/mln_webgpu/tools/extract_wgsl.rs`,
-     as the Bazel rule does. The dependencies are the `@next_crates` deps of
+     are re-exported from their old crate module. The dependencies are the `@next_crates` deps of
      the libraries, with features from MODULE.bazel and minimum versions from
      MODULE.bazel.lock. Tests, tools, difftests and platform code are not
      included.
@@ -65,12 +62,12 @@ would reject.
 ## Locally
 
 ```sh
-python3 -I tools/release/assemble.py assemble   # expects ../maplibre-native, or pass --cpp-repo
+python3 -I tools/release/assemble.py assemble
 cd target/release-crate
 cargo publish --dry-run --workspace
 ```
 
-The assembly needs Python 3.11 or newer, `rustc`, GNU `patch` and network
+The assembly needs Python 3.11 or newer, GNU `patch` and network
 access to crates.io. On NixOS, run the cargo commands inside
 `nix develop path:.nix-shell#linux` if a build script cannot find a C
 compiler or zlib.
@@ -90,3 +87,11 @@ compiler or zlib.
 - **Tag rules**: a ruleset or tag protection that covers `v*` must let GitHub
   Actions create tags.
 - The workflow refuses to run on any branch other than the default branch.
+
+## Shaders
+
+The WGSL shaders come from the C++ core's `include/mln/shaders/webgpu/*.hpp`.
+`scripts/vendor-shaders [maplibre-native checkout]` extracts them, unchanged,
+into `crates/mln_webgpu/src/shaders/wgsl_sources.rs` (default checkout:
+`../maplibre-native`). Rerun it when the C++ shaders change, and commit the
+result.

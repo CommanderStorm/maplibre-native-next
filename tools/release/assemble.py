@@ -5,14 +5,12 @@ Development is multi-crate (Bazel rust_library targets); crates.io gets one
 crate, because it rate-limits new crates and consumers want one dependency.
 Run with `python3 -I tools/release/assemble.py <command>`:
 
-  assemble [--cpp-repo DIR] [--out DIR]
+  assemble [--out DIR]
       Writes a Cargo workspace (default: target/release-crate) with
       - maplibre-native-next: every rust_library under crates/ and vendor/ as
         a public top-level module named after its crate (mln_util, mln_map,
-        earcut, ...), with its paths rewritten (see rewrite()), its
-        third-party dependencies from MODULE.bazel and MODULE.bazel.lock, and
-        the generated sources (the WGSL from the C++ headers in --cpp-repo,
-        default ../maplibre-native);
+        earcut, ...), with its paths rewritten (see rewrite()) and its
+        third-party dependencies from MODULE.bazel and MODULE.bazel.lock;
       - one package per patched third-party crate (crate.annotation patches
         in MODULE.bazel), named maplibre-native-next-<crate>: the crates.io
         source with the patches applied, keeping the library name.
@@ -26,7 +24,6 @@ Run with `python3 -I tools/release/assemble.py <command>`:
 
 import argparse
 import ast
-import glob
 import hashlib
 import io
 import json
@@ -46,11 +43,6 @@ CONFIG = REPO / "tools/release/package.toml"
 LIBRARY_ROOTS = ("crates", "vendor")
 CRATES_REPO = "next_crates"  # crate.from_specs(name = ...) in MODULE.bazel
 USER_AGENT = "maplibre-native-next-release (https://github.com/louwers/maplibre-native-next)"
-
-# C++ filegroups that generated sources read, as globs in the C++ checkout.
-CPP_FILEGROUPS = {
-    "@maplibre//:webgpu-shader-headers": "include/mln/shaders/webgpu/*.hpp",
-}
 
 # Inner attributes a module may carry; any other inner attribute of a lib.rs
 # is crate-level and moves to the merged root.
@@ -102,20 +94,12 @@ def kwargs(call, constants=None):
 
 
 @dataclass
-class Generated:
-    out: str  # path relative to the package, e.g. src/shaders/wgsl_sources.rs
-    tool_src: str  # rust_binary source, relative to the package
-    inputs: list  # C++ filegroup labels
-
-
-@dataclass
 class Library:
     name: str  # crate name = module name in the merged crate
     package: str  # Bazel package, e.g. crates/mln_util
     deps: list = field(default_factory=list)  # in-repo libraries
     test_deps: set = field(default_factory=set)  # in-repo, from rust_test(crate = ...)
     external: list = field(default_factory=list)  # @next_crates names
-    generated: list = field(default_factory=list)
 
 
 def parse_label(label, package):
@@ -127,17 +111,16 @@ def parse_label(label, package):
     return pkg, target or pkg.rsplit("/", 1)[-1]
 
 
-def srcs_generated_labels(node, package):
-    """The non-glob labels of `srcs = glob(["src/**/*.rs"]) (+ [...])`."""
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return srcs_generated_labels(node.left, package) + srcs_generated_labels(node.right, package)
-    if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "glob":
-        if ast.literal_eval(node.args[0]) != ["src/**/*.rs"] or node.keywords:
-            fail(f"{package}: library srcs must be glob([\"src/**/*.rs\"]), found {ast.unparse(node)}")
-        return []
-    if isinstance(node, ast.List):
-        return ast.literal_eval(node)
-    fail(f"{package}: unsupported srcs {ast.unparse(node)}")
+def check_srcs(node, package):
+    """Library srcs must be glob(["src/**/*.rs"]): the assembly copies src/."""
+    if not (
+        isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "glob"
+        and not node.keywords
+        and ast.literal_eval(node.args[0]) == ["src/**/*.rs"]
+    ):
+        found = ast.unparse(node) if isinstance(node, ast.AST) else repr(node)
+        fail(f"{package}: library srcs must be glob([\"src/**/*.rs\"]), found {found}")
 
 
 def load_libraries():
@@ -161,15 +144,7 @@ def load_libraries():
                     if attr in kw:
                         fail(f"//{package}:{target}: {attr} is not supported by the release assembly")
                 lib = Library(name=target.replace("-", "_"), package=package)
-                for label in srcs_generated_labels(kw["srcs"], package):
-                    gen_pkg, gen_target = parse_label(label, package)
-                    gen_kind, gen_kw = rules.get(gen_target, (None, None))
-                    if gen_pkg != package or gen_kind != "wgsl_sources":
-                        fail(f"//{package}:{target}: unsupported generated source {label}")
-                    tool_kind, tool_kw = rules[parse_label(gen_kw["tool"], package)[1]]
-                    if tool_kind != "rust_binary" or len(tool_kw["srcs"]) != 1:
-                        fail(f"//{package}:{target}: unsupported generator {gen_kw['tool']}")
-                    lib.generated.append(Generated(gen_kw["out"], tool_kw["srcs"][0], gen_kw["srcs"]))
+                check_srcs(kw["srcs"], package)
                 for dep in kw.get("deps", []):
                     if dep.startswith(f"@{CRATES_REPO}//:"):
                         lib.external.append(dep.split(":", 1)[1])
@@ -617,26 +592,10 @@ def build_fork(crate, spec_attrs, upstream_version, fork_cfg, package_name, out)
     return name, fork_cfg["version"]
 
 
-def generate_wgsl(gen, lib_dir, dest, cpp_repo, tools_dir, edition):
-    tool = tools_dir / Path(gen.tool_src).stem
-    tools_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["rustc", "--edition", edition, "-O", "-o", str(tool), str(lib_dir / gen.tool_src)], check=True)
-    headers = []
-    for label in gen.inputs:
-        if label not in CPP_FILEGROUPS:
-            fail(f"unknown generator input {label}")
-        headers += sorted(glob.glob(str(cpp_repo / CPP_FILEGROUPS[label])))
-    if not headers:
-        fail(f"no C++ headers under {cpp_repo}; pass --cpp-repo (a maplibre-native checkout)")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(tool), str(dest), *headers], check=True)
-
-
 def assemble(args):
     config = tomllib.loads(CONFIG.read_text())
     package = config["package"]
     out = Path(args.out).resolve()
-    cpp_repo = Path(args.cpp_repo).resolve()
     libs = load_libraries()
     specs, patched, edition = load_module()
     if edition != package["edition"]:
@@ -686,10 +645,6 @@ def assemble(args):
         dest = src_root / lib.name
         rewrite_names = (set(lib.deps) | lib.test_deps) - {lib.name}
         files = {p.relative_to(lib_dir / "src"): p.read_text() for p in sorted((lib_dir / "src").rglob("*.rs"))}
-        for gen in lib.generated:
-            target = dest / Path(gen.out).relative_to("src")
-            generate_wgsl(gen, lib_dir, target, cpp_repo, out / "tools", edition)
-            files[Path(gen.out).relative_to("src")] = target.read_text()
         if Path("mod.rs") in files or Path("lib.rs") not in files:
             fail(f"{lib.package}: expected src/lib.rs and no src/mod.rs")
         for rel, text in files.items():
@@ -784,7 +739,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("assemble")
-    p.add_argument("--cpp-repo", default=str(REPO.parent / "maplibre-native"))
     p.add_argument("--out", default=str(REPO / "target/release-crate"))
     p = sub.add_parser("status")
     p.add_argument("--out", default=str(REPO / "target/release-crate"))
