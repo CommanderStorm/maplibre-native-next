@@ -61,6 +61,19 @@ impl Buffer {
     }
 }
 
+/// Releasing a WGPUBuffer only drops emdawnwebgpu's reference to the
+/// JavaScript GPUBuffer, and the browser frees its memory when the garbage
+/// collector gets to it. A map that keeps replacing buffers can run the GPU
+/// out of memory first. So a dropped buffer is destroyed, which frees it once
+/// submitted work no longer needs it. That waits for the next submit: wgpu
+/// lets a buffer be dropped after a command encoder recorded it and before
+/// that encoder's commands are submitted.
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        self.device.dropped_buffers.borrow_mut().push(self.raw.clone());
+    }
+}
+
 impl BufferInterface for Buffer {
     fn map_async(&self, mode: wgpu::MapMode, range: Range<wgpu::BufferAddress>, callback: BufferMapCallback) {
         let mode = crate::conv::map_mode(mode);

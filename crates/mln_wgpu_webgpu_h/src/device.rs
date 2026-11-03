@@ -96,6 +96,9 @@ pub(crate) struct DeviceState {
     submissions: Cell<u64>,
     /// The last submission `poll(Wait)` saw complete.
     completed_submission: Rc<Cell<u64>>,
+    /// Buffers wgpu dropped since the last submit, destroyed after the next
+    /// one (see `Buffer`'s `Drop`).
+    pub(crate) dropped_buffers: RefCell<Vec<BufferHandle>>,
 }
 
 impl core::fmt::Debug for DeviceState {
@@ -146,6 +149,7 @@ impl DeviceState {
             error_scopes: Cell::new(0),
             submissions: Cell::new(0),
             completed_submission: Rc::new(Cell::new(0)),
+            dropped_buffers: RefCell::default(),
         });
         let mut devices = instance.inner.devices.borrow_mut();
         devices.retain(|d| d.strong_count() > 0);
@@ -779,6 +783,11 @@ impl QueueInterface for Queue {
             })
             .collect();
         unsafe { wgpuQueueSubmit(self.state.queue.raw(), raw.len(), raw.as_ptr()) };
+        // Work submitted so far may still use them; the browser frees each
+        // once that work completes.
+        for buffer in self.state.dropped_buffers.take() {
+            unsafe { wgpuBufferDestroy(buffer.raw()) };
+        }
         let index = self.state.submissions.get() + 1;
         self.state.submissions.set(index);
         index
