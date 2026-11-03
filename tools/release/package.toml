@@ -21,3 +21,9 @@ categories = ["graphics", "rendering::engine", "science::geo"]
 # the upstream version changes: crates.io never replaces a published version.
 [forks.harfrust]
 version = "0.15.0"
+
+# Dependencies that only some targets use, as Cargo cfg expressions. The code
+# gates its use of each with the same cfg. ureq's TLS (rustls, ring) doesn't
+# build for Emscripten, where mln_storage fetches through the browser instead.
+[target-dependencies]
+ureq = 'cfg(not(target_os = "emscripten"))'

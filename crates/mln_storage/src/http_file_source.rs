@@ -16,6 +16,12 @@
 // `ETag`, `Retry-After`, `X-Rate-Limit-Reset`). Status codes map to the same
 // Response fields and errors.
 //
+// Under Emscripten the transfer is a synchronous `emscripten_fetch` on the
+// same worker threads (they are pthreads, which may block), so the browser
+// does the HTTP: CORS, its cache, compression. It sends no `If-None-Match` /
+// `If-Modified-Since` (they would force a CORS preflight; the browser cache
+// revalidates instead) and can't set the user agent. See `transport`.
+//
 // Differences (DEVIATIONS.md [glfw]): ureq sends `Accept-Encoding: gzip` and
 // decodes gzip (curl: "gzip, deflate"); a connection failure's message is
 // ureq's text instead of curl's `curl_easy_strerror: errorbuffer`; dates use
@@ -28,9 +34,8 @@ use crate::resource::{Kind, Resource};
 use crate::resource_options::ResourceOptions;
 use crate::response::{Error, Reason, Response};
 use mln_actor::{ActorRef, Mailbox, scheduler};
-use mln_util::chrono::{Timestamp, parse_timestamp_str, rfc1123};
+use mln_util::chrono::{Timestamp, parse_timestamp_str};
 use mln_util::client_options::ClientOptions;
-use mln_util::constants::DEFAULT_MAXIMUM_CONCURRENT_REQUESTS;
 use mln_util::http_header::{CacheControl, parse_retry_headers};
 use mln_util::string::to_string_i64;
 use std::any::Any;
@@ -91,51 +96,31 @@ fn getdate(value: &str) -> Timestamp {
     parse_timestamp_str(value)
 }
 
-/// The curl error codes `handleResult` maps to `Reason::Connection`.
-fn is_connection_error(error: &ureq::Error) -> bool {
-    matches!(
-        error,
-        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) | ureq::Error::Io(_)
-    )
+/// What a transport hands back: the status code, the response headers in
+/// order, and the body, which only a 200 or 206 reads.
+struct Transfer {
+    status: i64,
+    headers: Vec<(String, String)>,
+    body: Result<Vec<u8>, Box<Error>>,
 }
 
 /// The worker half of `HTTPRequest`: performs the transfer and builds the
 /// response as the header callback and `handleResult(CURLcode)` do.
-fn perform(agent: &ureq::Agent, resource: &Resource) -> Response {
-    let mut request = agent.get(&resource.url);
-    if let Some((first, second)) = resource.data_range {
-        request = request.header("Range", format!("bytes={first}-{second}"));
-    }
-
-    // If there's already a response, set the correct etags/modified headers to
-    // make sure we are getting a 304 response if possible. This avoids
-    // redownloading unchanged data.
-    if let Some(prior_etag) = &resource.prior_etag {
-        request = request.header("If-None-Match", prior_etag.as_str());
-    } else if let Some(prior_modified) = resource.prior_modified {
-        request = request.header("If-Modified-Since", rfc1123(prior_modified));
-    }
-
+fn perform(transport: &transport::Transport, resource: &Resource) -> Response {
     // Make sure a response object exists in case we haven't got any headers or content.
     let mut response = Response::new();
-
-    let mut http_response = match request.call() {
-        Ok(http_response) => http_response,
+    let transfer = match transport.transfer(resource) {
+        Ok(transfer) => transfer,
         Err(error) => {
-            // Add human-readable error code
-            let reason = if is_connection_error(&error) { Reason::Connection } else { Reason::Other };
-            response.error = Some(Box::new(Error::new(reason, error.to_string())));
+            response.error = Some(error);
             return response;
         }
     };
 
     let mut retry_after: Option<String> = None;
     let mut x_rate_limit_reset: Option<String> = None;
-    for (name, value) in http_response.headers() {
-        let Ok(value) = value.to_str() else {
-            continue;
-        };
-        let name = name.as_str();
+    for (name, value) in &transfer.headers {
+        let (name, value) = (name.as_str(), value.as_str());
         if let Some(value) = header_value(name, "last-modified", value) {
             // Always overwrite the modification date; We might already have
             // a value here from the Date header, but this one is more accurate.
@@ -155,15 +140,12 @@ fn perform(agent: &ureq::Agent, resource: &Resource) -> Response {
         }
     }
 
-    let response_code = i64::from(http_response.status().as_u16());
+    let response_code = transfer.status;
     if response_code == 200 || response_code == 206 {
-        match http_response.body_mut().with_config().limit(u64::MAX).read_to_vec() {
+        match transfer.body {
             Ok(data) => response.data = Some(Arc::new(data)),
             // curl reports a failed transfer as an error code, not a status.
-            Err(error) => {
-                let reason = if is_connection_error(&error) { Reason::Connection } else { Reason::Other };
-                response.error = Some(Box::new(Error::new(reason, error.to_string())));
-            }
+            Err(error) => response.error = Some(error),
         }
     } else if response_code == 204 || (response_code == 404 && resource.kind == Kind::Tile) {
         response.no_content = true;
@@ -191,7 +173,218 @@ fn perform(agent: &ureq::Agent, resource: &Resource) -> Response {
     response
 }
 
-fn worker(agent: ureq::Agent, jobs: Arc<Mutex<mpsc::Receiver<Job>>>) {
+/// The `Range` request header for a data range.
+fn range_header(resource: &Resource) -> Option<String> {
+    resource.data_range.map(|(first, second)| format!("bytes={first}-{second}"))
+}
+
+/// curl through ureq: blocking transfers on the worker threads.
+#[cfg(not(target_os = "emscripten"))]
+mod transport {
+    use super::{Transfer, range_header};
+    use crate::resource::Resource;
+    use crate::response::{Error, Reason};
+    use mln_util::chrono::rfc1123;
+
+    /// The worker threads of a file source: as many as the online file
+    /// source's default maximum of concurrent requests.
+    pub const WORKERS: u32 = mln_util::constants::DEFAULT_MAXIMUM_CONCURRENT_REQUESTS;
+
+    #[derive(Clone)]
+    pub struct Transport {
+        agent: ureq::Agent,
+    }
+
+    /// The curl error codes `handleResult` maps to `Reason::Connection`.
+    fn is_connection_error(error: &ureq::Error) -> bool {
+        matches!(
+            error,
+            ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) | ureq::Error::Io(_)
+        )
+    }
+
+    fn error(error: ureq::Error) -> Box<Error> {
+        // Add human-readable error code
+        let reason = if is_connection_error(&error) { Reason::Connection } else { Reason::Other };
+        Box::new(Error::new(reason, error.to_string()))
+    }
+
+    impl Transport {
+        pub fn new() -> Self {
+            let agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .user_agent("MapLibreNative/1.0")
+                .build()
+                .into();
+            Transport { agent }
+        }
+
+        pub fn transfer(&self, resource: &Resource) -> Result<Transfer, Box<Error>> {
+            let mut request = self.agent.get(&resource.url);
+            if let Some(range) = range_header(resource) {
+                request = request.header("Range", range);
+            }
+
+            // If there's already a response, set the correct etags/modified headers to
+            // make sure we are getting a 304 response if possible. This avoids
+            // redownloading unchanged data.
+            if let Some(prior_etag) = &resource.prior_etag {
+                request = request.header("If-None-Match", prior_etag.as_str());
+            } else if let Some(prior_modified) = resource.prior_modified {
+                request = request.header("If-Modified-Since", rfc1123(prior_modified));
+            }
+
+            let mut http_response = request.call().map_err(error)?;
+            let headers = http_response
+                .headers()
+                .iter()
+                .filter_map(|(name, value)| Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned())))
+                .collect();
+            let status = i64::from(http_response.status().as_u16());
+            let body = if status == 200 || status == 206 {
+                http_response.body_mut().with_config().limit(u64::MAX).read_to_vec().map_err(error)
+            } else {
+                Ok(Vec::new())
+            };
+            Ok(Transfer { status, headers, body })
+        }
+    }
+}
+
+/// The browser's fetch through Emscripten (`-sFETCH=1`): a synchronous
+/// `emscripten_fetch` blocks the worker thread, as a ureq transfer does.
+#[cfg(target_os = "emscripten")]
+mod transport {
+    use super::{Transfer, range_header};
+    use crate::resource::Resource;
+    use crate::response::{Error, Reason};
+    use std::ffi::{CStr, CString, c_char, c_void};
+    use std::ptr::null;
+
+    /// Browsers run a handful of requests per host at a time, and every
+    /// worker is a pthread, so fewer than natively.
+    pub const WORKERS: u32 = 6;
+
+    const EMSCRIPTEN_FETCH_LOAD_TO_MEMORY: u32 = 1;
+    const EMSCRIPTEN_FETCH_SYNCHRONOUS: u32 = 64;
+
+    /// `emscripten_fetch_attr_t` (emscripten/fetch.h).
+    #[repr(C)]
+    struct FetchAttr {
+        request_method: [c_char; 32],
+        user_data: *mut c_void,
+        onsuccess: Option<unsafe extern "C" fn(*mut Fetch)>,
+        onerror: Option<unsafe extern "C" fn(*mut Fetch)>,
+        onprogress: Option<unsafe extern "C" fn(*mut Fetch)>,
+        onreadystatechange: Option<unsafe extern "C" fn(*mut Fetch)>,
+        attributes: u32,
+        timeout_msecs: u32,
+        with_credentials: bool,
+        destination_path: *const c_char,
+        user_name: *const c_char,
+        password: *const c_char,
+        request_headers: *const *const c_char,
+        overridden_mime_type: *const c_char,
+        request_data: *const c_char,
+        request_data_size: usize,
+    }
+
+    /// `emscripten_fetch_t` (emscripten/fetch.h).
+    #[repr(C)]
+    struct Fetch {
+        id: u32,
+        user_data: *mut c_void,
+        url: *const c_char,
+        data: *const c_char,
+        num_bytes: u64,
+        data_offset: u64,
+        total_bytes: u64,
+        ready_state: u16,
+        status: u16,
+        status_text: [c_char; 64],
+        attributes: FetchAttr,
+        response_url: *const c_char,
+    }
+
+    unsafe extern "C" {
+        fn emscripten_fetch_attr_init(attr: *mut FetchAttr);
+        fn emscripten_fetch(attr: *mut FetchAttr, url: *const c_char) -> *mut Fetch;
+        fn emscripten_fetch_close(fetch: *mut Fetch) -> i32;
+        fn emscripten_fetch_get_response_headers_length(fetch: *mut Fetch) -> usize;
+        fn emscripten_fetch_get_response_headers(fetch: *mut Fetch, dst: *mut c_char, size: usize) -> usize;
+    }
+
+    #[derive(Clone)]
+    pub struct Transport;
+
+    /// `Name: value` lines of the browser's raw header block, in order.
+    fn parse_headers(raw: &str) -> Vec<(String, String)> {
+        raw.split("\r\n")
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                Some((name.trim().to_owned(), value.trim().to_owned()))
+            })
+            .collect()
+    }
+
+    impl Transport {
+        pub fn new() -> Self {
+            Transport
+        }
+
+        pub fn transfer(&self, resource: &Resource) -> Result<Transfer, Box<Error>> {
+            let connection = |message: String| Box::new(Error::new(Reason::Connection, message));
+            let url = CString::new(resource.url.as_str()).map_err(|_| connection("URL contains a NUL byte".into()))?;
+            let range = range_header(resource).map(|range| CString::new(range).unwrap());
+            let range_name = c"Range";
+            let headers: Vec<*const c_char> = match &range {
+                Some(range) => vec![range_name.as_ptr(), range.as_ptr(), null()],
+                None => vec![null()],
+            };
+            // SAFETY: emscripten_fetch_attr_init initializes every field; the
+            // strings and the header list outlive the synchronous fetch.
+            unsafe {
+                let mut attr = std::mem::MaybeUninit::<FetchAttr>::uninit();
+                emscripten_fetch_attr_init(attr.as_mut_ptr());
+                let mut attr = attr.assume_init();
+                for (slot, byte) in attr.request_method.iter_mut().zip(b"GET\0") {
+                    *slot = *byte as c_char;
+                }
+                attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
+                attr.request_headers = headers.as_ptr();
+                let fetch = emscripten_fetch(&mut attr, url.as_ptr());
+                if fetch.is_null() {
+                    return Err(connection(format!("emscripten_fetch failed for {}", resource.url)));
+                }
+                let status = i64::from((*fetch).status);
+                if status == 0 {
+                    // A network error or a CORS rejection: the browser reports
+                    // no status.
+                    let text = CStr::from_ptr((*fetch).status_text.as_ptr()).to_string_lossy().into_owned();
+                    emscripten_fetch_close(fetch);
+                    let message = if text.is_empty() { "network error".to_owned() } else { text };
+                    return Err(connection(message));
+                }
+                let length = emscripten_fetch_get_response_headers_length(fetch);
+                let mut raw = vec![0u8; length + 1];
+                emscripten_fetch_get_response_headers(fetch, raw.as_mut_ptr().cast(), raw.len());
+                raw.truncate(length);
+                let headers = parse_headers(&String::from_utf8_lossy(&raw));
+                let body = if status == 200 || status == 206 {
+                    let data = (*fetch).data.cast::<u8>();
+                    let size = (*fetch).num_bytes as usize;
+                    Ok(if data.is_null() { Vec::new() } else { std::slice::from_raw_parts(data, size).to_vec() })
+                } else {
+                    Ok(Vec::new())
+                };
+                emscripten_fetch_close(fetch);
+                Ok(Transfer { status, headers, body })
+            }
+        }
+    }
+}
+
+fn worker(transport: transport::Transport, jobs: Arc<Mutex<mpsc::Receiver<Job>>>) {
     loop {
         let job = match jobs.lock() {
             Ok(receiver) => receiver.recv(),
@@ -203,7 +396,7 @@ fn worker(agent: ureq::Agent, jobs: Arc<Mutex<mpsc::Receiver<Job>>>) {
         if job.cancelled.load(Ordering::SeqCst) {
             continue;
         }
-        let response = perform(&agent, &job.resource);
+        let response = perform(&transport, &job.resource);
         if !job.cancelled.load(Ordering::SeqCst) {
             job.reply.invoke(move |request: &HTTPRequestState| request.handle_result(response));
         }
@@ -217,24 +410,19 @@ pub struct HTTPFileSource {
 
 impl HTTPFileSource {
     /// `HTTPFileSource(const ResourceOptions&, const ClientOptions&)`: starts
-    /// the transfer threads (as many as the online file source's default
-    /// maximum of concurrent requests).
+    /// the transfer threads (`transport::WORKERS`).
     pub fn new(resource_options: &ResourceOptions, client_options: &ClientOptions) -> Self {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .user_agent("MapLibreNative/1.0")
-            .build()
-            .into();
+        let transport = transport::Transport::new();
         let (sender, receiver) = mpsc::channel::<Job>();
         let receiver = Arc::new(Mutex::new(receiver));
-        for i in 0..DEFAULT_MAXIMUM_CONCURRENT_REQUESTS {
-            let agent = agent.clone();
+        for i in 0..transport::WORKERS {
+            let transport = transport.clone();
             let receiver = receiver.clone();
             // Detached: a worker exits when the channel closes, after its
             // current transfer.
             let _ = std::thread::Builder::new()
                 .name(format!("HTTPFileSource {i}"))
-                .spawn(move || worker(agent, receiver));
+                .spawn(move || worker(transport, receiver));
         }
         HTTPFileSource {
             impl_: Impl {
