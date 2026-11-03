@@ -131,7 +131,8 @@ impl Index for usize {
         if v < 9223372036854775808.0 {
             libstdcxx::cvt::cvttsd2si64(v) as usize
         } else {
-            (libstdcxx::cvt::cvttsd2si64(v - 9223372036854775808.0) as usize) ^ (1usize << 63)
+            // In u64, so that it also compiles where usize is 32 bits.
+            ((libstdcxx::cvt::cvttsd2si64(v - 9223372036854775808.0) as u64) ^ (1u64 << 63)) as usize
         }
     }
     fn wrapping_add(self, other: Self) -> Self {
