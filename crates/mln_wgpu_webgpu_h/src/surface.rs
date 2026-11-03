@@ -47,7 +47,9 @@ pub fn canvas_surface_target(selector: &'static CStr) -> wgpu::SurfaceTargetUnsa
 /// reference.
 ///
 /// The surface travels as the pointer of a `WebOffscreenCanvas` window
-/// handle, which only this backend understands.
+/// handle, which only this backend understands. Presenting to it doesn't
+/// wait for the GPU: the host yields to the browser after each frame, which
+/// shows the frame.
 ///
 /// # Safety
 ///
@@ -66,6 +68,9 @@ pub struct Surface {
     instance: Instance,
     /// The configured device's queue state, for `present`.
     device: RefCell<Option<Rc<crate::device::DeviceState>>>,
+    /// The host's surface (`host_surface_target`): the host yields after
+    /// each frame, so `present` needn't.
+    host: bool,
 }
 
 /// What `get_current_texture` hands wgpu next to the texture.
@@ -73,6 +78,7 @@ pub struct Surface {
 pub struct SurfaceOutputDetail {
     surface: SurfaceHandle,
     device: Option<Rc<crate::device::DeviceState>>,
+    host: bool,
 }
 
 native_send_sync!(Surface, SurfaceOutputDetail);
@@ -95,7 +101,12 @@ pub(crate) fn create_surface(
         unsafe { wgpuSurfaceAddRef(surface) };
         let raw = unsafe { SurfaceHandle::from_raw(surface) };
         let raw = created(raw, "surface (a null WGPUSurface)");
-        return Ok(DispatchSurface::custom(Surface { raw, instance: instance.clone(), device: RefCell::new(None) }));
+        return Ok(DispatchSurface::custom(Surface {
+            raw,
+            instance: instance.clone(),
+            device: RefCell::new(None),
+            host: true,
+        }));
     }
     // emdawnwebgpu reads the selector as a C string, whatever its length.
     let selector = match raw_window_handle {
@@ -116,7 +127,7 @@ pub(crate) fn create_surface(
     let desc = WGPUSurfaceDescriptor { nextInChain: (&raw const source.chain).cast_mut(), label: NULL_STRING };
     let raw = unsafe { SurfaceHandle::from_raw(wgpuInstanceCreateSurface(instance.raw().raw(), &desc)) };
     let raw = created(raw, "surface (no canvas with a WebGPU context for the selector?)");
-    Ok(DispatchSurface::custom(Surface { raw, instance: instance.clone(), device: RefCell::new(None) }))
+    Ok(DispatchSurface::custom(Surface { raw, instance: instance.clone(), device: RefCell::new(None), host: false }))
 }
 
 pub(crate) fn texture_format_from(format: WGPUTextureFormat) -> Option<wgpu::TextureFormat> {
@@ -218,7 +229,8 @@ impl SurfaceInterface for Surface {
         };
         let texture =
             unsafe { TextureHandle::from_raw(raw.texture) }.map(|raw| DispatchTexture::custom(Texture { raw }));
-        let detail = SurfaceOutputDetail { surface: self.raw.clone(), device: self.device.borrow().clone() };
+        let detail =
+            SurfaceOutputDetail { surface: self.raw.clone(), device: self.device.borrow().clone(), host: self.host };
         (texture, status, DispatchSurfaceOutputDetail::custom(detail))
     }
 }
@@ -230,10 +242,15 @@ impl SurfaceOutputDetailInterface for SurfaceOutputDetail {
 }
 
 /// `Queue::present`: waits for the submitted work, which yields to the
-/// browser so it shows the canvas texture.
+/// browser so it shows the canvas texture. A host surface returns at once:
+/// its host yields after the frame, and the next frame's CPU work overlaps
+/// this one's GPU work.
 pub(crate) fn present(detail: &DispatchSurfaceOutputDetail) {
     let detail = detail.as_custom::<SurfaceOutputDetail>().expect("mln_wgpu_webgpu_h: foreign surface texture");
     let _ = &detail.surface;
+    if detail.host {
+        return;
+    }
     let Some(device) = &detail.device else { return };
     let result = slot::<MessageResult<WGPUQueueWorkDoneStatus>>();
     let info = WGPUQueueWorkDoneCallbackInfo {
