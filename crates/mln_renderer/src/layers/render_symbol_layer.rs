@@ -7,12 +7,14 @@
 // when the bucket's vertex data changes (placement, sorting: the bucket's
 // `version`) the tile's drawables are re-created.
 //
-// TODO(port): collision debug drawables (CollisionLayerTweaker, collision
-// box/circle buffers), captureRenderedFeatures (queries), placementData
-// (placement), SymbolLayerPaintPropertyOverrides::setOverrides (per-section
-// text-color overrides of the evaluated paint properties).
+// TODO(port): captureRenderedFeatures (queries), placementData
+// (placement).
 
+use super::collision_layer_tweaker::{CollisionDrawableData, CollisionLayerTweaker};
 use super::symbol_layer_tweaker::SymbolLayerTweaker;
+use crate::buckets::symbol_bucket::{CollisionBoxDynamicVertex, CollisionBoxLayoutVertex, CollisionBuffer};
+use crate::render_layer::{activate_layer_group, change_layer_index};
+use mln_gfx::LayerGroupBasePtr;
 use super::{TileDrawables, drawable_binders_slot, drawable_render_tile_slot, shared_vertices};
 use crate::buckets::symbol_bucket::{Buffer, PaintProperties, SymbolBucket};
 use crate::change_request::{ChangeRequest, UniqueChangeRequestVec};
@@ -239,6 +241,11 @@ pub struct RenderSymbolLayer {
 
     /// The bucket version each tile's drawables were built from.
     tile_bucket_versions: HashMap<OverscaledTileID, u32>,
+
+    collision_box_group: Option<ShaderGroupPtr>,
+    collision_circle_group: Option<ShaderGroupPtr>,
+    collision_tile_layer_group: Option<LayerGroupBasePtr>,
+    collision_layer_tweaker: Option<LayerTweakerPtr>,
 }
 
 impl RenderSymbolLayer {
@@ -257,8 +264,179 @@ impl RenderSymbolLayer {
             symbol_sdf_group: None,
             symbol_text_and_icon_group: None,
             tile_bucket_versions: HashMap::new(),
+            collision_box_group: None,
+            collision_circle_group: None,
+            collision_tile_layer_group: None,
+            collision_layer_tweaker: None,
         }
     }
+
+    /// `removeTile(renderPass, tileID)`: the symbol and the collision
+    /// drawables of the tile.
+    fn remove_tile_all(&mut self, render_pass: RenderPass, tile_id: &OverscaledTileID) -> usize {
+        let mut removed = self.remove_tile(render_pass, tile_id);
+        if let Some(group) = &self.collision_tile_layer_group {
+            let mut group = group.borrow_mut();
+            if let Some(tile_group) = group.as_tile_layer_group_mut() {
+                let n = tile_group.remove_drawables(render_pass, tile_id).len();
+                self.base.stats.drawables_removed += n;
+                removed += n;
+            }
+        }
+        removed
+    }
+
+    /// `getCollisionTileLayerGroup()`.
+    fn get_collision_tile_layer_group(
+        &mut self,
+        context: &dyn Context,
+        changes: &mut UniqueChangeRequestVec,
+    ) -> Option<LayerGroupBasePtr> {
+        if self.collision_tile_layer_group.is_none() {
+            self.collision_tile_layer_group = context.create_tile_layer_group(
+                self.base.layer_index,
+                /*initial_capacity=*/ 64,
+                format!("{}-collision", self.get_id()),
+            );
+            if self.collision_tile_layer_group.is_some() {
+                activate_layer_group(&self.collision_tile_layer_group, true, changes);
+            }
+        }
+        let group = self.collision_tile_layer_group.clone()?;
+        if self.collision_layer_tweaker.is_none() {
+            let tweaker: LayerTweakerPtr = Rc::new(RefCell::new(CollisionLayerTweaker::new(
+                self.get_id().to_owned(),
+                self.base.evaluated_properties.clone(),
+            )));
+            self.collision_layer_tweaker = Some(tweaker.clone());
+            changes.push(ChangeRequest::AddLayerTweaker(group.clone(), Rc::downgrade(&tweaker)));
+        }
+        Some(group)
+    }
+
+    /// The `addCollisionDrawables(isText, hasCollisionBox,
+    /// hasCollisionCircle)` lambda of `update`.
+    #[allow(clippy::too_many_arguments)]
+    fn add_collision_drawables(
+        &mut self,
+        context: &dyn Context,
+        changes: &mut UniqueChangeRequestVec,
+        passes: RenderPass,
+        tile_id: OverscaledTileID,
+        bucket: &SymbolBucket,
+        evaluated: &SymbolPaintProperties::PossiblyEvaluated,
+        is_text: bool,
+    ) {
+        let (has_collision_box, has_collision_circle) = if is_text {
+            (bucket.has_text_collision_box_data(), bucket.has_text_collision_circle_data())
+        } else {
+            (bucket.has_icon_collision_box_data(), bucket.has_icon_collision_circle_data())
+        };
+        if !has_collision_box && !has_collision_circle {
+            return;
+        }
+
+        let Some(collision_group) = self.get_collision_tile_layer_group(context, changes) else {
+            return;
+        };
+
+        let values = if is_text {
+            text_property_values(evaluated, &bucket.layout)
+        } else {
+            icon_property_values(evaluated, &bucket.layout)
+        };
+        let suffix = if is_text { "text/" } else { "icon/" };
+        let layer_collision_prefix = format!("{}-collision/", self.get_id());
+
+        let mut collision_builder = context.create_drawable_builder(layer_collision_prefix.clone());
+        collision_builder.set_sub_layer_index(0);
+        collision_builder.set_enable_depth(false);
+        collision_builder.set_render_pass(passes);
+        collision_builder.set_cull_face_mode(&CullFaceMode::disabled());
+        collision_builder.set_color_mode(&ColorMode::alpha_blended());
+
+        let state = bucket.state();
+        let mut add = |buffer: &CollisionBuffer, group: &Option<ShaderGroupPtr>, mode: DrawMode, name: &str| {
+            let Some(group) = group else {
+                return;
+            };
+            let Some(shader) = group.get_or_create_shader(context, &Default::default(), "") else {
+                return;
+            };
+            collision_builder.set_drawable_name(format!("{layer_collision_prefix}{suffix}{name}"));
+            collision_builder.set_shader(Some(shader));
+            collision_builder.set_raw_vertices(Vec::new(), buffer.vertices.len(), AttributeDataType::Short2);
+            collision_builder.set_vertex_attributes(Some(get_collision_vertex_attributes(context, buffer)));
+            collision_builder.set_segments_shared(
+                mode,
+                Some(Rc::new(RefCell::new(IndexVectorBase::new(buffer.indices.clone())))),
+                &buffer.segments,
+            );
+            collision_builder.flush(context);
+        };
+
+        if has_collision_box {
+            let collision_box = if is_text { &state.text_collision_box } else { &state.icon_collision_box };
+            if let Some(collision_box) = collision_box {
+                add(collision_box, &self.collision_box_group, DrawMode::Lines(1.0), "box");
+            }
+        }
+        if has_collision_circle {
+            let collision_circle = if is_text { &state.text_collision_circle } else { &state.icon_collision_circle };
+            if let Some(collision_circle) = collision_circle {
+                add(collision_circle, &self.collision_circle_group, DrawMode::Triangles(), "circle");
+            }
+        }
+        drop(state);
+
+        // add drawables to layer group
+        let tweaker = self.collision_layer_tweaker.clone();
+        let mut group = collision_group.borrow_mut();
+        let Some(tile_group) = group.as_tile_layer_group_mut() else {
+            return;
+        };
+        for mut drawable in collision_builder.clear_drawables() {
+            drawable.set_tile_id(tile_id);
+            drawable.set_layer_tweaker(tweaker.as_ref().and_then(layer_tweaker_slot));
+            drawable.set_data(Some(Box::new(CollisionDrawableData {
+                translate: values.translate,
+                translate_anchor: values.translate_anchor,
+            })));
+            tile_group.add_drawable(passes, &tile_id, drawable);
+            self.base.stats.drawables_added += 1;
+        }
+    }
+}
+
+/// `getCollisionVertexAttributes(context, buffer)`.
+fn get_collision_vertex_attributes(
+    context: &dyn Context,
+    buffer: &CollisionBuffer,
+) -> mln_gfx::vertex_attribute::VertexAttributeArrayPtr {
+    let vertex_attrs = context.create_vertex_attribute_array();
+    {
+        let mut attrs = vertex_attrs.borrow_mut();
+        let layout_stride = std::mem::size_of::<CollisionBoxLayoutVertex>() as u32;
+        let layout = shared_vertices(&buffer.vertices);
+        let dynamic_stride = std::mem::size_of::<CollisionBoxDynamicVertex>() as u32;
+        let dynamic = shared_vertices(&buffer.dynamic_vertices);
+        if let Some(attr) = attrs.set(ID_COLLISION_POS_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            attr.set_shared_raw_data(Some(layout.clone()), 0, 0, layout_stride, AttributeDataType::Short2);
+        }
+        if let Some(attr) = attrs.set(ID_COLLISION_ANCHOR_POS_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            attr.set_shared_raw_data(Some(layout.clone()), 4, 0, layout_stride, AttributeDataType::Short2);
+        }
+        if let Some(attr) = attrs.set(ID_COLLISION_EXTRUDE_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            attr.set_shared_raw_data(Some(layout), 8, 0, layout_stride, AttributeDataType::Short2);
+        }
+        if let Some(attr) = attrs.set(ID_COLLISION_PLACED_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            attr.set_shared_raw_data(Some(dynamic.clone()), 0, 0, dynamic_stride, AttributeDataType::UShort2);
+        }
+        if let Some(attr) = attrs.set(ID_COLLISION_SHIFT_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            attr.set_shared_raw_data(Some(dynamic), 4, 0, dynamic_stride, AttributeDataType::Float2);
+        }
+    }
+    vertex_attrs
 }
 
 impl RenderLayer for RenderSymbolLayer {
@@ -285,8 +463,14 @@ impl RenderLayer for RenderSymbolLayer {
             self.unevaluated.evaluate_with_previous(parameters, &previous_evaluated),
         );
 
-        // TODO(port): SymbolLayerPaintPropertyOverrides::setOverrides when
-        // `has_format_section_overrides`.
+        if self.has_format_section_overrides {
+            crate::format_section_override::set_overrides(
+                &impl_cast(&self.base.base_impl).layout,
+                &mut properties.evaluated,
+                &self.unevaluated,
+                &parameters.global_state,
+            );
+        }
 
         let evaluated = &properties.evaluated;
         let has_icon_opacity = evaluated.get::<IconColor>().constant_or(&IconColor::default_value()).a > 0.0
@@ -319,6 +503,51 @@ impl RenderLayer for RenderSymbolLayer {
 
     fn has_crossfade(&self) -> bool {
         false
+    }
+
+    fn mark_layer_renderable(&mut self, will_render: bool, changes: &mut UniqueChangeRequestVec) {
+        // RenderLayer::markLayerRenderable
+        self.base.is_renderable = will_render;
+        let group = self.base.layer_group.clone();
+        activate_layer_group(&group, will_render, changes);
+        if self.collision_tile_layer_group.is_some() {
+            activate_layer_group(&self.collision_tile_layer_group, will_render, changes);
+        }
+    }
+
+    fn layer_removed(&mut self, changes: &mut UniqueChangeRequestVec) {
+        // RenderLayer::layerRemoved
+        self.remove_all_drawables();
+        let group = self.base.layer_group.clone();
+        activate_layer_group(&group, false, changes);
+        if self.collision_tile_layer_group.is_some() {
+            activate_layer_group(&self.collision_tile_layer_group, false, changes);
+        }
+    }
+
+    fn layer_index_changed(&mut self, new_layer_index: i32, changes: &mut UniqueChangeRequestVec) {
+        // RenderLayer::layerIndexChanged
+        self.base.layer_index = new_layer_index;
+        let group = self.base.layer_group.clone();
+        change_layer_index(&group, new_layer_index, changes);
+
+        change_layer_index(&self.collision_tile_layer_group, new_layer_index, changes);
+    }
+
+    fn remove_all_drawables(&mut self) -> usize {
+        let old_value = self.base.stats.drawables_removed;
+        if let Some(group) = &self.base.layer_group {
+            let count = group.borrow().get_drawable_count();
+            self.base.stats.drawables_removed += count;
+            group.borrow_mut().clear_drawables();
+        }
+        if let Some(group) = &self.collision_tile_layer_group {
+            let count = group.borrow().get_drawable_count();
+            self.base.stats.drawables_removed += count;
+            group.borrow_mut().clear_drawables();
+        }
+        self.tile_bucket_versions.clear();
+        self.base.stats.drawables_removed - old_value
     }
 
     /// `prepare(const LayerPrepareParameters&)`.
@@ -389,6 +618,12 @@ impl RenderLayer for RenderSymbolLayer {
         if self.symbol_text_and_icon_group.is_none() {
             self.symbol_text_and_icon_group = shaders.get_shader_group(SYMBOL_TEXT_AND_ICON_SHADER_NAME);
         }
+        if self.collision_box_group.is_none() {
+            self.collision_box_group = shaders.get_shader_group("CollisionBoxShader");
+        }
+        if self.collision_circle_group.is_none() {
+            self.collision_circle_group = shaders.get_shader_group("CollisionCircleShader");
+        }
 
         // remove drawables that are dropped out of scope
         {
@@ -402,6 +637,17 @@ impl RenderLayer for RenderSymbolLayer {
                     || drawable.get_tile_id().is_some_and(|id| !base.render_tile_ids.contains_key(&id))
             });
             self.base.stats.drawables_removed += removed;
+        }
+        if let Some(collision_group) = self.collision_tile_layer_group.clone() {
+            let mut group = collision_group.borrow_mut();
+            if let Some(tile_layer_group) = group.as_tile_layer_group_mut() {
+                let base = &self.base;
+                let removed = tile_layer_group.remove_drawables_if(|drawable| {
+                    drawable.get_render_pass() != passes
+                        || drawable.get_tile_id().is_some_and(|id| !base.render_tile_ids.contains_key(&id))
+                });
+                self.base.stats.drawables_removed += removed;
+            }
         }
         let render_tile_ids = &self.base.render_tile_ids;
         self.tile_bucket_versions.retain(|id, _| render_tile_ids.contains_key(id));
@@ -423,7 +669,7 @@ impl RenderLayer for RenderSymbolLayer {
             let base_impl = self.base.base_impl.clone();
             let render_data = super::render_data_for_pass(tile, &*base_impl, passes);
             let Some(render_data) = render_data.filter(|r| r.bucket.has_data()) else {
-                self.remove_tile(passes, &tile_id);
+                self.remove_tile_all(passes, &tile_id);
                 self.tile_bucket_versions.remove(&tile_id);
                 continue;
             };
@@ -439,7 +685,7 @@ impl RenderLayer for RenderSymbolLayer {
                 // This tile was previously set up from a different bucket
                 // (or the bucket's vertex data changed), drop and re-create
                 // any drawables for it.
-                self.remove_tile(passes, &tile_id);
+                self.remove_tile_all(passes, &tile_id);
             }
             self.set_render_tile_bucket_id(&tile_id, bucket.base.bucket_id);
             self.tile_bucket_versions.insert(tile_id, version);
@@ -455,7 +701,17 @@ impl RenderLayer for RenderSymbolLayer {
                 // should not be updated.
                 super::drawable_has_layer_tweaker(drawable, &layer_tweaker)
             };
+            let evaluated = get_evaluated::<SymbolLayerProperties>(&render_data.layer_properties);
             if self.update_tile(passes, &tile_id, update_existing) {
+                // re-create collision drawables
+                if let Some(group) = &self.collision_tile_layer_group {
+                    let mut group = group.borrow_mut();
+                    if let Some(tile_group) = group.as_tile_layer_group_mut() {
+                        tile_group.remove_drawables(passes, &tile_id);
+                    }
+                }
+                self.add_collision_drawables(context, changes, passes, tile_id, bucket, evaluated, false);
+                self.add_collision_drawables(context, changes, passes, tile_id, bucket, evaluated, true);
                 continue;
             }
 
@@ -506,7 +762,9 @@ impl RenderLayer for RenderSymbolLayer {
                 add_renderables(&state_guard.text, SymbolType::Text);
             }
 
-            // TODO(port): addCollisionDrawables (collision debug boxes).
+            drop(state_guard);
+            self.add_collision_drawables(context, changes, passes, tile_id, bucket, evaluated, false);
+            self.add_collision_drawables(context, changes, passes, tile_id, bucket, evaluated, true);
         }
 
         // std::multiset<SegmentGroup>: a stable sort keeps equal elements in

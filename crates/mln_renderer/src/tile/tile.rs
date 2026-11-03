@@ -198,8 +198,6 @@ impl TileBase {
 }
 
 /// The virtual interface of `Tile`.
-// TODO(port): queryRenderedFeatures, querySourceFeatures, getQueryPadding
-// (queries, M6).
 pub trait Tile {
     fn base(&self) -> &TileBase;
 
@@ -255,6 +253,38 @@ pub trait Tile {
     /// a tile for two placements: fading starts with the first placement and
     /// will have time to finish by the second placement.
     fn performed_fade_placement(&self) {}
+
+    // query: the feature queries (tile.cpp: no-ops for tiles without
+    // features).
+    /// `queryRenderedFeatures(result, queryGeometry, transformState, layers,
+    /// options, globalState, projMatrix, featureState)`.
+    #[allow(clippy::too_many_arguments)]
+    fn query_rendered_features(
+        &self,
+        _result: &mut crate::geometry::feature_index::QueryResults,
+        _query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        _transform_state: &mln_map_types::TransformState,
+        _layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        _options: &crate::query::RenderedQueryOptions,
+        _global_state: Option<&GlobalStateMap>,
+        _proj_matrix: &mln_util::mat4::Mat4,
+        _feature_state: &crate::source_state::SourceFeatureState,
+    ) {
+    }
+
+    /// `querySourceFeatures(result, options, globalState)`.
+    fn query_source_features(
+        &self,
+        _result: &mut Vec<mln_util::feature::Feature>,
+        _options: &crate::query::SourceQueryOptions,
+        _global_state: Option<&GlobalStateMap>,
+    ) {
+    }
+
+    /// `getQueryPadding(layers)`.
+    fn get_query_padding(&self, _layers: &crate::geometry::feature_index::QueryLayers<'_>) -> f32 {
+        0.0
+    }
 
     // Non-virtual members of the C++ class.
 

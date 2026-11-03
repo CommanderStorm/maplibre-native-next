@@ -699,3 +699,62 @@ account for it.
   (geometry_tile_data.cpp `roundPolygonCorners`, fill_extrusion_bucket.cpp).
   TODO(port): the port extrudes the unrounded polygon and logs one
   warning. No render test sets the property.
+- **[symbols] Symbol guards not ported** (`layout/symbol_instance.cpp`,
+  `SymbolBucket::check`, MLN_SYMBOL_GUARDS). C++ checks sentinel values
+  around SymbolInstance members to detect memory corruption and drops
+  corrupted instances; safe Rust has no such corruption, so the checks
+  (and `forceFail`/`checkIndex`/the symbol ErrorSink reports) are absent.
+  Not observable in tests.
+- **[symbols] Symbol drawables copy the bucket's vertex data**
+  (`render_symbol_layer.cpp`). C++ drawables share the SymbolBucket's
+  vertex/opacity/index vectors and see placement's updates through
+  `updateModified`. The port copies them into the drawable and, when the
+  bucket's `version` changes (placement, sorting, feature state),
+  re-creates the tile's drawables. Same pixels; more allocation.
+- **[symbols] DynamicTexture GPU textures** (`gfx/dynamic_texture.cpp`,
+  `webgpu/dynamic_texture.cpp`). The shelf pack and queued uploads are
+  shared with the workers behind a mutex as in C++; the wgpu texture is a
+  render-thread object (`Rc`), kept in a render-thread registry keyed by
+  the dynamic texture's id and created in the first upload, as the C++
+  WebGPU texture is (`deferredCreation`). A texture dropped off the render
+  thread leaves its registry entry until `removeUnusedDynamicTextures`.
+  Not observable.
+- **[symbols] No font faces** (`text/glyph_manager.cpp` HarfBuzz font
+  faces, `getCharGlyphIDType`, `finalizeSymbols`, `GeometryTile::
+  onGlyphsAvailable` shaping). Every character is a FontPBF glyph; styles
+  with `"font-faces"` (complex-script fonts) render with the PBF glyphs
+  instead. TODO(port).
+- **[symbols] merge_lines keys** (`layout/merge_lines.cpp`). C++ keys its
+  line-end maps on `util::hash(text, x, y)` (a `size_t` hash_combine); the
+  port keys on the exact `(text, x, y)` tuple. Identical unless two C++
+  hashes collide (where C++ would merge unrelated lines). `util::dist` on
+  `int16` points is computed without the C++ `int` overflow (UB only for
+  extreme coordinates).
+- **[dem-heatmap] DEM border backfill runs in `RenderRasterDEMSource::update`**
+  (`render_raster_dem_source.cpp` `onTileChanged`). C++ backfills a
+  raster-dem tile's 1px border from its renderable neighbours (and theirs
+  from it) when the tile reports a change; the port's tiles share one
+  observer that can't reach the tile pyramid, so the source's `update`
+  (every frame, before the layers' prepare/update) runs the same backfill
+  for every renderable tile whose neighbour mask is not complete. Every
+  pair of renderable neighbours ends up backfilled both ways before the
+  prepare pass, as in C++. Same pixels (all hillshade-*/color-relief tests
+  that load pass).
+- **[dem-heatmap] Hillshade prepare render targets are per layer**
+  (`render_hillshade_layer.cpp`, `HillshadeBucket::renderTarget`). C++
+  keeps the prepare render target in the shared bucket, so a second
+  hillshade layer on the same source reuses the first layer's prepared
+  texture. Buckets are `Send + Sync` and render targets are render-thread
+  `Rc`s, so each layer keeps its own per bucket id, re-prepared when the
+  bucket's backfill counter (C++ `renderTargetPrepared = false`) moves.
+  The prepare pass does not depend on layer paint properties, so the
+  textures are identical (`combinations/hillshade-translucent--hillshade-translucent`
+  passes); the second layer does one more offscreen pass per tile.
+- **[dem-heatmap] Hillshade/color-relief drawables are rebuilt, not
+  re-attributed, when the tile mask changes** (`render_hillshade_layer.cpp`,
+  `render_color_relief_layer.cpp` `updateExisting`). C++ re-applies the
+  shared vertex attributes (and, for color-relief, new DEM textures from
+  the current DEM image) to existing drawables every frame. The port's
+  drawables hold copies, so it re-applies (hillshade) or rebuilds
+  (color-relief) only when the bucket's masked geometry changed, and keeps
+  one DEM texture per bucket and backfill generation. Same pixels.

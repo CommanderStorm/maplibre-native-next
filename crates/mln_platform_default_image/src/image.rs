@@ -19,8 +19,7 @@ pub fn decode_image(data: &[u8]) -> Result<PremultipliedImage, String> {
         let magic2 = read_uint(0x8);
         // RIFF <xxxx = file size> WEBP
         if magic1 == 0x52494646 && magic2 == 0x57454250 {
-            // TODO(port): decodeWEBP (platform/default/src/mln/util/webp_reader.cpp).
-            return Err("TODO(port): WebP decoding is not ported".to_string());
+            return Ok(crate::webp_reader::decode_webp(data));
         }
     }
 

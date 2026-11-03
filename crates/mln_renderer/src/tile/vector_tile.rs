@@ -122,4 +122,41 @@ impl Tile for VectorTile {
     fn performed_fade_placement(&self) {
         self.tile.performed_fade_placement();
     }
+
+    // query: GeometryTile's queries.
+    fn query_rendered_features(
+        &self,
+        result: &mut crate::geometry::feature_index::QueryResults,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        transform_state: &mln_map_types::TransformState,
+        layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        options: &crate::query::RenderedQueryOptions,
+        global_state: Option<&GlobalStateMap>,
+        proj_matrix: &mln_util::mat4::Mat4,
+        feature_state: &crate::source_state::SourceFeatureState,
+    ) {
+        self.tile.query_rendered_features(
+            result,
+            query_geometry,
+            transform_state,
+            layers,
+            options,
+            global_state,
+            proj_matrix,
+            feature_state,
+        );
+    }
+
+    fn query_source_features(
+        &self,
+        result: &mut Vec<mln_util::feature::Feature>,
+        options: &crate::query::SourceQueryOptions,
+        global_state: Option<&GlobalStateMap>,
+    ) {
+        self.tile.query_source_features(result, options, global_state);
+    }
+
+    fn get_query_padding(&self, layers: &crate::geometry::feature_index::QueryLayers<'_>) -> f32 {
+        self.tile.get_query_padding(layers)
+    }
 }

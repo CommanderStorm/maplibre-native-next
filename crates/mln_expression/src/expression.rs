@@ -474,10 +474,17 @@ impl<'a> GeoJSONFeature<'a> {
         }
     }
 
-    fn with_canonical(feature: &'a Feature<f64>, _canonical: &CanonicalTileID) -> Self {
-        // TODO(port): convertGeometry(feature.geometry, canonical) and
-        // fixupPolygons for polygons (needed by "within"/"distance").
-        GeoJSONFeature::new(feature)
+    fn with_canonical(feature: &'a Feature<f64>, canonical: &CanonicalTileID) -> Self {
+        let mut geometry = mln_tile::geometry_tile_data::convert_geometry_to_tile(&feature.geometry, canonical);
+        // https://github.com/mapbox/geojson-vt-cpp/issues/44
+        if to_feature_type(&feature.geometry) == FeatureType::Polygon {
+            // C++ lets wagyu's exception escape `evaluate`; the unfixed
+            // rings are kept here instead.
+            if let Ok(fixed) = mln_tile::geometry_tile_data::fixup_polygons(&geometry) {
+                geometry = fixed;
+            }
+        }
+        GeoJSONFeature { feature, geometry }
     }
 }
 

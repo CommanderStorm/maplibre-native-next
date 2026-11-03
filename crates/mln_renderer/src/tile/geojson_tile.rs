@@ -81,8 +81,6 @@ impl GeoJSONTile {
     pub fn geometry_tile(&self) -> &GeometryTile {
         &self.tile
     }
-
-    // TODO(port): querySourceFeatures (queries, M6).
 }
 
 impl Tile for GeoJSONTile {
@@ -137,5 +135,56 @@ impl Tile for GeoJSONTile {
 
     fn performed_fade_placement(&self) {
         self.tile.performed_fade_placement();
+    }
+
+    // query
+    fn query_rendered_features(
+        &self,
+        result: &mut crate::geometry::feature_index::QueryResults,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        transform_state: &mln_map_types::TransformState,
+        layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        options: &crate::query::RenderedQueryOptions,
+        global_state: Option<&GlobalStateMap>,
+        proj_matrix: &mln_util::mat4::Mat4,
+        feature_state: &crate::source_state::SourceFeatureState,
+    ) {
+        self.tile.query_rendered_features(
+            result,
+            query_geometry,
+            transform_state,
+            layers,
+            options,
+            global_state,
+            proj_matrix,
+            feature_state,
+        );
+    }
+
+    fn get_query_padding(&self, layers: &crate::geometry::feature_index::QueryLayers<'_>) -> f32 {
+        self.tile.get_query_padding(layers)
+    }
+
+    /// `querySourceFeatures(result, options, globalState)`.
+    fn query_source_features(
+        &self,
+        result: &mut Vec<mln_util::feature::Feature>,
+        options: &crate::query::SourceQueryOptions,
+        global_state: Option<&GlobalStateMap>,
+    ) {
+        // Ignore the sourceLayer, there is only one
+        if let Some(feature_index) = self.tile.get_feature_index() {
+            if let Some(tile_data) = feature_index.get_data() {
+                if let Some(layer) = tile_data.get_layer("") {
+                    crate::tile::geometry_tile::query_layer_source_features(
+                        &*layer,
+                        result,
+                        options,
+                        global_state,
+                        &self.tile.inner().base.id(),
+                    );
+                }
+            }
+        }
     }
 }

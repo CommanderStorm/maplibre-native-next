@@ -10,6 +10,7 @@ pub mod compression;
 pub mod image;
 pub mod png_reader;
 pub mod png_writer;
+pub mod webp_reader;
 
 pub use image::decode_image;
 pub use png_reader::decode_png;

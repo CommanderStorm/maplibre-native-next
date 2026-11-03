@@ -3,8 +3,7 @@
 // MLN_TRIANGULATE_FILL_OUTLINES = 1 as for WebGPU).
 //
 // TODO(port): the fill-pattern branch (pattern atlas textures,
-// DrawableAtlasesTweaker), queryIntersectsFeature (queries, M6) and
-// captureRenderedFeatures.
+// DrawableAtlasesTweaker) and captureRenderedFeatures.
 
 use super::fill_layer_tweaker::FillLayerTweaker;
 use super::{TileDrawables, refresh_if_bucket_updated, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
@@ -175,6 +174,32 @@ impl RenderLayer for RenderFillLayer {
 
     fn has_crossfade(&self) -> bool {
         get_crossfade::<FillLayerProperties>(&self.base.evaluated_properties).t != 1.0
+    }
+
+    // query
+    fn query_intersects_feature(
+        &self,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+        _zoom: f32,
+        transform_state: &TransformState,
+        pixels_to_tile_units: f32,
+        _pos_matrix: &mln_util::mat4::Mat4,
+        _feature_state: &mln_style::expression::expression::FeatureState,
+    ) -> bool {
+        let evaluated = get_evaluated::<FillLayerProperties>(&self.base.evaluated_properties);
+        let translated_query_geometry = crate::geometry::feature_index::FeatureIndex::translate_query_geometry(
+            query_geometry,
+            evaluated.get::<FillTranslate>(),
+            *evaluated.get::<FillTranslateAnchor>(),
+            transform_state.get_bearing() as f32,
+            pixels_to_tile_units,
+        );
+
+        mln_util::intersection_tests::polygon_intersects_multi_polygon(
+            translated_query_geometry.as_ref().unwrap_or(query_geometry),
+            feature.get_geometries(),
+        )
     }
 
     fn update(

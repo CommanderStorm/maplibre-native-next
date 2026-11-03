@@ -1,5 +1,5 @@
 // Ports src/mln/layout/clip_lines.hpp and src/mln/layout/clip_lines.cpp
-// (`util::clipLines`).
+// (`util::clipLines`): clips lines to the box [x1, x2) x [y1, y2).
 
 use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryCoordinate, GeometryCoordinates};
 

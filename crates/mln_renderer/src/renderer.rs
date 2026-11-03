@@ -59,9 +59,50 @@ impl Renderer {
         }
     }
 
-    // TODO(port): queryRenderedFeatures, querySourceFeatures,
-    // queryPointAnnotations, queryShapeAnnotations, queryFeatureExtensions,
-    // feature state, dumpDebugLogs, getPlacedSymbolsData.
+    // query
+    /// `queryRenderedFeatures(const ScreenLineString&, const RenderedQueryOptions&)`.
+    pub fn query_rendered_features(
+        &self,
+        geometry: &[mln_util::geo::ScreenCoordinate],
+        options: &crate::query::RenderedQueryOptions,
+    ) -> Vec<mln_util::feature::Feature> {
+        self.impl_ref().orchestrator.query_rendered_features(geometry, options)
+    }
+
+    /// `queryRenderedFeatures(const ScreenCoordinate&, const RenderedQueryOptions&)`.
+    pub fn query_rendered_features_at_point(
+        &self,
+        point: &mln_util::geo::ScreenCoordinate,
+        options: &crate::query::RenderedQueryOptions,
+    ) -> Vec<mln_util::feature::Feature> {
+        self.impl_ref().orchestrator.query_rendered_features(&[*point], options)
+    }
+
+    /// `queryRenderedFeatures(const ScreenBox&, const RenderedQueryOptions&)`.
+    pub fn query_rendered_features_in_box(
+        &self,
+        min: &mln_util::geo::ScreenCoordinate,
+        max: &mln_util::geo::ScreenCoordinate,
+        options: &crate::query::RenderedQueryOptions,
+    ) -> Vec<mln_util::feature::Feature> {
+        use mln_util::geo::ScreenCoordinate;
+        self.impl_ref().orchestrator.query_rendered_features(
+            &[*min, ScreenCoordinate::new(max.x, min.y), *max, ScreenCoordinate::new(min.x, max.y), *min],
+            options,
+        )
+    }
+
+    /// `querySourceFeatures(sourceID, options)`.
+    pub fn query_source_features(
+        &self,
+        source_id: &str,
+        options: &crate::query::SourceQueryOptions,
+    ) -> Vec<mln_util::feature::Feature> {
+        self.impl_ref().orchestrator.query_source_features(source_id, options)
+    }
+
+    // TODO(port): queryPointAnnotations, queryShapeAnnotations,
+    // queryFeatureExtensions, dumpDebugLogs, getPlacedSymbolsData.
 
     // layers: feature state
     /// `setFeatureState(sourceID, sourceLayerID, featureID, state)`.

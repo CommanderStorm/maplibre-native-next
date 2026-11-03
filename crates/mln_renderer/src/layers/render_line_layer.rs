@@ -2,8 +2,7 @@
 // src/mln/renderer/layers/render_line_layer.cpp (drawable path).
 //
 // TODO(port): the line-pattern branch (icon atlas textures,
-// DrawableAtlasesTweaker), queryIntersectsFeature / getLineWidth /
-// offsetLine (queries, M6) and captureRenderedFeatures.
+// DrawableAtlasesTweaker) and captureRenderedFeatures.
 
 use super::line_layer_tweaker::{LineDrawableData, LineLayerTweaker, LineType};
 use super::{TileDrawables, refresh_if_bucket_updated, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
@@ -160,6 +159,70 @@ impl RenderLineLayer {
             }
         }
     }
+
+    // query
+    /// `getLineWidth(feature, zoom, featureState)`.
+    fn get_line_width(
+        &self,
+        feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+        zoom: f32,
+        feature_state: &mln_style::expression::expression::FeatureState,
+    ) -> f32 {
+        use mln_style::properties::Property;
+
+        let evaluated = get_evaluated::<LineLayerProperties>(&self.base.evaluated_properties);
+        let line_width =
+            evaluated.get::<LineWidth>().evaluate_feature_state(feature, zoom, feature_state, LineWidth::default_value());
+        let gap_width = evaluated.get::<LineGapWidth>().evaluate_feature_state(
+            feature,
+            zoom,
+            feature_state,
+            LineGapWidth::default_value(),
+        );
+        if gap_width != 0.0 { gap_width + 2.0 * line_width } else { line_width }
+    }
+}
+
+// query
+/// `offsetLine(rings, offset)` (render_line_layer.cpp).
+fn offset_line(
+    rings: &mln_tile_id::geometry_tile_data::GeometryCollection,
+    offset: f64,
+) -> Vec<mln_tile_id::geometry_tile_data::GeometryCoordinates> {
+    use maplibre_native_base::Point;
+    use mln_util::math::{perp, unit};
+
+    debug_assert!(offset != 0.0);
+    debug_assert!(!rings.is_empty());
+
+    let to_f64 = |p: Point<i16>| Point::new(f64::from(p.x), f64::from(p.y));
+    let sub = |a: Point<i16>, b: Point<i16>| Point::new(a.x.wrapping_sub(b.x), a.y.wrapping_sub(b.y));
+
+    let zero = Point::new(0.0, 0.0);
+    let mut new_rings = Vec::with_capacity(rings.len());
+    for ring in rings.iter() {
+        let mut new_ring = Vec::with_capacity(ring.len());
+
+        for i in 0..ring.len() {
+            let p = ring[i];
+
+            let a_to_b = if i == 0 { zero } else { perp(unit(to_f64(sub(p, ring[i - 1])))) };
+            // At the last vertex, use the incoming normal so the endpoint receives the full offset.
+            let b_to_c = if i + 1 == ring.len() { a_to_b } else { perp(unit(to_f64(sub(ring[i + 1], p)))) };
+            let mut extrude = unit(Point::new(a_to_b.x + b_to_c.x, a_to_b.y + b_to_c.y));
+
+            let cos_half_angle = extrude.x * b_to_c.x + extrude.y * b_to_c.y;
+            let scale = if cos_half_angle != 0.0 { 1.0 / cos_half_angle } else { 0.0 };
+            extrude = Point::new(extrude.x * scale, extrude.y * scale);
+
+            // convertPoint<int16_t>(extrude * offset) + p
+            let shifted = Point::new((extrude.x * offset) as i16, (extrude.y * offset) as i16);
+            new_ring.push(Point::new(shifted.x.wrapping_add(p.x), shifted.y.wrapping_add(p.y)));
+        }
+        new_rings.push(new_ring);
+    }
+
+    new_rings
 }
 
 impl RenderLayer for RenderLineLayer {
@@ -227,6 +290,53 @@ impl RenderLayer for RenderLineLayer {
 
     fn has_crossfade(&self) -> bool {
         get_crossfade::<LineLayerProperties>(&self.base.evaluated_properties).t != 1.0
+    }
+
+    // query
+    fn query_intersects_feature(
+        &self,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+        zoom: f32,
+        transform_state: &TransformState,
+        pixels_to_tile_units: f32,
+        _pos_matrix: &mln_util::mat4::Mat4,
+        feature_state: &mln_style::expression::expression::FeatureState,
+    ) -> bool {
+        use mln_style::properties::Property;
+
+        let evaluated = get_evaluated::<LineLayerProperties>(&self.base.evaluated_properties);
+        // Translate query geometry
+        let translated_query_geometry = crate::geometry::feature_index::FeatureIndex::translate_query_geometry(
+            query_geometry,
+            evaluated.get::<LineTranslate>(),
+            *evaluated.get::<LineTranslateAnchor>(),
+            transform_state.get_bearing() as f32,
+            pixels_to_tile_units,
+        );
+        let query = translated_query_geometry.as_ref().unwrap_or(query_geometry);
+
+        // Evaluate function
+        let offset = evaluated.get::<LineOffset>().evaluate_feature_state(
+            feature,
+            zoom,
+            feature_state,
+            LineOffset::default_value(),
+        ) * pixels_to_tile_units;
+        // Test intersection
+        let half_width =
+            (f64::from(self.get_line_width(feature, zoom, feature_state)) / 2.0 * f64::from(pixels_to_tile_units)) as f32;
+
+        // Apply offset to geometry
+        if offset != 0.0 && !feature.get_geometries().is_empty() {
+            return mln_util::intersection_tests::polygon_intersects_buffered_multi_line(
+                query,
+                &offset_line(feature.get_geometries(), f64::from(offset)),
+                half_width,
+            );
+        }
+
+        mln_util::intersection_tests::polygon_intersects_buffered_multi_line(query, feature.get_geometries(), half_width)
     }
 
     fn prepare(&mut self, params: &mut LayerPrepareParameters<'_>) {

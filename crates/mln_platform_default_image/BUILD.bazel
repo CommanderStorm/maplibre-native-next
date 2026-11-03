@@ -10,6 +10,7 @@ rust_library(
     deps = [
         "//crates/mln_util",
         "@next_crates//:flate2",
+        "@next_crates//:image-webp",
         "@next_crates//:png",
     ],
 )

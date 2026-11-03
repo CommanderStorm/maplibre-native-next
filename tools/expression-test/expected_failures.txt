@@ -1,8 +1,4 @@
 # Expression corpus tests (metrics/integration/expression-tests) that fail in the
 # Rust port today and pass in the C++ runner. //tools/expression-test:corpus_test
 # fails only on tests that fail and are not listed here. Reasons:
-# - within/*: the within expression is not ported (M3: GeoJSON and tile
-#   geometry conversion).
-within/invalid-geojson
-within/line-within-polygon
-within/point-within-polygon
+# (none)

@@ -346,6 +346,23 @@ pub trait RenderLayer {
         self.base().style_dependencies
     }
 
+    // query: `queryIntersectsFeature(queryGeometry, feature, zoom,
+    // transformState, pixelsToTileUnits, posMatrix, featureState)`; C++
+    // returns false unless a layer type overrides it.
+    #[allow(clippy::too_many_arguments)]
+    fn query_intersects_feature(
+        &self,
+        _query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        _feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+        _zoom: f32,
+        _transform_state: &TransformState,
+        _pixels_to_tile_units: f32,
+        _pos_matrix: &mln_util::mat4::Mat4,
+        _feature_state: &mln_style::expression::expression::FeatureState,
+    ) -> bool {
+        false
+    }
+
     /// `setLayerGroup(LayerGroupBasePtr, UniqueChangeRequestVec&)`.
     fn set_layer_group(&mut self, layer_group: Option<LayerGroupBasePtr>, changes: &mut UniqueChangeRequestVec) {
         // Remove the active layer group, if any, before replacing it.

@@ -96,6 +96,13 @@ crate.annotation(
     patches = ["//crates/mln_text/patches:harfrust_hb_rounding.patch"],
     repositories = ["next_crates"],
 )
+
+# decodeWEBP (platform/default/src/mln/util/webp_reader.cpp); pure Rust.
+crate.spec(
+    package = "image-webp",
+    version = "0.2",
+)
+
 # MLT decoding: the Rust implementation of the MapLibre Tile spec, instead of
 # porting the C++ decoder (vendor/maplibre-tile-spec/cpp). //difftest/tile
 # compares it with the C++ decoder.

@@ -150,9 +150,7 @@ impl RenderSourceBase {
 }
 
 /// `RenderSource`.
-// TODO(port): queryRenderedFeatures, querySourceFeatures,
-// queryFeatureExtensions, feature state, getImageRenderData,
-// setFastPFOREnabled (queries and feature state, M6).
+// TODO(port): queryFeatureExtensions, getImageRenderData.
 pub trait RenderSource {
     fn base(&self) -> &RenderSourceBase;
     fn base_mut(&mut self) -> &mut RenderSourceBase;
@@ -228,6 +226,31 @@ pub trait RenderSource {
         _feature_id: Option<&str>,
         _state_key: Option<&str>,
     ) {
+    }
+
+    // query
+    /// `queryRenderedFeatures(geometry, transformState, layers, options,
+    /// globalState, projMatrix)`; sources without features return nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn query_rendered_features(
+        &self,
+        _geometry: &[mln_util::geo::ScreenCoordinate],
+        _transform_state: &mln_map_types::TransformState,
+        _layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        _options: &crate::query::RenderedQueryOptions,
+        _global_state: Option<&mln_style::expression::GlobalStateMap>,
+        _proj_matrix: &mln_util::mat4::Mat4,
+    ) -> crate::geometry::feature_index::QueryResults {
+        Default::default()
+    }
+
+    /// `querySourceFeatures(options, globalState)`.
+    fn query_source_features(
+        &self,
+        _options: &crate::query::SourceQueryOptions,
+        _global_state: Option<&mln_style::expression::GlobalStateMap>,
+    ) -> Vec<mln_util::feature::Feature> {
+        Vec::new()
     }
 
     fn set_cache_enabled(&mut self, _enable: bool) {}

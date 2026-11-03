@@ -1,8 +1,7 @@
 // Ports src/mln/renderer/layers/render_circle_layer.hpp and
 // src/mln/renderer/layers/render_circle_layer.cpp (drawable path).
 //
-// TODO(port): queryIntersectsFeature (queries, M6) and
-// captureRenderedFeatures (UpdateParameters::captureRenderedFeatures).
+// TODO(port): captureRenderedFeatures (UpdateParameters::captureRenderedFeatures).
 
 use super::circle_layer_tweaker::CircleLayerTweaker;
 use super::{TileDrawables, refresh_if_bucket_updated, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
@@ -60,6 +59,32 @@ fn read_circle_attributes(
     read_data_driven_paint_property(attrs, &b.circle_stroke_color, buffer, &shared, &["a_stroke_color"], evaluated.get::<CircleStrokeColor>().is_constant(), pau, &mut id);
     read_data_driven_paint_property(attrs, &b.circle_stroke_width, buffer, &shared, &["a_stroke_width"], evaluated.get::<CircleStrokeWidth>().is_constant(), pau, &mut id);
     read_data_driven_paint_property(attrs, &b.circle_stroke_opacity, buffer, &shared, &["a_stroke_opacity"], evaluated.get::<CircleStrokeOpacity>().is_constant(), pau, &mut id);
+}
+
+// query
+/// `projectPoint(p, posMatrix, size)`.
+fn project_point(
+    p: &mln_tile_id::geometry_tile_data::GeometryCoordinate,
+    pos_matrix: &mln_util::mat4::Mat4,
+    size: mln_util::size::Size,
+) -> mln_tile_id::geometry_tile_data::GeometryCoordinate {
+    let mut pos: mln_util::vectors::Vec4 = [f64::from(p.x), f64::from(p.y), 0.0, 1.0];
+    let input = pos;
+    mln_util::mat4::matrix::transform_mat4(&mut pos, &input, pos_matrix);
+    // `(float(pos[0] / pos[3]) + 1) * size.width * 0.5`: float, then double.
+    mln_tile_id::geometry_tile_data::GeometryCoordinate::new(
+        (f64::from(((pos[0] / pos[3]) as f32 + 1.0) * size.width as f32) * 0.5) as i16,
+        (f64::from(((pos[1] / pos[3]) as f32 + 1.0) * size.height as f32) * 0.5) as i16,
+    )
+}
+
+/// `projectQueryGeometry(queryGeometry, posMatrix, size)`.
+fn project_query_geometry(
+    query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+    pos_matrix: &mln_util::mat4::Mat4,
+    size: mln_util::size::Size,
+) -> mln_tile_id::geometry_tile_data::GeometryCoordinates {
+    query_geometry.iter().map(|p| project_point(p, pos_matrix, size)).collect()
 }
 
 pub struct RenderCircleLayer {
@@ -126,6 +151,86 @@ impl RenderLayer for RenderCircleLayer {
     }
 
     fn has_crossfade(&self) -> bool {
+        false
+    }
+
+    // query
+    fn query_intersects_feature(
+        &self,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+        zoom: f32,
+        transform_state: &TransformState,
+        pixels_to_tile_units: f32,
+        pos_matrix: &mln_util::mat4::Mat4,
+        feature_state: &mln_style::expression::expression::FeatureState,
+    ) -> bool {
+        use crate::geometry::feature_index::FeatureIndex;
+        use mln_style_types::{AlignmentType, CirclePitchScaleType};
+
+        let evaluated = get_evaluated::<CircleLayerProperties>(&self.base.evaluated_properties);
+        // Translate query geometry
+        let translated = FeatureIndex::translate_query_geometry(
+            query_geometry,
+            evaluated.get::<CircleTranslate>(),
+            *evaluated.get::<CircleTranslateAnchor>(),
+            transform_state.get_bearing() as f32,
+            pixels_to_tile_units,
+        );
+        let translated_query_geometry = translated.as_ref().unwrap_or(query_geometry);
+
+        // Evaluate functions
+        let radius = evaluated.evaluate_state::<CircleRadius>(zoom, feature, feature_state);
+        let stroke = evaluated.evaluate_state::<CircleStrokeWidth>(zoom, feature, feature_state);
+        let size = radius + stroke;
+
+        // For pitch-alignment: map, compare feature geometry to query geometry in
+        // the plane of the tile Otherwise, compare geometry in the plane of the
+        // viewport A circle with fixed scaling relative to the viewport gets larger
+        // in tile space as it moves into the distance A circle with fixed scaling
+        // relative to the map gets smaller in viewport space as it moves into the
+        // distance
+        let align_with_map = *evaluated.get::<CirclePitchAlignment>() == AlignmentType::Map;
+        let projected;
+        let transformed_query_geometry = if align_with_map {
+            translated_query_geometry
+        } else {
+            projected = project_query_geometry(translated_query_geometry, pos_matrix, transform_state.get_size());
+            &projected
+        };
+        let transformed_size = if align_with_map { size * pixels_to_tile_units } else { size };
+
+        let geometry = feature.get_geometries();
+        for ring in geometry.iter() {
+            for point in ring {
+                let transformed_point = if align_with_map {
+                    *point
+                } else {
+                    project_point(point, pos_matrix, transform_state.get_size())
+                };
+
+                let mut adjusted_size = transformed_size;
+                let mut center: mln_util::vectors::Vec4 = [f64::from(point.x), f64::from(point.y), 0.0, 1.0];
+                let input = center;
+                mln_util::mat4::matrix::transform_mat4(&mut center, &input, pos_matrix);
+                let pitch_scale = *evaluated.get::<CirclePitchScale>();
+                let pitch_alignment = *evaluated.get::<CirclePitchAlignment>();
+                if pitch_scale == CirclePitchScaleType::Viewport && pitch_alignment == AlignmentType::Map {
+                    adjusted_size *= (center[3] / f64::from(transform_state.get_camera_to_center_distance())) as f32;
+                } else if pitch_scale == CirclePitchScaleType::Map && pitch_alignment == AlignmentType::Viewport {
+                    adjusted_size *= (f64::from(transform_state.get_camera_to_center_distance()) / center[3]) as f32;
+                }
+
+                if mln_util::intersection_tests::polygon_intersects_buffered_point(
+                    transformed_query_geometry,
+                    &transformed_point,
+                    adjusted_size,
+                ) {
+                    return true;
+                }
+            }
+        }
+
         false
     }
 

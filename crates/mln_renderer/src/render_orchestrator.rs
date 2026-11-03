@@ -109,6 +109,37 @@ impl crate::image_manager::ImageManagerObserver for OrchestratorImageObserver {
     }
 }
 
+/// symbols: the GlyphManagerObserver half of `RenderOrchestrator`.
+struct OrchestratorGlyphObserver {
+    observer: SharedObserver,
+}
+
+impl crate::text::glyph_manager::GlyphManagerObserver for OrchestratorGlyphObserver {
+    /// `onGlyphsError(fontStack, glyphRange, error)`.
+    fn on_glyphs_error(
+        &self,
+        font_stack: &mln_util::font_stack::FontStack,
+        glyph_range: &mln_text::glyph::GlyphRange,
+        error: mln_util::exception::ExceptionPtr,
+    ) {
+        let range = if glyph_range.type_ == mln_text::glyph::GlyphIDType::FontPBF {
+            format!("{}-{}", glyph_range.first, glyph_range.second)
+        } else {
+            format!("{}(font file)", glyph_range.type_.0)
+        };
+        Log::error(
+            Event::Style,
+            format!(
+                "Failed to load glyph range {range} for font stack {}:( {error})",
+                mln_util::font_stack::font_stack_to_string(font_stack)
+            ),
+        );
+        if let Some(observer) = shared_observer(&self.observer) {
+            observer.on_resource_error(error);
+        }
+    }
+}
+
 /// The RenderSourceObserver half of `RenderOrchestrator`.
 struct OrchestratorSourceObserver {
     observer: SharedObserver,
@@ -215,12 +246,15 @@ impl RenderOrchestrator {
         image_manager.set_observer(Some(Rc::new(OrchestratorImageObserver {
             observer: observer.clone(),
         })));
+        // symbols: `glyphManager->setObserver(this)`.
+        let glyph_manager = GlyphManager::new(None);
+        glyph_manager.set_observer(Some(Rc::new(OrchestratorGlyphObserver { observer: observer.clone() })));
         RenderOrchestrator {
             observer: observer.clone(),
             source_observer: Rc::new(OrchestratorSourceObserver { observer }),
             zoom_history: ZoomHistory::default(),
             transform_state: TransformState::default(),
-            glyph_manager: GlyphManager::new(None),
+            glyph_manager,
             image_manager,
             dynamic_texture_atlas: Arc::new(DynamicTextureAtlas::new()),
             line_atlas: Rc::new(RefCell::new(LineAtlas::new())),
@@ -1008,11 +1042,125 @@ impl RenderOrchestrator {
         self.render_targets.clone()
     }
 
-    // TODO(port): queryRenderedFeatures, querySourceFeatures,
-    // queryFeatureExtensions, feature state, debug layer groups, render
-    // targets, collectPlacedSymbolData, setTileCacheEnabled,
-    // reduceMemoryUse, dumpDebugLogs and the glyph/image/tile observer
-    // callbacks.
+    // query
+    /// `queryRenderedFeatures(geometry, options)`.
+    pub fn query_rendered_features(
+        &self,
+        geometry: &[mln_util::geo::ScreenCoordinate],
+        options: &crate::query::RenderedQueryOptions,
+    ) -> Vec<mln_util::feature::Feature> {
+        let render_layers: Vec<&crate::render_layer::RenderLayerPtr> = match &options.layer_ids {
+            Some(layer_ids) => layer_ids.iter().filter_map(|id| self.render_layers.get(id)).collect(),
+            None => self.render_layers.values().collect(),
+        };
+        let borrowed: Vec<std::cell::Ref<'_, dyn crate::render_layer::RenderLayer>> =
+            render_layers.iter().map(|layer| layer.borrow()).collect();
+        let mut layers = crate::geometry::feature_index::QueryLayers::new();
+        for layer in &borrowed {
+            layers.entry(layer.get_id().to_owned()).or_insert(&**layer);
+        }
+
+        self.query_rendered_features_in(geometry, options, &layers)
+    }
+
+    /// `queryRenderedSymbols(resultsByLayer, geometry, layers, options)`.
+    fn query_rendered_symbols(
+        &self,
+        _results_by_layer: &mut crate::geometry::feature_index::QueryResults,
+        _geometry: &[mln_util::geo::ScreenCoordinate],
+        layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        _options: &crate::query::RenderedQueryOptions,
+    ) {
+        let has_cross_tile_index = layers.values().any(|layer| {
+            layer.base().base_impl.get_type_info().cross_tile_index == layer_type_info::CrossTileIndex::Required
+        });
+        if !has_cross_tile_index {
+            return;
+        }
+        // TODO(port): placement.getCollisionIndex().queryRenderedSymbols(geometry),
+        // the per-bucket RetainedQueryData sorted by tile, and
+        // FeatureIndex::lookupSymbolFeatures (symbol placement).
+    }
+
+    /// `queryRenderedFeatures(geometry, options, layers)`.
+    fn query_rendered_features_in(
+        &self,
+        geometry: &[mln_util::geo::ScreenCoordinate],
+        options: &crate::query::RenderedQueryOptions,
+        layers: &crate::geometry::feature_index::QueryLayers<'_>,
+    ) -> Vec<mln_util::feature::Feature> {
+        let mut source_ids: BTreeSet<String> = BTreeSet::new();
+        let mut filtered_layers = crate::geometry::feature_index::QueryLayers::new();
+        for (id, layer) in layers {
+            if !layer.needs_rendering() || !layer.supports_zoom(self.zoom_history.last_zoom) {
+                continue;
+            }
+            filtered_layers.insert(id.clone(), *layer);
+            source_ids.insert(layer.base().base_impl.source.clone());
+        }
+
+        let mut proj_matrix: mln_util::mat4::Mat4 = [0.0; 16];
+        self.transform_state.get_proj_matrix(&mut proj_matrix, 1, false);
+
+        let mut results_by_layer = crate::geometry::feature_index::QueryResults::new();
+        for source_id in &source_ids {
+            if let Some(render_source) = self.get_render_source(source_id) {
+                let source_results = render_source.query_rendered_features(
+                    geometry,
+                    &self.transform_state,
+                    &filtered_layers,
+                    options,
+                    self.global_state.as_deref(),
+                    &proj_matrix,
+                );
+                for (layer_id, features) in source_results {
+                    results_by_layer.entry(layer_id).or_insert(features);
+                }
+            }
+        }
+
+        self.query_rendered_symbols(&mut results_by_layer, geometry, &filtered_layers, options);
+
+        // TODO(port): DynamicFeatureIndex (populateDynamicRenderFeatureIndex,
+        // only the location indicator layer fills it).
+
+        let mut result = Vec::new();
+
+        if results_by_layer.is_empty() {
+            return result;
+        }
+
+        // Combine all results based on the style layer renderItems.
+        // DEVIATION: C++ iterates `filteredLayers`, an unordered_map (libstdc++
+        // hash order); the port goes from the topmost style layer down, the
+        // order GL JS (which wrote the expectations) returns.
+        for layer_impl in self.layer_impls.iter().rev() {
+            if !filtered_layers.contains_key(&layer_impl.id) {
+                continue;
+            }
+            if let Some(features) = results_by_layer.remove(&layer_impl.id) {
+                result.extend(features);
+            }
+        }
+
+        result
+    }
+
+    /// `querySourceFeatures(sourceID, options)`.
+    pub fn query_source_features(
+        &self,
+        source_id: &str,
+        options: &crate::query::SourceQueryOptions,
+    ) -> Vec<mln_util::feature::Feature> {
+        let Some(source) = self.get_render_source(source_id) else {
+            return Vec::new();
+        };
+
+        source.query_source_features(options, self.global_state.as_deref())
+    }
+
+    // TODO(port): queryShapeAnnotations, queryFeatureExtensions, debug layer
+    // groups, dumpDebugLogs and the glyph/tile observer callbacks.
     // layers: feature state
     /// `setFeatureState(sourceID, sourceLayerID, featureID, state)`.
     pub fn set_feature_state(

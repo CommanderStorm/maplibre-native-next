@@ -2,6 +2,7 @@
 
 pub mod background_layer_tweaker;
 pub mod circle_layer_tweaker;
+pub mod collision_layer_tweaker;
 pub mod color_relief_layer_tweaker; // dem-heatmap
 pub mod fill_extrusion_layer_tweaker;
 pub mod fill_layer_tweaker;

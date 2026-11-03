@@ -296,7 +296,7 @@ impl RenderSource for RenderImageSource {
     fn reduce_memory_use(&mut self) {}
 
     fn dump_debug_logs(&self) {
-        Log::info(Event::General, format!("RenderImageSource::id: {}", self.impl_().id));
+        Log::info(Event::General, format!("RenderImageSource::id: {}", self.base.base_impl.id));
         Log::info(
             Event::General,
             format!("RenderImageSource::loaded: {}", if self.is_loaded() { "yes" } else { "no" }),

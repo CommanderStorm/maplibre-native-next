@@ -3,8 +3,6 @@
 // `renderedTiles` (`std::map<UnwrappedTileID, std::reference_wrapper<Tile>>`)
 // maps to the key of the tile in `tiles`: every rendered tile is one of the
 // pyramid's tiles.
-//
-// TODO(port): queryRenderedFeatures, querySourceFeatures (M6).
 
 use crate::algorithm::update_renderables::{PrefetchedTile, RenderablesContext, update_renderables};
 use crate::tile::tile::{Tile, TileNecessity, TileUpdateParameters};
@@ -440,6 +438,118 @@ impl TilePyramid {
             Some(tile) => Some(tile.as_ref()),
             None => self.cache.get(tile_id),
         }
+    }
+
+    // query
+    /// `queryRenderedFeatures(geometry, transformState, layers, options,
+    /// globalState, projMatrix, featureState)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_rendered_features(
+        &self,
+        geometry: &[mln_util::geo::ScreenCoordinate],
+        transform_state: &mln_map_types::TransformState,
+        layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        options: &crate::query::RenderedQueryOptions,
+        global_state: Option<&mln_style::expression::GlobalStateMap>,
+        proj_matrix: &mln_util::mat4::Mat4,
+        feature_state: &crate::source_state::SourceFeatureState,
+    ) -> crate::geometry::feature_index::QueryResults {
+        use mln_map_types::tile_coordinate::TileCoordinate;
+        use mln_util::constants;
+
+        let mut result = crate::geometry::feature_index::QueryResults::new();
+        if self.rendered_tiles.is_empty() || geometry.is_empty() {
+            return result;
+        }
+
+        let height = f64::from(transform_state.get_size().height);
+        let query_geometry: Vec<maplibre_native_base::Point<f64>> = geometry
+            .iter()
+            .map(|p| {
+                TileCoordinate::from_screen_coordinate(
+                    transform_state,
+                    0,
+                    &mln_util::geo::ScreenCoordinate::new(p.x, height - p.y),
+                )
+                .p
+            })
+            .collect();
+
+        // mapbox::geometry::envelope(queryGeometry)
+        let mut box_min = query_geometry[0];
+        let mut box_max = query_geometry[0];
+        for p in &query_geometry {
+            box_min.x = if p.x < box_min.x { p.x } else { box_min.x };
+            box_min.y = if p.y < box_min.y { p.y } else { box_min.y };
+            box_max.x = if box_max.x < p.x { p.x } else { box_max.x };
+            box_max.y = if box_max.y < p.y { p.y } else { box_max.y };
+        }
+
+        // Sorted by (z, y, wrap, x).
+        let mut sorted_tiles: Vec<(&UnwrappedTileID, &OverscaledTileID)> = self.rendered_tiles.iter().collect();
+        sorted_tiles.sort_by(|(a, _), (b, _)| {
+            (a.canonical.z, a.canonical.y, a.wrap, a.canonical.x).cmp(&(b.canonical.z, b.canonical.y, b.wrap, b.canonical.x))
+        });
+
+        let max_pitch_scale_factor = transform_state.max_pitch_scale_factor();
+
+        for (id, key) in sorted_tiles {
+            let tile = self.tiles[key].as_ref();
+
+            // equivalent to std::pow(2, transformState.getZoom() - id.canonical.z);
+            let scale = (transform_state.get_scale() / f64::from(1u32 << id.canonical.z)) as f32;
+            let query_padding = f64::from(
+                max_pitch_scale_factor * tile.get_query_padding(layers) * constants::EXTENT as f32,
+            ) / constants::TILE_SIZE_D
+                / f64::from(scale);
+
+            let tile_space_bounds_min = TileCoordinate::to_geometry_coordinate(id, &box_min);
+            if f64::from(tile_space_bounds_min.x) - query_padding >= f64::from(constants::EXTENT)
+                || f64::from(tile_space_bounds_min.y) - query_padding >= f64::from(constants::EXTENT)
+            {
+                continue;
+            }
+
+            let tile_space_bounds_max = TileCoordinate::to_geometry_coordinate(id, &box_max);
+            if f64::from(tile_space_bounds_max.x) + query_padding < 0.0
+                || f64::from(tile_space_bounds_max.y) + query_padding < 0.0
+            {
+                continue;
+            }
+
+            let tile_space_query_geometry: mln_tile_id::geometry_tile_data::GeometryCoordinates = query_geometry
+                .iter()
+                .map(|c| TileCoordinate::to_geometry_coordinate(id, c))
+                .collect();
+
+            tile.query_rendered_features(
+                &mut result,
+                &tile_space_query_geometry,
+                transform_state,
+                layers,
+                options,
+                global_state,
+                proj_matrix,
+                feature_state,
+            );
+        }
+
+        result
+    }
+
+    /// `querySourceFeatures(options, globalState)`.
+    pub fn query_source_features(
+        &self,
+        options: &crate::query::SourceQueryOptions,
+        global_state: Option<&mln_style::expression::GlobalStateMap>,
+    ) -> Vec<mln_util::feature::Feature> {
+        let mut result = Vec::new();
+
+        for tile in self.tiles.values() {
+            tile.query_source_features(&mut result, options, global_state);
+        }
+
+        result
     }
 
     /// `getRenderedTile(tileID)`.

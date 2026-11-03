@@ -47,3 +47,5 @@ pub mod http_header;
 pub mod mapbox;
 pub mod parsedate;
 pub mod grid_index;
+pub mod math;
+pub mod intersection_tests;

@@ -702,4 +702,149 @@ impl Tile for GeometryTile {
             _ => {}
         }
     }
+
+    // query
+    fn get_query_padding(&self, layers: &QueryLayers<'_>) -> f32 {
+        let layout_result = self.inner.layout_result.borrow();
+        let mut query_padding: f32 = 0.0;
+        for layer in layers.values() {
+            let Some(data) = layout_result
+                .as_ref()
+                .and_then(|result| result.get_layer_render_data(&*layer.base().base_impl))
+            else {
+                continue;
+            };
+            if data.bucket.has_data() {
+                // std::max(queryPadding, radius)
+                let radius = data.bucket.get_query_radius(*layer);
+                if query_padding < radius {
+                    query_padding = radius;
+                }
+            }
+        }
+        query_padding
+    }
+
+    fn query_rendered_features(
+        &self,
+        result: &mut QueryResults,
+        query_geometry: &mln_tile_id::geometry_tile_data::GeometryCoordinates,
+        transform_state: &mln_map_types::TransformState,
+        layers: &QueryLayers<'_>,
+        options: &RenderedQueryOptions,
+        global_state: Option<&GlobalStateMap>,
+        proj_matrix: &Mat4,
+        feature_state: &SourceFeatureState,
+    ) {
+        let layout_result = self.inner.layout_result.borrow().clone();
+        // `if (!getData()) return;`
+        let Some(layout_result) = layout_result else {
+            return;
+        };
+        if layout_result.feature_index.get_data().is_none() {
+            return;
+        }
+
+        let query_padding = self.get_query_padding(layers);
+
+        let id = self.inner.base.id();
+        let mut pos_matrix: Mat4 = [0.0; 16];
+        transform_state.matrix_for(&mut pos_matrix, &id.to_unwrapped());
+        let tile_matrix = pos_matrix;
+        mln_util::mat4::matrix::multiply(&mut pos_matrix, proj_matrix, &tile_matrix);
+
+        layout_result.feature_index.query(
+            result,
+            query_geometry,
+            transform_state,
+            &pos_matrix,
+            mln_util::constants::TILE_SIZE_D * f64::from(id.overscale_factor()),
+            2f64.powf(transform_state.get_zoom() - f64::from(id.overscaled_z)),
+            options,
+            global_state,
+            &id.to_unwrapped(),
+            layers,
+            query_padding * transform_state.max_pitch_scale_factor(),
+            feature_state,
+        );
+    }
+
+    fn query_source_features(
+        &self,
+        result: &mut Vec<Feature>,
+        options: &SourceQueryOptions,
+        global_state: Option<&GlobalStateMap>,
+    ) {
+        let layout_result = self.inner.layout_result.borrow().clone();
+        // Data not yet available, or tile is empty
+        let Some(layout_result) = layout_result else {
+            return;
+        };
+        let Some(data) = layout_result.feature_index.get_data() else {
+            return;
+        };
+
+        // No source layers, specified, nothing to do
+        let Some(source_layers) = &options.source_layers else {
+            mln_util::logging::Log::warning(mln_util::logging::Event::General, "At least one sourceLayer required");
+            return;
+        };
+
+        let id = self.inner.base.id();
+        for source_layer in source_layers {
+            // Go through all sourceLayers, if any
+            // to gather all the features
+            if let Some(layer) = data.get_layer(source_layer) {
+                query_layer_source_features(&*layer, result, options, global_state, &id);
+            }
+        }
+    }
+}
+
+// query
+use crate::geometry::feature_index::{QueryLayers, QueryResults};
+use crate::query::{RenderedQueryOptions, SourceQueryOptions};
+use crate::source_state::SourceFeatureState;
+use mln_util::feature::Feature;
+use mln_util::mat4::Mat4;
+
+/// The feature loop of `GeometryTile::querySourceFeatures` and
+/// `GeoJSONTile::querySourceFeatures`.
+pub fn query_layer_source_features(
+    layer: &dyn mln_tile_id::geometry_tile_data::GeometryTileLayer,
+    result: &mut Vec<Feature>,
+    options: &SourceQueryOptions,
+    global_state: Option<&GlobalStateMap>,
+    id: &OverscaledTileID,
+) {
+    let feature_count = layer.feature_count();
+    for i in 0..feature_count {
+        let feature = layer.get_feature(i);
+
+        // Apply filter, if any
+        if let Some(filter) = &options.filter {
+            let context =
+                mln_style::expression::EvaluationContext::with_zoom_feature(f32::from(id.overscaled_z), Some(&*feature))
+                    .with_global_state(global_state);
+            if !filter.evaluate(&context) {
+                continue;
+            }
+        }
+
+        // C++ `convertFeature` throws on malformed geometry (uncaught).
+        if let Ok(converted) = mln_tile::geometry_tile_data::convert_feature(&*feature, &id.canonical) {
+            result.push(Feature::from(converted));
+        }
+    }
+}
+
+impl GeometryTile {
+    /// `getData()`: the tile data of the latest layout, if any.
+    pub fn has_data(&self) -> bool {
+        self.inner
+            .layout_result
+            .borrow()
+            .as_ref()
+            .is_some_and(|result| result.feature_index.get_data().is_some())
+    }
 }

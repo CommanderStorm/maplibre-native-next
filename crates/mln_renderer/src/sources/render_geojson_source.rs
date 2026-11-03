@@ -164,6 +164,28 @@ impl RenderSource for RenderGeoJSONSource {
         self.tile_source.get_raw_render_tiles()
     }
 
+    // query
+    fn query_rendered_features(
+        &self,
+        geometry: &[mln_util::geo::ScreenCoordinate],
+        transform_state: &mln_map_types::TransformState,
+        layers: &crate::geometry::feature_index::QueryLayers<'_>,
+        options: &crate::query::RenderedQueryOptions,
+        global_state: Option<&mln_style::expression::GlobalStateMap>,
+        proj_matrix: &mln_util::mat4::Mat4,
+    ) -> crate::geometry::feature_index::QueryResults {
+        self.tile_source
+            .query_rendered_features(geometry, transform_state, layers, options, global_state, proj_matrix)
+    }
+
+    fn query_source_features(
+        &self,
+        options: &crate::query::SourceQueryOptions,
+        global_state: Option<&mln_style::expression::GlobalStateMap>,
+    ) -> Vec<mln_util::feature::Feature> {
+        self.tile_source.query_source_features(options, global_state)
+    }
+
     // layers: feature state
     fn set_feature_state(
         &mut self,

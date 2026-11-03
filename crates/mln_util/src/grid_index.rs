@@ -4,7 +4,7 @@
 // The C++ `insert`, `hitTest` and private `query` overloads on `BBox` and
 // `BCircle` become `insert`/`insert_circle`, `hit_test`/`hit_test_circle`
 // and `query_box_fn`/`query_circle_fn`. The explicit instantiation in
-// grid_index.cpp (`GridIndex<RefIndexedSubfeature>`) has no Rust
+// grid_index.cpp (`GridIndex<RefIndexedSubfeature>`) needs no Rust
 // equivalent.
 
 use std::collections::HashSet;

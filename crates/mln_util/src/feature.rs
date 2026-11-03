@@ -24,3 +24,29 @@ pub fn feature_id_to_string(id: &Identifier) -> Option<String> {
         Identifier::Double(value) => Some(to_string_double(*value)),
     }
 }
+
+/// `mln::Feature`: a `GeoJSONFeature` (`mapbox::feature::feature<double>`)
+/// plus the source, source layer and feature state a query fills in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Feature {
+    pub geometry: maplibre_native_base::Geometry<f64>,
+    pub properties: maplibre_native_base::PropertyMap,
+    pub id: Identifier,
+    pub source: String,
+    pub source_layer: String,
+    pub state: maplibre_native_base::PropertyMap,
+}
+
+impl From<maplibre_native_base::Feature<f64>> for Feature {
+    /// `Feature(const GeoJSONFeature&)`.
+    fn from(f: maplibre_native_base::Feature<f64>) -> Self {
+        Feature { geometry: f.geometry, properties: f.properties, id: f.id, ..Default::default() }
+    }
+}
+
+impl Feature {
+    /// The `GeoJSONFeature` base.
+    pub fn to_geojson_feature(&self) -> maplibre_native_base::Feature<f64> {
+        maplibre_native_base::Feature { geometry: self.geometry.clone(), properties: self.properties.clone(), id: self.id.clone() }
+    }
+}
