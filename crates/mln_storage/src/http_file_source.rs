@@ -16,9 +16,9 @@
 // `ETag`, `Retry-After`, `X-Rate-Limit-Reset`). Status codes map to the same
 // Response fields and errors.
 //
-// Under Emscripten the transfer is a synchronous `emscripten_fetch` on the
-// same worker threads (they are pthreads, which may block), so the browser
-// does the HTTP: CORS, its cache, compression. It sends no `If-None-Match` /
+// Under Emscripten the transfer is an `emscripten_fetch` on the same worker
+// threads, which wait for it by suspending through JSPI, so the browser does
+// the HTTP: CORS, its cache, compression. It sends no `If-None-Match` /
 // `If-Modified-Since` (they would force a CORS preflight; the browser cache
 // revalidates instead) and can't set the user agent. See `transport`.
 //
@@ -251,8 +251,16 @@ mod transport {
     }
 }
 
-/// The browser's fetch through Emscripten (`-sFETCH=1`): a synchronous
-/// `emscripten_fetch` blocks the worker thread, as a ureq transfer does.
+/// The browser's fetch through Emscripten (`-sFETCH=1`, `-sJSPI`). The worker
+/// thread waits for the transfer as it waits for a ureq one, but by
+/// suspending in `emscripten_sleep`, which lets its event loop deliver the
+/// response. (A synchronous XMLHttpRequest from these threads intermittently
+/// fails with a NetworkError in Chromium.)
+///
+/// Chromium also aborts an occasional request from these threads right after
+/// it starts (net::ERR_ABORTED), which emscripten_fetch reports through no
+/// callback, only through `readyState` reaching DONE. Such a request is tried
+/// again a few times before it fails with a connection error.
 #[cfg(target_os = "emscripten")]
 mod transport {
     use super::{Transfer, range_header};
@@ -260,13 +268,14 @@ mod transport {
     use crate::response::{Error, Reason};
     use std::ffi::{CStr, CString, c_char, c_void};
     use std::ptr::null;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Browsers run a handful of requests per host at a time, and every
     /// worker is a pthread, so fewer than natively.
     pub const WORKERS: u32 = 6;
 
     const EMSCRIPTEN_FETCH_LOAD_TO_MEMORY: u32 = 1;
-    const EMSCRIPTEN_FETCH_SYNCHRONOUS: u32 = 64;
+    const EMSCRIPTEN_FETCH_REPLACE: u32 = 16;
 
     /// `emscripten_fetch_attr_t` (emscripten/fetch.h).
     #[repr(C)]
@@ -312,7 +321,20 @@ mod transport {
         fn emscripten_fetch_close(fetch: *mut Fetch) -> i32;
         fn emscripten_fetch_get_response_headers_length(fetch: *mut Fetch) -> usize;
         fn emscripten_fetch_get_response_headers(fetch: *mut Fetch, dst: *mut c_char, size: usize) -> usize;
+        fn emscripten_sleep(ms: u32);
     }
+
+    /// The fetch's `onsuccess` and `onerror`: they run on the requesting
+    /// thread, from its event loop, while it sleeps.
+    unsafe extern "C" fn finished(fetch: *mut Fetch) {
+        // SAFETY: user_data is the requesting thread's flag, which outlives
+        // the fetch.
+        unsafe { (*(*fetch).user_data.cast::<AtomicBool>()).store(true, Ordering::SeqCst) };
+    }
+
+    /// `XMLHttpRequest.DONE`.
+    const READY_STATE_DONE: u16 = 4;
+    const ATTEMPTS: u32 = 4;
 
     #[derive(Clone)]
     pub struct Transport;
@@ -333,16 +355,35 @@ mod transport {
         }
 
         pub fn transfer(&self, resource: &Resource) -> Result<Transfer, Box<Error>> {
+            for attempt in 1..ATTEMPTS {
+                match self.attempt(resource) {
+                    Some(result) => return result,
+                    // SAFETY: sleeping suspends this thread through JSPI.
+                    None => unsafe { emscripten_sleep(50 * attempt) },
+                }
+            }
+            self.attempt(resource).unwrap_or_else(|| {
+                Err(Box::new(Error::new(Reason::Connection, format!("the browser aborted the request for {}", resource.url))))
+            })
+        }
+
+        /// One fetch: `None` when the browser aborted it before it finished.
+        fn attempt(&self, resource: &Resource) -> Option<Result<Transfer, Box<Error>>> {
             let connection = |message: String| Box::new(Error::new(Reason::Connection, message));
-            let url = CString::new(resource.url.as_str()).map_err(|_| connection("URL contains a NUL byte".into()))?;
+            let url = match CString::new(resource.url.as_str()) {
+                Ok(url) => url,
+                Err(_) => return Some(Err(connection("URL contains a NUL byte".into()))),
+            };
             let range = range_header(resource).map(|range| CString::new(range).unwrap());
             let range_name = c"Range";
             let headers: Vec<*const c_char> = match &range {
                 Some(range) => vec![range_name.as_ptr(), range.as_ptr(), null()],
                 None => vec![null()],
             };
+            let done = AtomicBool::new(false);
             // SAFETY: emscripten_fetch_attr_init initializes every field; the
-            // strings and the header list outlive the synchronous fetch.
+            // strings, the header list and `done` outlive the fetch, which
+            // finishes before this returns.
             unsafe {
                 let mut attr = std::mem::MaybeUninit::<FetchAttr>::uninit();
                 emscripten_fetch_attr_init(attr.as_mut_ptr());
@@ -350,11 +391,28 @@ mod transport {
                 for (slot, byte) in attr.request_method.iter_mut().zip(b"GET\0") {
                     *slot = *byte as c_char;
                 }
-                attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_SYNCHRONOUS;
+                // REPLACE: straight to the network, never to emscripten_fetch's
+                // IndexedDB cache.
+                attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_REPLACE;
                 attr.request_headers = headers.as_ptr();
+                attr.user_data = (&raw const done).cast_mut().cast();
+                attr.onsuccess = Some(finished);
+                attr.onerror = Some(finished);
                 let fetch = emscripten_fetch(&mut attr, url.as_ptr());
                 if fetch.is_null() {
-                    return Err(connection(format!("emscripten_fetch failed for {}", resource.url)));
+                    return Some(Err(connection(format!("emscripten_fetch failed for {}", resource.url))));
+                }
+                while !done.load(Ordering::SeqCst) {
+                    if (*fetch).ready_state == READY_STATE_DONE && (*fetch).status == 0 {
+                        // Aborted: give a late callback one more turn, then
+                        // stop waiting.
+                        emscripten_sleep(1);
+                        if !done.load(Ordering::SeqCst) {
+                            emscripten_fetch_close(fetch);
+                            return None;
+                        }
+                    }
+                    emscripten_sleep(1);
                 }
                 let status = i64::from((*fetch).status);
                 if status == 0 {
@@ -363,7 +421,7 @@ mod transport {
                     let text = CStr::from_ptr((*fetch).status_text.as_ptr()).to_string_lossy().into_owned();
                     emscripten_fetch_close(fetch);
                     let message = if text.is_empty() { "network error".to_owned() } else { text };
-                    return Err(connection(message));
+                    return Some(Err(connection(message)));
                 }
                 let length = emscripten_fetch_get_response_headers_length(fetch);
                 let mut raw = vec![0u8; length + 1];
@@ -378,7 +436,7 @@ mod transport {
                     Ok(Vec::new())
                 };
                 emscripten_fetch_close(fetch);
-                Ok(Transfer { status, headers, body })
+                Some(Ok(Transfer { status, headers, body }))
             }
         }
     }
