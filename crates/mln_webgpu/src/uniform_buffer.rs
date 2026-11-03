@@ -77,6 +77,14 @@ impl UniformBuffer {
     }
 }
 
+impl Drop for UniformBuffer {
+    fn drop(&mut self) {
+        if let Some(buffer) = self.buffer.take() {
+            self.backend.retire_buffer(buffer);
+        }
+    }
+}
+
 impl uniform_buffer::UniformBuffer for UniformBuffer {
     fn update(&self, data: &[u8]) {
         if !data.is_empty()

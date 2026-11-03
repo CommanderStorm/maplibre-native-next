@@ -65,6 +65,7 @@ impl CommandEncoder {
         // Finish and submit the command buffer
         let command_buffer = encoder.finish();
         queue.submit([command_buffer]);
+        backend.destroy_retired();
         // Create a new command encoder (C++ also updates
         // context.setCurrentCommandEncoder).
         *self.encoder.borrow_mut() = new_encoder(&self.context);

@@ -115,6 +115,14 @@ impl Texture2D {
     }
 }
 
+impl Drop for Texture2D {
+    fn drop(&mut self) {
+        if let Some(texture) = self.texture.take() {
+            self.context.get_backend().retire_texture(texture);
+        }
+    }
+}
+
 impl texture2d::Texture2D for Texture2D {
     fn set_sampler_configuration(&mut self, sampler_state: SamplerState) {
         let mut safe_state = sampler_state;
@@ -224,7 +232,9 @@ impl texture2d::Texture2D for Texture2D {
             return;
         }
         self.texture_view = None;
-        self.texture = None;
+        if let Some(texture) = self.texture.take() {
+            self.context.get_backend().retire_texture(texture);
+        }
 
         let Some(device) = self.context.get_backend().get_device() else {
             return;
