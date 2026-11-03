@@ -18,6 +18,7 @@ pub use padding::Padding;
 pub use unitbezier::UnitBezier;
 pub mod size;
 pub mod chrono;
+pub mod time;
 pub mod enum_;
 pub mod image;
 pub mod premultiply;

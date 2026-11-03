@@ -109,10 +109,10 @@ impl Core {
     }
 
     /// `wait`, but returns at `deadline` at the latest.
-    fn wait_until(&self, deadline: std::time::Instant) {
+    fn wait_until(&self, deadline: mln_util::time::Instant) {
         let mut signalled = self.signal.lock().unwrap();
         while !*signalled {
-            let now = std::time::Instant::now();
+            let now = mln_util::time::Instant::now();
             if now >= deadline {
                 return;
             }
@@ -276,7 +276,7 @@ impl RunLoop {
     /// `uv__run_timers`: runs the timers that are due, earliest first (ties
     /// in start order). A callback may stop, restart or drop any timer.
     fn run_timers(&self) {
-        let now = std::time::Instant::now();
+        let now = mln_util::time::Instant::now();
         let mut due: Vec<Rc<TimerHandle>> = {
             let mut timers = self.inner.timers.borrow_mut();
             timers.retain(|t| t.strong_count() > 0);
@@ -296,7 +296,7 @@ impl RunLoop {
     }
 
     /// The earliest due time of this loop's running timers.
-    fn next_timer_due(&self) -> Option<std::time::Instant> {
+    fn next_timer_due(&self) -> Option<mln_util::time::Instant> {
         self.inner
             .timers
             .borrow()

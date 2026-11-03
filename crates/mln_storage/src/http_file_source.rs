@@ -22,6 +22,12 @@
 // `If-Modified-Since` (they would force a CORS preflight; the browser cache
 // revalidates instead) and can't set the user agent. See `transport`.
 //
+// In the wasm-bindgen browser build (wasm32-unknown-unknown) there are no
+// threads: `request` starts a `fetch` and awaits it in a future on the
+// requesting thread's event loop (wasm-bindgen-futures), which hands the
+// response to the same mailbox. Dropping the request aborts the fetch.
+// Its requests send the same headers as the Emscripten ones.
+//
 // Differences (DEVIATIONS.md [glfw]): ureq sends `Accept-Encoding: gzip` and
 // decodes gzip (curl: "gzip, deflate"); a connection failure's message is
 // ureq's text instead of curl's `curl_easy_strerror: errorbuffer`; dates use
@@ -42,7 +48,14 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+
+/// The browser build (wasm32-unknown-unknown): no threads.
+macro_rules! cfg_web {
+    ($($item:item)*) => { $(#[cfg(all(target_family = "wasm", target_os = "unknown"))] $item)* };
+}
 
 /// The part of `HTTPRequest` that lives on the requesting thread.
 pub struct HTTPRequestState {
@@ -62,6 +75,9 @@ impl HTTPRequestState {
 struct HTTPRequest {
     mailbox: Arc<Mailbox>,
     cancelled: Arc<AtomicBool>,
+    /// The browser build: aborts the fetch.
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    abort: Option<web_sys::AbortController>,
 }
 
 impl AsyncRequest for HTTPRequest {}
@@ -70,6 +86,10 @@ impl Drop for HTTPRequest {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::SeqCst);
         self.mailbox.close();
+        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+        if let Some(abort) = &self.abort {
+            abort.abort();
+        }
     }
 }
 
@@ -81,6 +101,7 @@ struct Job {
 
 /// `HTTPFileSource::Impl`
 struct Impl {
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     jobs: Mutex<mpsc::Sender<Job>>,
     resource_options: Mutex<ResourceOptions>,
     client_options: Mutex<ClientOptions>,
@@ -106,10 +127,17 @@ struct Transfer {
 
 /// The worker half of `HTTPRequest`: performs the transfer and builds the
 /// response as the header callback and `handleResult(CURLcode)` do.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 fn perform(transport: &transport::Transport, resource: &Resource) -> Response {
+    build_response(transport.transfer(resource), resource)
+}
+
+/// The response for a transfer, as the header callback and
+/// `handleResult(CURLcode)` build it.
+fn build_response(transfer: Result<Transfer, Box<Error>>, resource: &Resource) -> Response {
     // Make sure a response object exists in case we haven't got any headers or content.
     let mut response = Response::new();
-    let transfer = match transport.transfer(resource) {
+    let transfer = match transfer {
         Ok(transfer) => transfer,
         Err(error) => {
             response.error = Some(error);
@@ -179,7 +207,7 @@ fn range_header(resource: &Resource) -> Option<String> {
 }
 
 /// curl through ureq: blocking transfers on the worker threads.
-#[cfg(not(target_os = "emscripten"))]
+#[cfg(not(target_family = "wasm"))]
 mod transport {
     use super::{Transfer, range_header};
     use crate::resource::Resource;
@@ -442,6 +470,78 @@ mod transport {
     }
 }
 
+cfg_web! {
+    /// The browser's `fetch` through wasm-bindgen, awaited on the requesting
+    /// thread (see the top of the file).
+    mod fetch {
+        use super::{Transfer, range_header};
+        use crate::resource::Resource;
+        use crate::response::{Error, Reason};
+        use wasm_bindgen::{JsCast, JsValue};
+        use wasm_bindgen_futures::JsFuture;
+
+        fn message(value: &JsValue) -> String {
+            value
+                .dyn_ref::<js_sys::Error>()
+                .map(|e| String::from(e.message()))
+                .or_else(|| value.as_string())
+                .unwrap_or_else(|| format!("{value:?}"))
+        }
+
+        /// The global scope's `fetch(request)`, in a window or a worker.
+        fn start(request: &web_sys::Request) -> Result<js_sys::Promise, JsValue> {
+            let global = js_sys::global();
+            if let Some(window) = global.dyn_ref::<web_sys::Window>() {
+                return Ok(window.fetch_with_request(request));
+            }
+            if let Some(worker) = global.dyn_ref::<web_sys::WorkerGlobalScope>() {
+                return Ok(worker.fetch_with_request(request));
+            }
+            Err(JsValue::from_str("no fetch in this global scope"))
+        }
+
+        pub async fn transfer(resource: &Resource, signal: &web_sys::AbortSignal) -> Result<Transfer, Box<Error>> {
+            let connection = |value: JsValue| Box::new(Error::new(Reason::Connection, message(&value)));
+            let init = web_sys::RequestInit::new();
+            init.set_method("GET");
+            init.set_mode(web_sys::RequestMode::Cors);
+            init.set_signal(Some(signal));
+            if let Some(range) = range_header(resource) {
+                let headers = web_sys::Headers::new().map_err(connection)?;
+                headers.set("Range", &range).map_err(connection)?;
+                init.set_headers(&headers);
+            }
+            let request = web_sys::Request::new_with_str_and_init(&resource.url, &init).map_err(connection)?;
+            let response: web_sys::Response =
+                JsFuture::from(start(&request).map_err(connection)?).await.map_err(connection)?.unchecked_into();
+
+            let status = i64::from(response.status());
+            let mut headers = Vec::new();
+            if let Ok(Some(entries)) = js_sys::try_iter(response.headers().as_ref()) {
+                for entry in entries.flatten() {
+                    let entry: js_sys::Array = entry.unchecked_into();
+                    if let (Some(name), Some(value)) = (entry.get(0).as_string(), entry.get(1).as_string()) {
+                        headers.push((name, value));
+                    }
+                }
+            }
+            let body = if status == 200 || status == 206 {
+                match response.array_buffer() {
+                    Ok(promise) => match JsFuture::from(promise).await {
+                        Ok(buffer) => Ok(js_sys::Uint8Array::new(&buffer).to_vec()),
+                        Err(error) => Err(connection(error)),
+                    },
+                    Err(error) => Err(connection(error)),
+                }
+            } else {
+                Ok(Vec::new())
+            };
+            Ok(Transfer { status, headers, body })
+        }
+    }
+}
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 fn worker(transport: transport::Transport, jobs: Arc<Mutex<mpsc::Receiver<Job>>>) {
     loop {
         let job = match jobs.lock() {
@@ -467,8 +567,55 @@ pub struct HTTPFileSource {
 }
 
 impl HTTPFileSource {
+    /// `HTTPFileSource(const ResourceOptions&, const ClientOptions&)`: the
+    /// browser build needs no threads.
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    pub fn new(resource_options: &ResourceOptions, client_options: &ClientOptions) -> Self {
+        HTTPFileSource {
+            impl_: Impl {
+                resource_options: Mutex::new(resource_options.clone()),
+                client_options: Mutex::new(client_options.clone()),
+            },
+        }
+    }
+
+    /// `request(const Resource&, Callback)`: fetches on this thread's event
+    /// loop; the callback runs on its RunLoop.
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    pub fn request(&self, resource: &Resource, callback: Callback) -> Box<dyn AsyncRequest> {
+        let state = Rc::new(HTTPRequestState {
+            callback: RefCell::new(callback),
+        });
+        let mailbox = Mailbox::with_target(&scheduler::get_current(), state as Rc<dyn Any>);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let abort = web_sys::AbortController::new().ok();
+        let job = Job {
+            resource: resource.clone(),
+            reply: ActorRef::new(&mailbox),
+            cancelled: cancelled.clone(),
+        };
+        let signal = abort.as_ref().map(|abort| abort.signal());
+        wasm_bindgen_futures::spawn_local(async move {
+            let signal = match signal {
+                Some(signal) => signal,
+                None => match web_sys::AbortController::new() {
+                    Ok(abort) => abort.signal(),
+                    Err(_) => return,
+                },
+            };
+            let transfer = fetch::transfer(&job.resource, &signal).await;
+            if job.cancelled.load(Ordering::SeqCst) {
+                return;
+            }
+            let response = build_response(transfer, &job.resource);
+            job.reply.invoke(move |request: &HTTPRequestState| request.handle_result(response));
+        });
+        Box::new(HTTPRequest { mailbox, cancelled, abort })
+    }
+
     /// `HTTPFileSource(const ResourceOptions&, const ClientOptions&)`: starts
     /// the transfer threads (`transport::WORKERS`).
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     pub fn new(resource_options: &ResourceOptions, client_options: &ClientOptions) -> Self {
         let transport = transport::Transport::new();
         let (sender, receiver) = mpsc::channel::<Job>();
@@ -493,6 +640,7 @@ impl HTTPFileSource {
 
     /// `request(const Resource&, Callback)`. The callback runs on the
     /// calling thread's RunLoop.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     pub fn request(&self, resource: &Resource, callback: Callback) -> Box<dyn AsyncRequest> {
         let state = Rc::new(HTTPRequestState {
             callback: RefCell::new(callback),
@@ -505,7 +653,12 @@ impl HTTPFileSource {
             cancelled: cancelled.clone(),
         };
         let _ = self.impl_.jobs.lock().unwrap().send(job);
-        Box::new(HTTPRequest { mailbox, cancelled })
+        Box::new(HTTPRequest {
+            mailbox,
+            cancelled,
+            #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+            abort: None,
+        })
     }
 }
 

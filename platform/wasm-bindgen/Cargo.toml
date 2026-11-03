@@ -1,0 +1,40 @@
+# The browser build of maplibre-native-next without Emscripten: the port
+# compiled for wasm32-unknown-unknown and driven from JavaScript through
+# wasm-bindgen (build.sh runs wasm-pack). It depends on the crate that
+# tools/release/assemble.py writes to target/release-crate, so assemble first.
+#
+# Not a Bazel target: Bazel has no wasm-bindgen rules set up here.
+[package]
+name = "maplibre-native-next-web"
+version = "0.0.0"
+edition = "2024"
+license = "BSD-2-Clause"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+maplibre-native-next = { path = "../../target/release-crate/maplibre-native-next" }
+console_error_panic_hook = "0.1"
+# rusqlite's bundled SQLite on wasm32-unknown-unknown needs host functions
+# (clock, randomness); this feature implements them with wasm-bindgen.
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
+js-sys = "0.3"
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Performance", "Window", "console"] }
+wgpu = { version = "30", default-features = false, features = ["std", "webgpu", "wgsl"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+
+[package.metadata.wasm-pack.profile.release]
+# build.sh runs wasm-opt itself (nixpkgs binaryen), when it is there.
+wasm-opt = false
+
+# A workspace of its own: not part of target/release-crate's.
+[workspace]

@@ -33,25 +33,43 @@
 // webgpu.h constants keep their C names, also in patterns.
 #![allow(non_upper_case_globals)]
 
+// The wasm-bindgen browser build (wasm32-unknown-unknown) has wgpu's own
+// WebGPU backend, so this crate is empty there.
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod command;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod conv;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod device;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod event;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod handle;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod instance;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod resource;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod surface;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod sys;
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use command::{CommandBuffer, CommandEncoder, RenderPass};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use device::{Device, Queue};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use instance::{Adapter, Instance};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use resource::{
     BindGroup, BindGroupLayout, Buffer, MappedRange, PipelineLayout, RenderPipeline, Sampler, ShaderModule,
     StagingBuffer, Texture, TextureView,
 };
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use surface::{Surface, SurfaceOutputDetail, canvas_surface_target, host_surface_target};
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 /// wgpu objects over a `WGPUInstance` and `WGPUDevice` that the host created
 /// through webgpu.h on this thread: the instance and the device with its
 /// queue. Each wrapper takes its own reference, so the host keeps its own.
@@ -84,12 +102,14 @@ pub unsafe fn wrap_host_objects(
     (wgpu::Instance::from_custom(instance), wgpu::Device::from_custom(device), wgpu::Queue::from_custom(queue))
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 /// The wgpu format of a `WGPUTextureFormat` that a canvas surface can have
 /// (BGRA8Unorm, RGBA8Unorm, RGBA16Float), or `None`.
 pub fn surface_texture_format(format: u32) -> Option<wgpu::TextureFormat> {
     surface::texture_format_from(format as sys::WGPUTextureFormat)
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 /// Creates a `wgpu::Instance` on the browser's WebGPU through webgpu.h.
 ///
 /// Call it on the thread that will use the instance and everything created

@@ -50,17 +50,19 @@ pub struct BindingInfo {
 }
 
 /// Runs `create` inside a validation error scope and returns the error the
-/// scope caught, which stands in for the C++ null result. On Emscripten the
-/// scope is skipped: popping it waits in `wgpuInstanceWaitAny`, which yields
-/// to the browser in the middle of a frame and expires the canvas texture.
-/// Errors there reach the device's uncaptured-error callback instead.
+/// scope caught, which stands in for the C++ null result. In the browser the
+/// scope is skipped: on Emscripten popping it waits in `wgpuInstanceWaitAny`,
+/// which yields to the browser in the middle of a frame and expires the
+/// canvas texture, and on wasm32-unknown-unknown nothing can block on the
+/// promise. Errors there reach the device's uncaptured-error callback
+/// instead.
 fn validated<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, wgpu::Error> {
-    #[cfg(target_os = "emscripten")]
+    #[cfg(target_family = "wasm")]
     {
         let _ = device;
         Ok(create())
     }
-    #[cfg(not(target_os = "emscripten"))]
+    #[cfg(not(target_family = "wasm"))]
     {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let value = create();

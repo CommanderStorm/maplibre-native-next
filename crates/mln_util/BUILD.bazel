@@ -11,6 +11,7 @@ rust_library(
         "//vendor/csscolorparser",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "//vendor/rapidjson",
+        "@next_crates//:web-time",
     ],
 )
 

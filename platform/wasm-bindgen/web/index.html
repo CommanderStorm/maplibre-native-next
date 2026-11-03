@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>maplibre-native-next on WebGPU (wasm-bindgen): OpenFreeMap Liberty</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; background: #f2efe9; }
+    canvas:active { cursor: grabbing; }
+    #status { position: fixed; top: 12px; left: 12px; max-width: 32em; padding: 8px 12px;
+              background: rgba(255, 255, 255, 0.92); border-radius: 6px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); }
+    #status:empty { display: none; }
+    #status.error { color: #b00020; }
+    #attribution { position: fixed; right: 0; bottom: 0; padding: 2px 6px; font-size: 12px;
+                   background: rgba(255, 255, 255, 0.8); }
+  </style>
+</head>
+<body>
+  <canvas id="map"></canvas>
+  <div id="status">Loading…</div>
+  <div id="attribution">
+    <a href="https://openfreemap.org">OpenFreeMap</a>
+    © <a href="https://www.openmaptiles.org/">OpenMapTiles</a>
+    Data from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>
+    · Rendered by <a href="https://github.com/louwers/maplibre-native-next">maplibre-native-next</a>
+    on WebGPU
+  </div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

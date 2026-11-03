@@ -15,9 +15,13 @@ rust_library(
         "//vendor/maplibre-native-base:maplibre_native_base",
         "//vendor/pmtiles",
         "//vendor/rapidjson",
+        "@next_crates//:js-sys",
         "@next_crates//:rusqlite",
         "@next_crates//:serde_json",
         "@next_crates//:ureq",
+        "@next_crates//:wasm-bindgen",
+        "@next_crates//:wasm-bindgen-futures",
+        "@next_crates//:web-sys",
     ],
 )
 
