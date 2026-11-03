@@ -1096,7 +1096,6 @@ fn concurrent_use() {
 
 // gtest: OfflineDatabase.PutReturnsSize
 #[test]
-#[ignore = "TODO(port): util::compress is flate2's miniz_oxide, which deflates 1024 zero bytes to 23 bytes; zlib (C++) to 17 (needs a zlib-backed flate2, requested in COORDINATION.md)"]
 fn put_returns_size() {
     let log = FixtureLog::new();
     let mut db = OfflineDatabase::new(":memory:", &fixture::tile_server_options());

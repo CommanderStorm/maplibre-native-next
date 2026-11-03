@@ -5,16 +5,15 @@
 // "DatabaseFileSource"); requests reach it as actor messages and the
 // response goes back to the requesting thread's `FileSourceRequest`.
 //
-// Deviation: C++ `DatabaseFileSourceThread` reads the tile server options
-// from the online file source (`onlineFileSource_->getResourceOptions()`),
-// which FileSourceManager creates with the same ResourceOptions. The online
-// file source is not ported, so the options are taken from the
-// ResourceOptions directly (the same value).
+// C++ `DatabaseFileSourceThread` reads the tile server options from the
+// online file source (`onlineFileSource_->getResourceOptions()`); so does
+// the port, falling back to the ResourceOptions only when there is no
+// Network file source (C++ would dereference null).
 //
 // TODO(port): the offline region API (list/get/create/merge/update/delete/
-// invalidate regions, region observers and download state, region status),
-// resetDatabase, packDatabase, invalidate/clear ambient cache,
-// setMaximumAmbientCacheSize, setOfflineMapboxTileCountLimit, put.
+// invalidate regions, region observers and download state, region status;
+// OfflineDownload lives in //crates/mln_storage_offline), resetDatabase,
+// packDatabase, invalidate/clear ambient cache, setMaximumAmbientCacheSize.
 
 use crate::async_request::AsyncRequest;
 use crate::file_source::{Callback, FileSource, FileSourceType, READ_ONLY_MODE_KEY};

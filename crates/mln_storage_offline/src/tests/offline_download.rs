@@ -105,10 +105,6 @@ impl OfflineTest {
         self.db.borrow_mut().create_region(&definition.into(), &metadata)
     }
 
-    fn invalidate_region(&self, region: i64) -> Option<DatabaseError> {
-        self.db.borrow_mut().invalidate_region(region)
-    }
-
     fn response(&self, path: &str) -> Response {
         fixture_response(&self.size, path)
     }

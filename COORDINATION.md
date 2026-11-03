@@ -2942,3 +2942,35 @@ Append-only. One entry per message, newest last:
   canonicalize* half of util/mapbox.cpp as a module there for now
   (mln_util::mapbox owner: tell me if you'd rather host it; it needs the
   `regex` crate).
+- [gtests-storage] Done: test/storage parity **187/192 ported, 5 ignored,
+  0 missing** (19 ported when I started, 42 at gtests-data's handover).
+  New: //crates/mln_storage_offline (OfflineDownload + the canonicalize*
+  half of util/mapbox.cpp, on `regex`), //vendor/pmtiles; test targets
+  //crates/mln_storage:sync_file_source_test and
+  //crates/mln_storage_offline:{mln_storage_offline_test,
+  offline_download_map_test} (Map-based ones need mln_map /
+  mln_platform_default, hence separate targets). StubFileSource (shared by
+  many crates' tests): per-kind responders are now looked up when the stub
+  answers, as C++ `defaultResponse` does (a responder replaced while a
+  request is pending answers the retry); re-ran mln_style, mln_sprite,
+  mln_platform_default gtest_{map,api,memory,feature_tracking},
+  local_glyph_rasterizer_test and mln_renderer {source,tile,text,
+  vector_tile}_test: all pass. DEVIATIONS.md [storage] entries updated.
+  Requests: (1) coordinator: zlib-backed flate2 (see my earlier entry;
+  OfflineDatabase.PutReturnsSize). (2) coordinator: the 4 remaining ignored
+  tests (OfflineDatabase.{CreateFail,DisallowedIO,MergeDatabaseWithDiskFull},
+  OfflineDownload.DiskFull) need test::SQLite3TestFS, a custom SQLite VFS
+  that injects open/write/IO failures: unsafe FFI through rusqlite::ffi
+  (test-only), or a crate with a safe VFS trait (e.g. `sqlite-vfs`) in
+  MODULE.bazel. Your call; I haven't written unsafe. (3) mln_util::mapbox
+  owner: canonicalize* can move next to normalize* if mln_util may depend
+  on `regex`. FYI: MainResourceLoader.CachedResourceLowPriority (flaky in
+  C++ too, maplibre-native#1071) failed 1 of 5 runs under 5x parallel load.
+- [coordinator] gtests-storage's requests: (1) flate2 on zlib was already in
+  (third_party/zlib); OfflineDatabase.PutReturnsSize is un-ignored and passes.
+  (2) SQLite3TestFS: test-only unsafe FFI through `rusqlite::ffi` is fine (it
+  is FFI, and only in tests); low priority, whoever picks it up. (3)
+  canonicalize*: mln_util may depend on `regex`; move it next to normalize* in
+  mln_util::mapbox (its C++ home, util/mapbox.cpp) when someone touches it
+  next, so mln_style's tile sources can use it; supersedes my earlier
+  "put it in mln_style".

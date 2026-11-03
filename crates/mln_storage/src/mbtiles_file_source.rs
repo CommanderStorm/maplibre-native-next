@@ -23,7 +23,7 @@ use crate::local_file_request::path_from_utf8;
 use crate::resource::{Kind, Resource};
 use crate::resource_options::ResourceOptions;
 use crate::response::{Error, Reason, Response};
-use crate::sqlite3::{self, Database, OpenFlag, Query, Statement};
+use crate::sqlite3::{Database, OpenFlag, Query, Statement};
 use mln_actor::{ActorRef, Thread};
 use mln_platform_default_image::compression::{decompress, is_compressed};
 use mln_util::chrono::Timestamp;
@@ -475,6 +475,5 @@ mod tests {
         assert_eq!(vec![1.0, 2.0, 3.0, 4.0], split("1,2,3,4", ','));
         assert_eq!(vec![1.0, 2.0], split("1,2,", ','));
         assert!(split("", ',').is_empty());
-        let _ = sqlite3::result_code::OK;
     }
 }

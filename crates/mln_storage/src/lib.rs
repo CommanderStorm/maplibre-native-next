@@ -1,8 +1,10 @@
 //! Ports `src/mln/storage`, `include/mln/storage` and the storage part of
-//! `platform/default` that the cache-only path needs: `Resource`,
-//! `Response`, `FileSource`, `FileSourceRequest`, `ResourceOptions`,
-//! `FileSourceManager`, `MainResourceLoader`, `DatabaseFileSource` and the
-//! read path of `OfflineDatabase`.
+//! `platform/default`: `Resource`, `Response`, `FileSource`,
+//! `FileSourceRequest`, `ResourceOptions`, `ResourceTransform`,
+//! `FileSourceManager`, `MainResourceLoader`, the database, online/HTTP,
+//! asset, local file, MBTiles and PMTiles file sources, `OfflineDatabase`
+//! and the offline region definitions. `OfflineDownload` needs the style
+//! parser and is in //crates/mln_storage_offline.
 
 pub mod asset_file_source;
 pub mod async_request;

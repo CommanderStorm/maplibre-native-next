@@ -1,8 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Ports src/mln/storage, include/mln/storage and the cache-only part of
-# platform/default/src/mln/storage (database file source, offline database
-# read path, main resource loader).
+# Ports src/mln/storage, include/mln/storage and platform/default/src/mln/storage
+# (file sources, offline database, main resource loader) except
+# offline_download.cpp (//crates/mln_storage_offline).
 rust_library(
     name = "mln_storage",
     srcs = glob(["src/**/*.rs"]),

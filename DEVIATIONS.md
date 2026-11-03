@@ -247,21 +247,59 @@ account for it.
   once, the first one registered is returned to both.
 - **[storage] DatabaseFileSource's tile server options**
   (database_file_source.cpp `DatabaseFileSourceThread`). C++ reads them from
-  the online file source, which is not ported (FileSourceManager has no
-  Network factory yet, as for Asset, FileSystem, Mbtiles and Pmtiles: those
-  file sources are `None` in MainResourceLoader). The port takes them from
-  the same ResourceOptions the online file source would be created with.
-- **[storage] OfflineDatabase write path not ported** (offline_database.cpp
-  `put*`, eviction, regions, pack). In read-write mode `put` returns
-  `(false, 0)` and `DatabaseFileSource::forward` stores nothing; opening,
-  schema creation, migrations, error recovery, `get`/`getResource`/`getTile`
-  (incl. the `accessed` update in read-write mode) and read-only reopening
-  are ported. `disabled()` with a zero ambient cache size counts the regions
-  instead of `listRegions()` (same answer unless a region definition fails
-  to parse). `Query::get<std::string>` of a REAL column formats with Rust's
-  `{}` instead of SQLite's `%!.15g` (no such columns in the schema's text or
-  blob fields). `util::decompress` error texts are flate2's. Covered by
-  `//difftest/storage` on every row of both cache databases.
+  the online file source unconditionally; the port does too, and falls back
+  to the ResourceOptions it was created with only when no Network factory is
+  registered (C++ would dereference null). (Updated by gtests-storage.)
+- **[storage] OfflineDatabase** (offline_database.cpp; write path, regions,
+  merge, eviction ported by gtests-storage). `util::compress` is flate2's
+  miniz_oxide, not zlib: compressed bytes and therefore stored sizes differ
+  (1024 zero bytes: 23 bytes, zlib 17), which shifts `put`'s returned size,
+  region completed sizes and the ambient-cache accounting by those bytes
+  (OfflineDatabase.PutReturnsSize is ignored for it; a zlib-backed flate2
+  would remove the difference). Logic errors C++ catches with `catch (...)`
+  (`std::invalid_argument` / `std::domain_error` from a stored region
+  definition) log "Can't <action>" without the debug `assert(false)`.
+  `Query::get<std::string>` of a REAL column formats with Rust's `{}`
+  instead of SQLite's `%!.15g` (no such columns in the schema's text or blob
+  fields). `util::decompress` error texts are flate2's. The read path is
+  covered by `//difftest/storage` on every row of both cache databases.
+- **[storage] SQLite wrapper** (sqlite3.cpp). rusqlite underneath. A
+  `Database` shares its connection with its `Transaction`s (C++: both point
+  at the heap `DatabaseImpl`), as an `Arc<Mutex<Connection>>`, so
+  `Database::conn()` returns a guard. `Query` binds before its first `run()`
+  only (TODO(port): `reset`/`clearBindings` and re-binding). `exec` runs
+  every statement to completion like `sqlite3_exec` (rusqlite's
+  `execute_batch` steps each statement once). No `SQLITE_CONFIG_LOG` hook,
+  no `setTempPath`. test::SQLite3TestFS (the test VFS) is not ported: it
+  needs unsafe FFI, so the 4 tests using it are ignored.
+- **[storage] Asset, Local, MBTiles and PMTiles file sources**
+  (asset_file_source.cpp, local_file_source.cpp, local_file_request.cpp,
+  mbtiles_file_source.cpp, pmtiles_file_source.cpp). The resource and client
+  options live next to the file source's thread behind a mutex (C++: in the
+  thread object, read back with a blocking `ask`); same values. A
+  `std::filesystem::status` failure other than "not found" (e.g. a name too
+  long) reads the file and answers "Cannot read file", as C++ does. MBTiles:
+  where C++ lets an exception escape its thread (`Database::open`, a query,
+  `std::stoi` of a non-number, `util::decompress`), the port answers the
+  request with an `Other` error carrying the message, and `std::stoi`/
+  `std::strtod` of text without a number read 0. MBTiles/PMTiles TileJSON
+  documents are built member by member and written with //vendor/rapidjson's
+  Writer (duplicate member names kept, as rapidjson's `AddMember` does).
+  pmtiles.hpp's reading half is ported as //vendor/pmtiles.
+- **[storage] OfflineDownload** (offline_download.cpp). In
+  //crates/mln_storage_offline (it parses styles and covers regions with
+  tiles, which mln_storage can't depend on), with the canonicalize* half of
+  util/mapbox.cpp (Rust `regex` for std::regex; the patterns are built the
+  same way). The download shares the database (`Rc<RefCell<OfflineDatabase>>`)
+  and the online file source (`Arc<dyn FileSource>`) instead of holding
+  references; its callbacks hold it weakly. `OfflineRegionObserver` methods
+  take `&self`: the download calls them re-entrantly. `invokeCancellable` is
+  a task on the current RunLoop that a dropped request cancels.
+  TODO(port): DatabaseFileSource's offline-region API (list/get/create/
+  merge/update/delete/invalidate regions, region status, observers and
+  download state, which create OfflineDownloads), reset/pack/invalidate/
+  clear ambient cache, setMaximumAmbientCacheSize; no test in test/storage
+  goes through them.
 - **[sprite] Sprite JSON parsing** (sprite_parser.cpp `parseSprite`, rapidjson
   `Parse<0>`). serde_json instead of rapidjson: the message after "Failed to
   parse JSON: " is serde_json's (C++: "Invalid value. at offset 0" etc.); with
