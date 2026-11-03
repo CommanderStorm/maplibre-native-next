@@ -18,6 +18,29 @@ pub fn compress(raw: &[u8]) -> Result<Vec<u8>, String> {
     encoder.finish().map_err(|_| "failed to deflate".to_string())
 }
 
+/// `util::is_compressed(v)`: a gzip or zlib header (with one of the four
+/// usual zlib compression levels) on more than two bytes. (Added by
+/// gtests-storage for the MBTiles and PMTiles file sources.)
+pub fn is_compressed(v: &[u8]) -> bool {
+    if v.len() > 2 {
+        let (byte0, byte1) = (v[0], v[1]);
+        if byte0 == 0x1f && byte1 == 0x8b {
+            // gzip (rfc1952)
+            return true;
+        } else if byte0 == 0x78 {
+            // zlib (rfc1950)
+            return matches!(
+                byte1,
+                0x01 // 78 01 - No Compression/low
+                | 0x5E // 78 5E - Fast Compression
+                | 0x9C // 78 9C - Default Compression
+                | 0xDA // 78 DA - Best Compression
+            );
+        }
+    }
+    false
+}
+
 /// `util::decompress(raw, windowBits = CompressionFormat::DETECT)`: inflates a
 /// zlib or gzip stream (zlib's header auto-detection, `MAX_WBITS + 32`). Like
 /// the C++ loop, bytes after the end of the stream are ignored, and a stream

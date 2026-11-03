@@ -112,14 +112,25 @@ impl StubFileSource {
         self.state().borrow_mut().response = Some(Rc::new(responder));
     }
 
-    /// `response(resource)`.
-    fn response(&self, kind: Kind) -> Responder {
+    /// The `response` member a request captures: the global responder if
+    /// one was set, else `defaultResponse`, which dispatches to the per-kind
+    /// responder current when it is called (so a responder replaced while a
+    /// request is pending, e.g. after an error response, answers the retry).
+    fn response(&self) -> Responder {
         let state = self.state();
         if let Some(response) = state.borrow().response.clone() {
             return response;
         }
-        let responder = state.borrow().responders.get(&kind).cloned();
-        responder.unwrap_or_else(|| Rc::new(unexpected))
+        let weak = Rc::downgrade(&state);
+        Rc::new(move |resource: &Resource| {
+            let responder = weak
+                .upgrade()
+                .and_then(|state| state.borrow().responders.get(&resource.kind).cloned());
+            match responder {
+                Some(responder) => responder(resource),
+                None => unexpected(resource),
+            }
+        })
     }
 
     fn schedule_poll(state: &Rc<RefCell<State>>) {
@@ -173,7 +184,7 @@ impl FileSource for StubFileSource {
             id,
             state: Rc::downgrade(&state),
         };
-        let responder = self.response(resource.kind);
+        let responder = self.response();
         if self.type_ == ResponseType::Synchronous {
             if let Some(res) = responder(resource) {
                 callback(res);

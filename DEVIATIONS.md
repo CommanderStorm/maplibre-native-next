@@ -717,16 +717,17 @@ account for it.
 - **[symbols] Symbol drawables copy the bucket's vertex data**
   (`render_symbol_layer.cpp`). C++ drawables share the SymbolBucket's
   vertex/opacity/index vectors and see placement's updates through
-  `updateModified`. The port copies them into the drawable and, when the
-  bucket's `version` changes (placement, sorting, feature state),
-  re-creates the tile's drawables. Same pixels; more allocation.
+  `updateModified`. The port gives drawables copies and, when the bucket's
+  change counters move (placement opacities, dynamic positions,
+  sortFeatures, feature state), replaces those attributes / indices of the
+  tile's existing drawables (C++ `updateTileDrawable`). Same pixels; the
+  changed vectors are re-uploaded as new GPU buffers.
 - **[symbols] DynamicTexture GPU textures** (`gfx/dynamic_texture.cpp`,
   `webgpu/dynamic_texture.cpp`). The shelf pack and queued uploads are
   shared with the workers behind a mutex as in C++; the wgpu texture is a
-  render-thread object (`Rc`), kept in a render-thread registry keyed by
-  the dynamic texture's id and created in the first upload, as the C++
-  WebGPU texture is (`deferredCreation`). A texture dropped off the render
-  thread leaves its registry entry until `removeUnusedDynamicTextures`.
+  render-thread object (`Rc`), held through a `LocalObject` created in the
+  first upload (C++ WebGPU `deferredCreation`) and freed with the
+  DynamicTexture on the render thread (and by `~DynamicTextureAtlas`).
   Not observable.
 - **[symbols] Font faces** (style "font-faces", `text/glyph_manager.cpp`
   HarfBuzz shaping). Ported, on mln_text's HBShaper (HarfRust; see the
@@ -820,3 +821,30 @@ account for it.
   the window is hidden (no frame callbacks), which froze the GLFW app's
   event loop when the user switched windows; the port uses MAILBOX when the
   surface supports it (still vsync'ed, never blocks) and FIFO otherwise.
+- **[text-conformance] `icon-text-fit/textFit-grid-long`** (render test,
+  `PositionedIcon::applyTextFit`). The code matches C++; the cell with
+  `textFitWidth: proportional` stretches the icon box to half-pixel edges,
+  and each C++ backend rasterizes them differently (GL/Linux baseline 54
+  rows, Metal 53, iOS and the port 52; C++ Vulkan fails the test too:
+  metrics/ignores/platform-linux-vulkan.json, windows-vulkan.json). Kept
+  in tools/render-test/ignores/rust-port.json with that reason.
+- **[text-conformance] OpenFreeMap vs. C++ Vulkan `mbgl-render`**
+  (tools/liberty-compare). Views that differ from the C++ Vulkan reference
+  do so only in fill-outline pixels: the port draws fill outlines
+  triangulated like the C++ WebGPU/Metal backends, C++ Vulkan/GL draw 1px
+  line primitives. With `fill-antialias: false` the same views match with
+  diff 0. Symbols (labels, shields, line labels, RTL, CJK) match C++.
+- **[gtests-core] A pool actor dropped from inside its own message**
+  (actor/mailbox.cpp `close()` with the recursive receiving mutex,
+  test/actor/actor.test.cpp DestructionAllowedInReceiveOnSameThread). C++
+  destroys the object during that message (the message's `this` dangles
+  until it returns). The port's `Actor<O>` (crates/mln_actor/src/actor.rs)
+  closes the mailbox immediately (no later message runs, as in C++) and
+  drops the object right after the message returns, on the same thread:
+  a running `&mut O` can't be dropped. Only the timing of the object's
+  destructor differs.
+- **[gtests-core] `LRU`, `StringIndexer` storage** (util/lru_cache.hpp,
+  util/string_indexer.cpp, ported for their gtests): the LRU finds an item's
+  list position by a linear scan instead of a map of list iterators, and the
+  StringIndexer keeps owned `String`s instead of one char buffer re-indexed
+  on reallocation. Same results; LRU `touch`/`remove` are O(n).

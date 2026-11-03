@@ -4,10 +4,10 @@
 // symbol_layer.rs.
 //
 // `FormatSectionOverrides` is split: the parts the style uses
-// (`hasOverrides`, `hasOverride`, `hasPaintPropertyDifference`) are here;
-// `setOverride(s)` / `updateOverride(s)`, which build
-// `expression::FormatSectionOverride`s for the render layer, are
-// TODO(port) with RenderSymbolLayer (M5).
+// (`hasOverrides`, `hasOverride`, `hasPaintPropertyDifference`) and
+// `updateOverrides` are here; `setOverride(s)`, which builds
+// `expression::FormatSectionOverride`s, is in mln_renderer
+// (format_section_override.rs).
 
 use crate::expression::{Dependency, Expression, Formatted, FormattedSection, Kind, Literal, Type, downcast};
 use crate::layer::{self, FontStack, ImplBase, LayerTypeInfo};
@@ -138,6 +138,27 @@ impl SymbolLayerPaintPropertyOverrides {
             TextColor::has_override::<FormatExpressionSection>,
         );
         result
+    }
+
+    /// `updateOverrides(evaluated, updated)` (`updateOverride<TextColor>`):
+    /// carries a `FormatSectionOverride` wrapper over to `updated`.
+    // gtests-data: ported for Layer.SymbolLayerOverrides.
+    pub fn update_overrides(
+        evaluated: &SymbolPaintProperties::PossiblyEvaluated,
+        updated: &mut SymbolPaintProperties::PossiblyEvaluated,
+    ) {
+        let property = evaluated.get::<TextColor>().clone();
+        if !property.is_constant() {
+            let has_format_section_override = match &property {
+                PossiblyEvaluatedPropertyValue::Expression(e) => {
+                    e.get_expression().get_kind() == Kind::FormatSectionOverride
+                }
+                PossiblyEvaluatedPropertyValue::Constant(_) => false,
+            };
+            if has_format_section_override {
+                *updated.get_mut::<TextColor>() = property;
+            }
+        }
     }
 
     /// `hasPaintPropertyDifference(lhs, rhs)`: a constant overridable

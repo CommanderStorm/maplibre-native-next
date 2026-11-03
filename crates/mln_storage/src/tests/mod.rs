@@ -1,11 +1,17 @@
 // Ported gtests (test/storage/*.test.cpp) and test helpers.
 
+mod asset_file_source;
 mod database_file_source;
 mod http_file_source;
 mod http_server;
+mod local_file_source;
 mod main_resource_loader;
+mod mbtiles_file_source;
+mod offline;
 mod offline_database;
 mod online_file_source;
+mod pmtiles_file_source;
+mod sqlite;
 
 use crate::AsyncRequest;
 use mln_util::logging::{Event, EventSeverity, Log, Observer};
@@ -139,4 +145,101 @@ pub fn warning(code: i64, msg: &str) -> Message {
         code,
         msg: msg.to_owned(),
     }
+}
+
+/// `std::mt19937` (default seed 5489), for the C++ tests' `randomString`.
+pub struct Mt19937 {
+    mt: [u32; 624],
+    index: usize,
+}
+
+impl Mt19937 {
+    pub fn new(seed: u32) -> Self {
+        let mut mt = [0u32; 624];
+        mt[0] = seed;
+        for i in 1..624 {
+            mt[i] = 1812433253u32.wrapping_mul(mt[i - 1] ^ (mt[i - 1] >> 30)).wrapping_add(i as u32);
+        }
+        Mt19937 { mt, index: 624 }
+    }
+
+    pub fn next_u32(&mut self) -> u32 {
+        if self.index >= 624 {
+            for i in 0..624 {
+                let y = (self.mt[i] & 0x8000_0000) | (self.mt[(i + 1) % 624] & 0x7fff_ffff);
+                let mut v = self.mt[(i + 397) % 624] ^ (y >> 1);
+                if y & 1 != 0 {
+                    v ^= 0x9908_b0df;
+                }
+                self.mt[i] = v;
+            }
+            self.index = 0;
+        }
+        let mut y = self.mt[self.index];
+        self.index += 1;
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c_5680;
+        y ^= (y << 15) & 0xefc6_0000;
+        y ^ (y >> 18)
+    }
+}
+
+/// `randomString(size)` (offline_database.test.cpp, offline_download.test.cpp):
+/// the low byte of each `std::mt19937` draw.
+pub fn random_string(size: usize) -> crate::response::Data {
+    let mut random = Mt19937::new(5489);
+    Arc::new((0..size).map(|_| random.next_u32() as u8).collect())
+}
+
+/// `util::copyFile(destination, source)`: like `std::ifstream` +
+/// `std::ofstream`, a directory as the source opens and copies nothing.
+pub fn copy_file(destination: &str, source: &std::path::Path) {
+    let mut src = std::fs::File::open(source).unwrap_or_else(|e| panic!("Cannot read file {}: {e}", source.display()));
+    let mut dst = std::fs::File::create(destination).unwrap_or_else(|e| panic!("Cannot write file {destination}: {e}"));
+    let _ = std::io::copy(&mut src, &mut dst);
+}
+
+/// `util::deleteFile` for test cleanup (missing files are fine).
+pub fn delete_file(filename: &str) {
+    let _ = std::fs::remove_file(filename);
+}
+
+/// `util::read_file(filename).size()`.
+pub fn file_size(filename: &str) -> usize {
+    std::fs::read(filename).unwrap_or_else(|e| panic!("Cannot read file {filename}: {e}")).len()
+}
+
+#[test]
+fn mt19937_matches_the_standard() {
+    // The C++ standard requires the 10000th draw of a default-constructed
+    // std::mt19937 to be 4123659995.
+    let mut random = Mt19937::new(5489);
+    let mut value = 0;
+    for _ in 0..10000 {
+        value = random.next_u32();
+    }
+    assert_eq!(4123659995, value);
+}
+
+thread_local! {
+    static LOCAL_CALLBACKS: RefCell<std::collections::HashMap<u64, Box<dyn FnOnce()>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// A `Send` handle for a closure that runs on the calling thread only. The
+/// C++ tests pass callbacks that capture references to `forward`, which runs
+/// them on the calling thread (`Scheduler::bindOnce`); the Rust signature
+/// requires `Send`, so the closure stays here and the handle finds it.
+pub fn local_callback(f: impl FnOnce() + 'static) -> Box<dyn FnOnce() + Send> {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LOCAL_CALLBACKS.with(|callbacks| callbacks.borrow_mut().insert(id, Box::new(f)));
+    let thread = std::thread::current().id();
+    Box::new(move || {
+        assert_eq!(thread, std::thread::current().id(), "local callback called on another thread");
+        let f = LOCAL_CALLBACKS.with(|callbacks| callbacks.borrow_mut().remove(&id));
+        if let Some(f) = f {
+            f();
+        }
+    })
 }

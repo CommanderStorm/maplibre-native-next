@@ -49,3 +49,6 @@ pub mod parsedate;
 pub mod grid_index;
 pub mod math;
 pub mod intersection_tests;
+pub mod lru_cache;
+pub mod string_indexer;
+pub mod tiny_unordered_map;

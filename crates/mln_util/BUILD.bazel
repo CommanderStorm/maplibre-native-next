@@ -18,3 +18,32 @@ rust_test(
     name = "mln_util_test",
     crate = ":mln_util",
 )
+
+# Ported C++ gtests of test/util (markers `// gtest: Group.Name`), for
+# mln_util and the low crates next to it.
+rust_test(
+    name = "mln_util_gtest",
+    srcs = glob(["tests/gtest/*.rs"]),
+    crate_root = "tests/gtest/main.rs",
+    deps = [
+        ":mln_util",
+        "//crates/mln_style_types",
+        "//crates/mln_tile_id",
+        "//vendor/nunicode",
+    ],
+)
+
+# Ports test/util/padding.test.cpp: its expression cases need mln_style.
+rust_test(
+    name = "gtest_padding",
+    srcs = ["tests/gtest_padding.rs"],
+    deps = [
+        ":mln_util",
+        "//crates/mln_conversion",
+        "//crates/mln_expression",
+        "//crates/mln_style",
+        "//crates/mln_tile_id",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:serde_json",
+    ],
+)

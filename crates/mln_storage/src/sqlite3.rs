@@ -2,24 +2,54 @@
 // platform/default/src/mln/storage/sqlite3.cpp (`mapbox::sqlite`) over
 // rusqlite (the same bundled SQLite engine).
 //
-// `Statement`/`Query` map to rusqlite's cached statements; the typed
-// `Query::get<T>` overloads are the `get_*` functions below, which apply
-// SQLite's own column conversions (`sqlite3_column_int64` of a text value
-// parses it, `sqlite3_column_blob` of a number formats it, ...).
+// `Database` holds its connection the way C++ holds its `DatabaseImpl`
+// (`std::unique_ptr`): behind a pointer that a `Transaction` shares, so a
+// transaction keeps working when the `Database` object moves. The pointer
+// is an `Arc<Mutex<Connection>>` (the mutex makes it `Send`; it is never
+// contended). `conn()` gives the connection for rusqlite calls.
 //
-// TODO(port): `setTempPath`, `Transaction` (write path), the debug
-// `SQLITE_CONFIG_LOG` hook.
+// `Statement`/`Query` are rusqlite statements; the typed `Query::get<T>`
+// overloads are the `get_*` functions below, which apply SQLite's own
+// column conversions (`sqlite3_column_int64` of a text value parses it,
+// `sqlite3_column_blob` of a number formats it, ...). The offline database
+// uses rusqlite's statement cache (`prepare_cached`) directly.
+//
+// TODO(port): `setTempPath`, the debug `SQLITE_CONFIG_LOG` hook, the
+// library version check at startup, `Query::reset`/`clearBindings` after a
+// `run()`.
 
-use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, Row};
+use rusqlite::fallible_iterator::FallibleIterator;
+use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
+use rusqlite::types::{ToSql, ValueRef};
+use rusqlite::{Connection, OpenFlags, Row, Rows};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// `mapbox::sqlite::ResultCode` values (`SQLITE_*`).
 pub mod result_code {
     pub const OK: i32 = 0;
     pub const ERROR: i32 = 1;
+    pub const INTERNAL: i32 = 2;
+    pub const PERM: i32 = 3;
+    pub const ABORT: i32 = 4;
+    pub const BUSY: i32 = 5;
+    pub const LOCKED: i32 = 6;
+    pub const NO_MEM: i32 = 7;
     pub const READ_ONLY: i32 = 8;
+    pub const INTERRUPT: i32 = 9;
+    pub const IO_ERR: i32 = 10;
     pub const CORRUPT: i32 = 11;
+    pub const NOT_FOUND: i32 = 12;
+    pub const FULL: i32 = 13;
     pub const CANT_OPEN: i32 = 14;
+    pub const PROTOCOL: i32 = 15;
+    pub const SCHEMA: i32 = 17;
+    pub const TOO_BIG: i32 = 18;
+    pub const CONSTRAINT: i32 = 19;
+    pub const MISMATCH: i32 = 20;
+    pub const MISUSE: i32 = 21;
+    pub const NO_LFS: i32 = 22;
+    pub const AUTH: i32 = 23;
+    pub const RANGE: i32 = 25;
     pub const NOT_A_DB: i32 = 26;
 }
 
@@ -37,8 +67,9 @@ pub enum OpenFlag {
     ReadWriteCreate = 0x0000_0006,
 }
 
-/// `mapbox::sqlite::Exception`: `code` is the (extended) result code as C++
-/// stores it (`static_cast<ResultCode>(err)`), `extended_code` is `err >> 8`.
+/// `mapbox::sqlite::Exception`. `code` is `static_cast<ResultCode>(err)`, the
+/// low byte of the (extended) result code (`ResultCode` is a `uint8_t`
+/// enum); `extended_code` is `err >> 8`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Exception {
     pub code: i32,
@@ -49,8 +80,8 @@ pub struct Exception {
 impl Exception {
     pub fn new(err: i32, message: impl Into<String>) -> Self {
         Exception {
-            code: err,
-            extended_code: err >> 8,
+            code: err & 0xff,
+            extended_code: (err >> 8) & 0xff,
             message: message.into(),
         }
     }
@@ -76,38 +107,223 @@ impl From<rusqlite::Error> for Exception {
 
 /// `mapbox::sqlite::Database`.
 pub struct Database {
-    conn: Connection,
+    impl_: Arc<Mutex<Connection>>,
 }
 
 impl Database {
-    /// `Database::open(filename, flags)` (`sqlite3_open_v2(filename, flags |
-    /// SQLITE_OPEN_URI)`, extended result codes on).
-    pub fn open(filename: &str, flags: OpenFlag) -> Result<Database, Exception> {
+    /// `Database::tryOpen(filename, flags)` (`sqlite3_open_v2(filename, flags
+    /// | SQLITE_OPEN_URI)`, extended result codes on). C++ returns a
+    /// `std::variant<Database, Exception>`.
+    pub fn try_open(filename: &str, flags: OpenFlag) -> Result<Database, Exception> {
         let flags = OpenFlags::from_bits_retain(flags as i32) | OpenFlags::SQLITE_OPEN_URI;
         let conn = Connection::open_with_flags(filename, flags)?;
-        Ok(Database { conn })
+        Ok(Database {
+            impl_: Arc::new(Mutex::new(conn)),
+        })
+    }
+
+    /// `Database::open(filename, flags)` (throws the `tryOpen` exception).
+    pub fn open(filename: &str, flags: OpenFlag) -> Result<Database, Exception> {
+        Self::try_open(filename, flags)
     }
 
     /// `getFilename()`.
     pub fn get_filename(&self) -> String {
-        self.conn.path().unwrap_or("").to_owned()
+        self.conn().path().unwrap_or("").to_owned()
     }
 
     /// `setBusyTimeout(std::chrono::milliseconds)` (clamped to `int`).
     pub fn set_busy_timeout(&self, timeout_ms: i64) -> Result<(), Exception> {
         let ms = timeout_ms.clamp(0, i32::MAX as i64) as u64;
-        self.conn.busy_timeout(std::time::Duration::from_millis(ms))?;
+        self.conn().busy_timeout(std::time::Duration::from_millis(ms))?;
         Ok(())
     }
 
     /// `exec(sql)`.
     pub fn exec(&self, sql: &str) -> Result<(), Exception> {
-        self.conn.execute_batch(sql)?;
+        exec(&self.conn(), sql)
+    }
+
+    /// The connection (`impl->db`).
+    pub fn conn(&self) -> MutexGuard<'_, Connection> {
+        self.impl_.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// `DatabaseImpl::exec` (`sqlite3_exec`): runs every statement to
+/// completion. rusqlite's `execute_batch` steps each statement only once,
+/// which leaves e.g. `PRAGMA incremental_vacuum` after freeing one page.
+fn exec(conn: &Connection, sql: &str) -> Result<(), Exception> {
+    let mut batch = rusqlite::Batch::new(conn, sql);
+    while let Some(mut stmt) = batch.next()? {
+        let mut rows = stmt.raw_query();
+        while rows.next()?.is_some() {}
+    }
+    Ok(())
+}
+
+/// `mapbox::sqlite::Transaction::Mode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransactionMode {
+    Deferred,
+    Immediate,
+    Exclusive,
+}
+
+/// `mapbox::sqlite::Transaction`: rolls back on drop unless committed or
+/// rolled back.
+pub struct Transaction {
+    db_impl: Arc<Mutex<Connection>>,
+    need_rollback: bool,
+}
+
+impl Transaction {
+    /// `Transaction(Database&, Mode = Deferred)`.
+    pub fn new(db: &Database, mode: TransactionMode) -> Result<Transaction, Exception> {
+        let sql = match mode {
+            TransactionMode::Deferred => "BEGIN DEFERRED TRANSACTION",
+            TransactionMode::Immediate => "BEGIN IMMEDIATE TRANSACTION",
+            TransactionMode::Exclusive => "BEGIN EXCLUSIVE TRANSACTION",
+        };
+        // C++ throws from the constructor: no destructor, no rollback.
+        db.exec(sql)?;
+        Ok(Transaction {
+            db_impl: db.impl_.clone(),
+            need_rollback: true,
+        })
+    }
+
+    fn exec(&self, sql: &str) -> Result<(), Exception> {
+        exec(&self.db_impl.lock().unwrap_or_else(|e| e.into_inner()), sql)
+    }
+
+    /// `commit()`.
+    pub fn commit(&mut self) -> Result<(), Exception> {
+        self.need_rollback = false;
+        self.exec("COMMIT TRANSACTION")
+    }
+
+    /// `rollback()`.
+    pub fn rollback(&mut self) -> Result<(), Exception> {
+        self.need_rollback = false;
+        self.exec("ROLLBACK TRANSACTION")
+    }
+}
+
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        if self.need_rollback {
+            // Ignore failed rollbacks in destructor.
+            let _ = self.rollback();
+        }
+    }
+}
+
+/// `mapbox::sqlite::Statement`: a prepared statement that can be run
+/// repeatedly with a `Query`. Borrows the connection guard it was prepared
+/// on (`db.conn()`).
+pub struct Statement<'conn> {
+    stmt: rusqlite::Statement<'conn>,
+    conn: &'conn Connection,
+    last_insert_row_id: i64,
+    changes: i64,
+}
+
+impl<'conn> Statement<'conn> {
+    /// `Statement(Database&, const char* sql)` (`sqlite3_prepare_v2`).
+    pub fn new(conn: &'conn Connection, sql: &str) -> Result<Statement<'conn>, Exception> {
+        Ok(Statement {
+            stmt: conn.prepare(sql)?,
+            conn,
+            last_insert_row_id: 0,
+            changes: 0,
+        })
+    }
+}
+
+/// `mapbox::sqlite::Query`: binds and runs a `Statement` one row at a time.
+pub struct Query<'s, 'conn> {
+    stmt: Option<&'s mut rusqlite::Statement<'conn>>,
+    rows: Option<Rows<'s>>,
+    conn: &'conn Connection,
+    last_insert_row_id: &'s mut i64,
+    changes: &'s mut i64,
+}
+
+impl<'s, 'conn> Query<'s, 'conn> {
+    /// `Query(Statement&)`.
+    pub fn new(statement: &'s mut Statement<'conn>) -> Self {
+        let Statement {
+            stmt,
+            conn,
+            last_insert_row_id,
+            changes,
+        } = statement;
+        Query {
+            stmt: Some(stmt),
+            rows: None,
+            conn,
+            last_insert_row_id,
+            changes,
+        }
+    }
+
+    /// `bind(offset, value)` (before the first `run()`).
+    pub fn bind<T: ToSql>(&mut self, offset: usize, value: T) -> Result<(), Exception> {
+        let stmt = self.stmt.as_mut().expect("TODO(port): Query::bind after run()");
+        stmt.raw_bind_parameter(offset, value)?;
         Ok(())
     }
 
-    pub fn conn(&self) -> &Connection {
-        &self.conn
+    /// `run()`: steps once; true when a row is available.
+    pub fn run(&mut self) -> Result<bool, Exception> {
+        if self.rows.is_none() {
+            let stmt = self.stmt.take().expect("statement");
+            self.rows = Some(stmt.raw_query());
+        }
+        let result = self.rows.as_mut().expect("rows").next().map(|row| row.is_some());
+        *self.last_insert_row_id = self.conn.last_insert_rowid();
+        *self.changes = self.conn.changes() as i64;
+        Ok(result?)
+    }
+
+    fn row(&self) -> &Row<'s> {
+        self.rows.as_ref().and_then(|rows| rows.get()).expect("Query::get without a row")
+    }
+
+    /// `get<int64_t>(offset)`.
+    pub fn get_i64(&self, offset: usize) -> Result<i64, Exception> {
+        get_i64(self.row(), offset)
+    }
+
+    /// `get<int>(offset)`.
+    pub fn get_i32(&self, offset: usize) -> Result<i32, Exception> {
+        get_i32(self.row(), offset)
+    }
+
+    /// `get<std::string>(offset)`, as bytes.
+    pub fn get_bytes(&self, offset: usize) -> Result<Vec<u8>, Exception> {
+        get_bytes(self.row(), offset)
+    }
+
+    /// `get<std::optional<std::string>>(offset)`, as bytes.
+    pub fn get_optional_bytes(&self, offset: usize) -> Result<Option<Vec<u8>>, Exception> {
+        get_optional_bytes(self.row(), offset)
+    }
+
+    /// `get<std::string>(offset)` for text columns.
+    pub fn get_string(&self, offset: usize) -> Result<String, Exception> {
+        Ok(String::from_utf8_lossy(&get_bytes(self.row(), offset)?).into_owned())
+    }
+
+    /// `lastInsertRowId()`.
+    pub fn last_insert_row_id(&self) -> i64 {
+        *self.last_insert_row_id
+    }
+
+    /// `changes()`.
+    pub fn changes(&self) -> u64 {
+        (*self.changes).max(0) as u64
     }
 }
 

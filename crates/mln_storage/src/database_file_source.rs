@@ -258,4 +258,8 @@ impl FileSource for DatabaseFileSource {
     fn get_client_options(&self) -> ClientOptions {
         self.impl_.client_options.lock().unwrap().clone()
     }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
 }

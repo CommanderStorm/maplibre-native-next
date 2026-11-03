@@ -8,6 +8,7 @@ pub mod async_task;
 pub mod established_actor;
 pub mod local_object;
 pub mod mailbox;
+pub mod platform_settings;
 pub mod run_loop;
 pub mod scheduler;
 pub mod thread;

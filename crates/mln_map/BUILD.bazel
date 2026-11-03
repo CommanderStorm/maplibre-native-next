@@ -22,3 +22,10 @@ rust_test(
     name = "mln_map_test",
     crate = ":mln_map",
 )
+
+# Ports test/util/action_journal.test.cpp (placeholders: ActionJournal is a
+# TODO(port)); markers `// gtest: Group.Name`.
+rust_test(
+    name = "gtest_action_journal",
+    srcs = ["tests/gtest_action_journal.rs"],
+)

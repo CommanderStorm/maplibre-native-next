@@ -54,3 +54,91 @@ rust_test(
         "//vendor/pixelmatch",
     ],
 )
+
+# gtests-core: test/renderer/feature_tracking.test.cpp (all ignored until
+# rendered-feature tracking is ported; see the file comment).
+rust_test(
+    name = "gtest_feature_tracking",
+    srcs = ["tests/gtest_feature_tracking.rs"],
+)
+
+# gtests-core: test/map/{map,prefetch,map_snapshotter}.test.cpp through Map
+# (over a StubFileSource/FakeFileSource) -> HeadlessFrontend. Shared fixture
+# in tests/support/mod.rs.
+rust_test(
+    name = "gtest_map",
+    srcs = [
+        "tests/gtest_map.rs",
+        "tests/gtest_map_snapshotter.rs",
+        "tests/gtest_prefetch.rs",
+        "tests/support/mod.rs",
+    ],
+    crate_root = "tests/gtest_map.rs",
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_platform_default",
+        "//crates/mln_actor",
+        "//crates/mln_gfx",
+        "//crates/mln_map",
+        "//crates/mln_math",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_renderer",
+        "//crates/mln_storage",
+        "//crates/mln_style",
+        "//crates/mln_util",
+        "//vendor/geojson",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/pixelmatch",
+        "@next_crates//:serde_json",
+    ],
+)
+
+# gtests-core: test/api/{annotations,api_misuse,custom_geometry_source,
+# custom_layer,query}.test.cpp and test/api/recycle_map.cpp. Shared fixture
+# in tests/support/mod.rs.
+rust_test(
+    name = "gtest_api",
+    srcs = [
+        "tests/gtest_annotations.rs",
+        "tests/gtest_api.rs",
+        "tests/gtest_query.rs",
+        "tests/support/mod.rs",
+    ],
+    crate_root = "tests/gtest_api.rs",
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_platform_default",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_renderer",
+        "//crates/mln_storage",
+        "//crates/mln_style",
+        "//crates/mln_util",
+        "//vendor/geojson",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/pixelmatch",
+        "@next_crates//:serde_json",
+    ],
+)
+
+# gtests-core: test/util/memory.test.cpp (Map over a StubFileSource with the
+# test/fixtures/resources styles). Shared fixture in tests/support/mod.rs.
+rust_test(
+    name = "gtest_memory",
+    srcs = [
+        "tests/gtest_memory.rs",
+        "tests/support/mod.rs",
+    ],
+    crate_root = "tests/gtest_memory.rs",
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_platform_default",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_storage",
+        "//crates/mln_util",
+        "//vendor/pixelmatch",
+    ],
+)

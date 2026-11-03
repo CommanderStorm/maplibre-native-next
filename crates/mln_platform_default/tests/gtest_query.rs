@@ -1,0 +1,383 @@
+// Ports test/api/query.test.cpp (a module of the gtest_api test crate).
+
+use crate::style_image;
+use crate::support::*;
+use maplibre_native_base::Value;
+use mln_actor::RunLoop;
+use mln_map::{CameraOptions, MapMode};
+use mln_renderer::query::{RenderedQueryOptions, SourceQueryOptions};
+use mln_storage::stub_file_source::{ResponseType, StubFileSource};
+use mln_style::conversion::{Convertible, Error, convert};
+use mln_style::expression::Value as ExpressionValue;
+use mln_style::expression::dsl::{eq, get_str, gt, id, literal, literal_str, ne, number};
+use mln_style::expression::expression::FeatureState;
+use mln_style::filter::Filter;
+use mln_util::feature::Feature;
+use mln_util::geo::{LatLng, ScreenCoordinate};
+use std::sync::Arc;
+
+/// The `QueryTest` fixture: a static 256x256 map with
+/// test/fixtures/api/query_style.json and the "test-icon" image, rendered
+/// once.
+struct QueryTest(MapTest);
+
+impl QueryTest {
+    fn new() -> Self {
+        let run_loop = RunLoop::new();
+        // TODO(port): `StubFileSource()` uses the MapTiler tile server options.
+        let file_source = Arc::new(StubFileSource::new(ResponseType::Asynchronous));
+        let test = QueryTest(MapTest::create(run_loop, file_source, 1.0, MapMode::Static));
+        test.map()
+            .get_style_mut()
+            .load_json(&read_file("test/fixtures/api/query_style.json"));
+        test.map().get_style_mut().add_image(style_image(
+            "test-icon",
+            decode_image("test/fixtures/sprites/default_marker.png"),
+            1.0,
+        ));
+
+        test.0.render();
+        test
+    }
+
+    fn map(&self) -> std::cell::RefMut<'_, mln_map::Map> {
+        self.0.map()
+    }
+
+    fn render(&self) -> mln_platform_default::RenderResult {
+        self.0.render()
+    }
+
+    /// `frontend.getRenderer()->queryRenderedFeatures(point, options)`.
+    fn query_rendered_features(&self, point: &ScreenCoordinate, options: &RenderedQueryOptions) -> Vec<Feature> {
+        self.0
+            .frontend
+            .with_renderer(|renderer| renderer.query_rendered_features_at_point(point, options))
+    }
+
+    /// `frontend.getRenderer()->querySourceFeatures(sourceID, options)`.
+    fn query_source_features(&self, source_id: &str, options: &SourceQueryOptions) -> Vec<Feature> {
+        self.0
+            .frontend
+            .with_renderer(|renderer| renderer.query_source_features(source_id, options))
+    }
+
+    fn set_global_state_property(&self, name: &str, value: &str) {
+        self.map()
+            .get_style_mut()
+            .set_global_state_property(name, &Value::String(value.to_owned()))
+            .unwrap();
+    }
+}
+
+fn ll(lat: f64, lon: f64) -> LatLng {
+    LatLng::new(lat, lon).expect("LatLng")
+}
+
+/// `parseFilter(expression)`: `*conversion::convertJSON<Filter>(expression, error)`.
+fn parse_filter(expression: &str) -> Filter {
+    let json: serde_json::Value = serde_json::from_str(expression).expect("filter JSON");
+    let mut error = Error::default();
+    convert::<Filter>(&Convertible::from(&json), &mut error).unwrap_or_else(|| panic!("filter: {}", error.message))
+}
+
+/// `Filter(expression)`.
+fn filter(expression: Box<dyn mln_style::expression::Expression>) -> Filter {
+    Filter::new(Some(Arc::from(expression)), None)
+}
+
+fn layers(ids: &[&str]) -> Option<Vec<String>> {
+    Some(ids.iter().map(|id| id.to_string()).collect())
+}
+
+fn rendered(ids: Option<Vec<String>>, filter: Option<Filter>) -> RenderedQueryOptions {
+    RenderedQueryOptions::new(ids, filter)
+}
+
+// gtest: Query.QueryRenderedFeatures
+#[test]
+fn query_rendered_features() {
+    let test = QueryTest::new();
+
+    // Batch conversion of latLngs to pixels
+    let points = test.map().pixels_for_lat_lngs(&[ll(0.0, 0.0), ll(9.0, 9.0)]);
+    assert_eq!(2, points.len());
+    // Single conversion of latLng to pixel
+    let point0 = test.map().pixel_for_lat_lng(&ll(0.0, 0.0));
+    assert_near(points[0].x, point0.x, 1e-8);
+    assert_near(points[0].y, point0.y, 1e-8);
+
+    let point1 = test.map().pixel_for_lat_lng(&ll(9.0, 9.0));
+    assert_near(points[1].x, point1.x, 1e-8);
+    assert_near(points[1].y, point1.y, 1e-8);
+
+    let features1 = test.query_rendered_features(&point0, &RenderedQueryOptions::default());
+    assert_eq!(features1.len(), 4);
+
+    let features2 = test.query_rendered_features(&point1, &RenderedQueryOptions::default());
+    assert_eq!(features2.len(), 0);
+}
+
+// gtest: Query.QueryRenderedFeaturesFilterLayer
+#[test]
+fn query_rendered_features_filter_layer() {
+    let test = QueryTest::new();
+
+    let zz = test.map().pixel_for_lat_lng(&ll(0.0, 0.0));
+
+    let features1 = test.query_rendered_features(&zz, &rendered(layers(&["layer1"]), None));
+    assert_eq!(features1.len(), 1);
+
+    let features2 = test.query_rendered_features(&zz, &rendered(layers(&["layer1", "layer2"]), None));
+    assert_eq!(features2.len(), 2);
+
+    let features3 = test.query_rendered_features(&zz, &rendered(layers(&["foobar"]), None));
+    assert_eq!(features3.len(), 0);
+
+    let features4 = test.query_rendered_features(&zz, &rendered(layers(&["foobar", "layer3"]), None));
+    assert_eq!(features4.len(), 1);
+}
+
+// gtest: Query.QueryRenderedFeaturesFilter
+#[test]
+fn query_rendered_features_filter() {
+    let test = QueryTest::new();
+    let zz = test.map().pixel_for_lat_lng(&ll(0.0, 0.0));
+
+    let eq_filter = filter(eq(get_str("key1"), literal_str("value1")));
+    let features1 = test.query_rendered_features(&zz, &rendered(None, Some(eq_filter)));
+    assert_eq!(features1.len(), 1);
+
+    let id_not_eq_filter = filter(ne(id(), literal_str("feature1")));
+    let features2 = test.query_rendered_features(&zz, &rendered(layers(&["layer4"]), Some(id_not_eq_filter)));
+    assert_eq!(features2.len(), 0);
+
+    let gt_filter = filter(gt(number(get_str("key2"), None), literal(ExpressionValue::Number(1.0))));
+    let features3 = test.query_rendered_features(&zz, &rendered(None, Some(gt_filter)));
+    assert_eq!(features3.len(), 1);
+}
+
+// gtest: Query.GlobalStateChangeRelayoutsSourceFilter
+#[test]
+fn global_state_change_relayouts_source_filter() {
+    let test = QueryTest::new();
+    {
+        let mut map = test.map();
+        let mut style = map.get_style_mut();
+        let mut layer = style.get_layer_mut("layer4").expect("layer4");
+        layer.set_filter(&parse_filter(r#"["==", ["get", "key1"], ["global-state", "filterValue"]]"#));
+    }
+
+    let point = test.map().pixel_for_lat_lng(&ll(0.0, 0.0));
+    let options = rendered(layers(&["layer4"]), None);
+
+    test.set_global_state_property("filterValue", "value1");
+    test.render();
+    assert_eq!(1, test.query_rendered_features(&point, &options).len());
+
+    test.set_global_state_property("filterValue", "other");
+    test.render();
+    assert!(test.query_rendered_features(&point, &options).is_empty());
+
+    test.set_global_state_property("filterValue", "value1");
+    test.render();
+    assert_eq!(1, test.query_rendered_features(&point, &options).len());
+}
+
+// gtest: Query.QueryFiltersUseGlobalState
+#[test]
+fn query_filters_use_global_state() {
+    let test = QueryTest::new();
+    let filter = parse_filter(r#"["==", ["get", "key1"], ["global-state", "queryValue"]]"#);
+    let point = test.map().pixel_for_lat_lng(&ll(0.0, 0.0));
+    let rendered_options = rendered(layers(&["layer4"]), Some(filter.clone()));
+    let source_options = SourceQueryOptions::new(None, Some(filter));
+
+    test.set_global_state_property("queryValue", "value1");
+    test.render();
+    assert_eq!(1, test.query_rendered_features(&point, &rendered_options).len());
+    assert_eq!(1, test.query_source_features("source4", &source_options).len());
+
+    test.set_global_state_property("queryValue", "other");
+    test.render();
+    assert!(test.query_rendered_features(&point, &rendered_options).is_empty());
+    assert!(test.query_source_features("source4", &source_options).is_empty());
+}
+
+// gtest: Query.QueryRenderedFeaturesLineOffsetEndpoint
+#[test]
+fn query_rendered_features_line_offset_endpoint() {
+    for offset in [22.0f64, -22.0] {
+        let test = QueryTest::new();
+        // std::to_string(double): "%f".
+        test.map().get_style_mut().load_json(&format!(
+            r#"{{"version":8,"sources":{{"source":{{"type":"geojson","data":{{
+                "type":"LineString","coordinates":[[1.0025,1],[1.0035,1]]
+            }}}}}},"layers":[{{"id":"layer","type":"line","source":"source","paint":{{
+                "line-width":6,"line-offset":{offset:.6}}}}}]}}"#
+        ));
+        test.map()
+            .jump_to(&CameraOptions::default().with_center(Some(ll(1.0, 1.003))).with_zoom(Some(16.5)));
+        let rendered_result = test.render();
+        let endpoint = test.map().pixel_for_lat_lng(&ll(1.0, 1.0035));
+        // Stay inside the butt cap, away from antialiased edges.
+        let inside = ScreenCoordinate::new(endpoint.x - 5.0, endpoint.y + offset);
+        let outside = ScreenCoordinate::new(endpoint.x - 5.0, endpoint.y);
+        let alpha_at = |point: &ScreenCoordinate| {
+            let image = &rendered_result.image;
+            image.data[4 * ((point.y as u32 * image.size.width + point.x as u32) as usize) + 3]
+        };
+        assert!(alpha_at(&inside) > 0, "offset {offset}");
+        assert_eq!(alpha_at(&outside), 0, "offset {offset}");
+        assert_eq!(
+            test.query_rendered_features(&inside, &rendered(layers(&["layer"]), None)).len(),
+            1,
+            "offset {offset}"
+        );
+        assert!(
+            test.query_rendered_features(&outside, &rendered(layers(&["layer"]), None))
+                .is_empty(),
+            "offset {offset}"
+        );
+    }
+}
+
+// gtest: Query.QuerySourceFeatures
+#[test]
+fn query_source_features() {
+    let test = QueryTest::new();
+
+    let features1 = test.query_source_features("source3", &SourceQueryOptions::default());
+    assert_eq!(features1.len(), 1);
+}
+
+// gtest: Query.QuerySourceFeatureStates
+#[test]
+fn query_source_feature_states() {
+    let test = QueryTest::new();
+
+    let mut new_state = FeatureState::new();
+    new_state.insert("hover".into(), Value::Bool(true));
+    new_state.insert("radius".into(), Value::Uint(20));
+    test.0
+        .frontend
+        .with_renderer(|renderer| renderer.set_feature_state("source1", None, "feature1", &new_state));
+
+    // C++ fills an out-parameter; the Rust getter returns the state.
+    let states = test
+        .0
+        .frontend
+        .with_renderer(|renderer| renderer.get_feature_state("source1", None, "feature1"));
+    assert_eq!(states.len(), 2);
+    assert_eq!(states["hover"], Value::Bool(true));
+    assert_eq!(states["radius"], Value::Uint(20));
+    assert_eq!(new_state, states);
+}
+
+// gtest: Query.RemoveSourceFeatureState
+#[test]
+fn remove_source_feature_state() {
+    let test = QueryTest::new();
+    let frontend = test.0.frontend.clone();
+
+    // Set two state values on a feature. Updates are visible immediately,
+    // without waiting for a render pass.
+    let mut new_state = FeatureState::new();
+    new_state.insert("hover".into(), Value::Bool(true));
+    new_state.insert("radius".into(), Value::Uint(20));
+    frontend.with_renderer(|renderer| renderer.set_feature_state("source1", None, "feature1", &new_state));
+
+    // Read back (C++: the out-parameter overload).
+    let after_set = frontend.with_renderer(|renderer| renderer.get_feature_state("source1", None, "feature1"));
+    assert_eq!(after_set, new_state);
+
+    // Remove a single key. Unlike updates, removals are only reflected once a
+    // render pass has coalesced the pending changes into the source state, so
+    // render before reading back.
+    frontend.with_renderer(|renderer| renderer.remove_feature_state("source1", None, Some("feature1"), Some("hover")));
+    test.render();
+
+    // Read back (C++: the return-value overload).
+    let after_key_removal = frontend.with_renderer(|renderer| renderer.get_feature_state("source1", None, "feature1"));
+    assert_eq!(after_key_removal.len(), 1);
+    assert!(!after_key_removal.contains_key("hover"));
+    assert_eq!(after_key_removal["radius"], Value::Uint(20));
+
+    // Removing the whole feature (no state key) clears any remaining state.
+    frontend.with_renderer(|renderer| renderer.remove_feature_state("source1", None, Some("feature1"), None));
+    test.render();
+
+    // Read back (C++: the out-parameter overload again).
+    let after_feature_removal =
+        frontend.with_renderer(|renderer| renderer.get_feature_state("source1", None, "feature1"));
+    assert!(after_feature_removal.is_empty());
+}
+
+// gtest: Query.QuerySourceFeaturesOptionValidation
+#[test]
+fn query_source_features_option_validation() {
+    let test = QueryTest::new();
+
+    // GeoJSONSource, doesn't require a layer id
+    let mut features = test.query_source_features("source3", &SourceQueryOptions::default());
+    assert_eq!(features.len(), 1);
+
+    // VectorSource, requires a layer id
+    features = test.query_source_features("source5", &SourceQueryOptions::default());
+    assert_eq!(features.len(), 0);
+
+    // RasterSource, not supported
+    features = test.query_source_features("source6", &SourceQueryOptions::default());
+    assert_eq!(features.len(), 0);
+}
+
+// gtest: Query.QuerySourceFeaturesFilter
+#[test]
+fn query_source_features_filter() {
+    let test = QueryTest::new();
+
+    let eq_filter = filter(eq(get_str("key1"), literal_str("value1")));
+    let features1 = test.query_source_features("source4", &SourceQueryOptions::new(None, Some(eq_filter)));
+    assert_eq!(features1.len(), 1);
+
+    let id_not_eq_filter = filter(ne(id(), literal_str("feature1")));
+    let features2 = test.query_source_features("source4", &SourceQueryOptions::new(None, Some(id_not_eq_filter)));
+    assert_eq!(features2.len(), 0);
+
+    let gt_filter = filter(gt(number(get_str("key2"), None), literal(ExpressionValue::Number(1.0))));
+    let features3 = test.query_source_features("source4", &SourceQueryOptions::new(None, Some(gt_filter)));
+    assert_eq!(features3.len(), 1);
+}
+
+// gtest: Query.QueryFeatureExtensionsInvalidExtension
+#[test]
+#[ignore = "TODO(port): Renderer::queryFeatureExtensions; see query.test.cpp:305"]
+fn query_feature_extensions_invalid_extension() {
+    // An unknown extension ("unknown"/"children") on source4 returns a null
+    // mln::Value.
+}
+
+// gtest: Query.QueryFeatureExtensionsSuperclusterChildren
+#[test]
+#[ignore = "TODO(port): Renderer::queryFeatureExtensions (supercluster children); see query.test.cpp:313"]
+fn query_feature_extensions_supercluster_children() {
+    // The top cluster of test/fixtures/supercluster/places.json (clustered
+    // GeoJSONSource loaded from a URL, symbol layer, z0) has 4 children with
+    // cluster_id 2, 34, 258, 2466 and point_count 7, 16, 7, 2.
+}
+
+// gtest: Query.QueryFeatureExtensionsSuperclusterExpansionZoom
+#[test]
+#[ignore = "TODO(port): Renderer::queryFeatureExtensions (supercluster expansion-zoom); see query.test.cpp:342"]
+fn query_feature_extensions_supercluster_expansion_zoom() {
+    // The expansion zoom of the top cluster is 1, of its fourth child 3.
+}
+
+// gtest: Query.QueryFeatureExtensionsSuperclusterLeaves
+#[test]
+#[ignore = "TODO(port): Renderer::queryFeatureExtensions (supercluster leaves); see query.test.cpp:364"]
+fn query_feature_extensions_supercluster_leaves() {
+    // Leaves of the top cluster: 10 by default; with limit 3: Niagara Falls,
+    // Cape May, Cape Fear; with limit 3, offset 3: Cape Hatteras, Cape Sable,
+    // Cape Cod.
+}

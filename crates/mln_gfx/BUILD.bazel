@@ -30,3 +30,40 @@ rust_test(
         "//crates/mln_util",
     ],
 )
+
+# gtests-core: test/renderer/renderable.test.cpp.
+rust_test(
+    name = "gtest_renderable",
+    srcs = ["tests/gtest_renderable.rs"],
+    deps = [
+        ":mln_gfx",
+        "//crates/mln_util",
+    ],
+)
+
+# gtests-core: test/renderer/backend_scope.test.cpp (OpenGL-only in C++; the
+# BackendScope logic it tests is backend-independent).
+rust_test(
+    name = "gtest_backend_scope",
+    srcs = ["tests/gtest_backend_scope.rs"],
+    deps = [":mln_gfx"],
+)
+
+# gtests-core: test/renderer/metal_renderable.test.cpp and
+# vulkan_acquire.test.cpp: backend-specific, ignored placeholders.
+rust_test(
+    name = "gtest_metal_renderable",
+    srcs = ["tests/gtest_metal_renderable.rs"],
+)
+
+rust_test(
+    name = "gtest_vulkan_acquire",
+    srcs = ["tests/gtest_vulkan_acquire.rs"],
+)
+
+# Ports test/util/hash.test.cpp (marker `// gtest: Group.Name`).
+rust_test(
+    name = "gtest_hash",
+    srcs = ["tests/gtest_hash.rs"],
+    deps = [":mln_gfx"],
+)

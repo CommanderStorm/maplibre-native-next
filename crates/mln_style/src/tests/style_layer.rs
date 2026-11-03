@@ -2,29 +2,16 @@
 
 use super::util::parse_json;
 use crate::conversion::convert;
-use crate::expression::dsl::{format_str, literal_str, to_color};
-use crate::expression::{Expression, Formatted, FormattedSection, Image, Type};
+use crate::expression::Image;
 use crate::filter::Filter;
 use crate::layer::Layer;
 use crate::layers::background_layer::BackgroundLayer;
-use crate::layers::symbol_layer_impl::SymbolLayerPaintPropertyOverrides as MockOverrides;
-use crate::layers::symbol_layer_properties::{TextColor, TextField};
-use crate::layers::{
-    CircleLayer, FillLayer, LineLayer, RasterLayer, SymbolLayoutProperties, SymbolPaintProperties,
-};
-use crate::properties::Transitionable;
-use crate::property_expression::PropertyExpression;
+use crate::layers::{CircleLayer, FillLayer, LineLayer, RasterLayer};
 use crate::property_value::PropertyValue;
-use crate::renderer::possibly_evaluated_property_value::PossiblyEvaluatedPropertyValue;
 use crate::style_impl::Impl as StyleImpl;
-use crate::transition_options::TransitionOptions;
 use mln_conversion::{Convertible, Error};
-use mln_expression::format_expression::{FormatExpression, FormatExpressionSection};
-use mln_expression::match_::Match;
 use mln_style_types::{LineCapType, LineJoinType, TranslateAnchorType, VisibilityType};
 use mln_util::Color;
-use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -316,156 +303,5 @@ fn incompatible_layer() {
     }
 }
 
-/// The text-field values `testHasOverrides` sets, in its order.
-#[derive(Clone, Copy, Debug)]
-enum FormattedCase {
-    Undefined,
-    ConstantNoOverride,
-    ConstantOverride,
-    ExpressionNoOverride,
-    ExpressionOverride,
-    NestedOverride,
-}
-
-const FORMATTED_CASES: [FormattedCase; 6] = [
-    FormattedCase::Undefined,
-    FormattedCase::ConstantNoOverride,
-    FormattedCase::ConstantOverride,
-    FormattedCase::ExpressionNoOverride,
-    FormattedCase::ExpressionOverride,
-    FormattedCase::NestedOverride,
-];
-
-impl FormattedCase {
-    fn has_override(self) -> bool {
-        matches!(
-            self,
-            FormattedCase::ConstantOverride | FormattedCase::ExpressionOverride | FormattedCase::NestedOverride
-        )
-    }
-
-    fn constant(self) -> Option<Formatted> {
-        match self {
-            // Constant, no overrides.
-            FormattedCase::ConstantNoOverride => Some(Formatted::from_plain("")),
-            // Constant, overridden text-color.
-            FormattedCase::ConstantOverride => {
-                let mut formatted = Formatted::from_plain("");
-                formatted.sections.push(FormattedSection::new(
-                    "section text".to_owned(),
-                    None,
-                    None,
-                    Some(Color::green()),
-                ));
-                Some(formatted)
-            }
-            _ => None,
-        }
-    }
-
-    fn expression(self) -> Option<PropertyExpression<Formatted>> {
-        let expression: Box<dyn Expression> = match self {
-            // Expression, no overrides.
-            FormattedCase::ExpressionNoOverride => Box::new(FormatExpression::new(Vec::new())),
-            // Expression, overridden text-color.
-            FormattedCase::ExpressionOverride => {
-                let mut section = FormatExpressionSection::new(literal_str(""));
-                section.set_text_section_options(None, None, Some(to_color(literal_str("red"), None)));
-                Box::new(FormatExpression::new(vec![section]))
-            }
-            // Nested expressions, overridden text-color.
-            FormattedCase::NestedOverride => {
-                let formatted_expr1 = format_str("first paragraph");
-                let mut second_paragraph = FormatExpressionSection::new(literal_str("second paragraph"));
-                second_paragraph.set_text_section_options(None, None, Some(to_color(literal_str("blue"), None)));
-                let formatted_expr2: Box<dyn Expression> = Box::new(FormatExpression::new(vec![second_paragraph]));
-                let mut branches: BTreeMap<String, Arc<dyn Expression>> = BTreeMap::new();
-                branches.insert("1st".to_owned(), Arc::from(formatted_expr1));
-                branches.insert("2nd".to_owned(), Arc::from(formatted_expr2));
-                Box::new(Match::<String>::new(
-                    Type::Formatted,
-                    literal_str("input"),
-                    branches,
-                    format_str("otherwise"),
-                ))
-            }
-            _ => return None,
-        };
-        Some(PropertyExpression::from_box(expression, None))
-    }
-}
-
-// gtest: Layer.SymbolLayerOverrides
-#[test]
-fn symbol_layer_overrides() {
-    // TEST(Layer, SymbolLayerOverrides). The C++ Mock*Properties are
-    // `Properties<TextField>` / `Properties<TextColor>`; the symbol layer's
-    // sets hold the same tags.
-
-    // Unevaluated / transitionable.
-    {
-        let layout = RefCell::new(SymbolLayoutProperties::Unevaluated::default());
-        // testHasOverrides<PropertyValue>(layout)
-        for case in FORMATTED_CASES {
-            let value = match case {
-                FormattedCase::Undefined => PropertyValue::Undefined,
-                _ => case
-                    .constant()
-                    .map(PropertyValue::Constant)
-                    .or_else(|| case.expression().map(PropertyValue::Expression))
-                    .unwrap(),
-            };
-            *layout.borrow_mut().get_mut::<TextField>() = value;
-            assert_eq!(
-                case.has_override(),
-                MockOverrides::has_overrides(layout.borrow().get::<TextField>()),
-                "{case:?}"
-            );
-        }
-
-        let mut current = SymbolPaintProperties::Transitionable::default();
-        let mut updated = SymbolPaintProperties::Transitionable::default();
-        *current.get_mut::<TextColor>() = Transitionable {
-            value: c(Color::green()),
-            options: TransitionOptions::default(),
-        };
-        *updated.get_mut::<TextColor>() = Transitionable {
-            value: c(Color::green()),
-            options: TransitionOptions::default(),
-        };
-        assert!(!MockOverrides::has_paint_property_difference(&current, &updated));
-
-        *current.get_mut::<TextColor>() = Transitionable {
-            value: c(Color::red()),
-            options: TransitionOptions::default(),
-        };
-        assert!(MockOverrides::has_paint_property_difference(&current, &updated));
-    }
-
-    // Possibly evaluated.
-    {
-        let mut layout = SymbolLayoutProperties::PossiblyEvaluated::default();
-        // testHasOverrides<PossiblyEvaluatedPropertyValue>(layout); C++'s
-        // `PossiblyEvaluatedPropertyValue<Formatted>()` is a default-constructed
-        // (empty) constant, so its "Undefined" step has no override.
-        for case in FORMATTED_CASES {
-            let value = match case {
-                FormattedCase::Undefined => PossiblyEvaluatedPropertyValue::default(),
-                _ => case
-                    .constant()
-                    .map(PossiblyEvaluatedPropertyValue::Constant)
-                    .or_else(|| case.expression().map(PossiblyEvaluatedPropertyValue::Expression))
-                    .unwrap(),
-            };
-            *layout.get_mut::<TextField>() = value;
-            assert_eq!(
-                case.has_override(),
-                MockOverrides::has_overrides(layout.get::<TextField>()),
-                "{case:?}"
-            );
-        }
-        // TODO(port): the setOverrides / updateOverrides half of this case
-        // and the global-state case build `expression::FormatSectionOverride`
-        // (render side, with RenderSymbolLayer; M5).
-    }
-}
+// Layer.SymbolLayerOverrides needs mln_renderer's FormatSectionOverride
+// (set_overrides): it is in crates/mln_renderer/tests/format_section_override_test.rs.

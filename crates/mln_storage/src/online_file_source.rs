@@ -12,7 +12,10 @@
 // (the caller's request id), so `allRequests`/`activeRequests` iterate in id
 // order rather than pointer order.
 //
-// TODO(port): ResourceTransform (`setResourceTransform`), thread priority.
+// `OnlineFileRequest::actor()` (the transformed URL's way back) is a mailbox
+// on the online thread whose target finds the request by id.
+//
+// TODO(port): thread priority.
 
 use crate::async_request::AsyncRequest;
 use crate::file_source::{
@@ -24,9 +27,10 @@ use crate::http_timeout::{error_retry_timeout, expiration_timeout};
 use crate::network_status::{NetworkStatus, Status};
 use crate::resource::{Kind, Priority, Resource};
 use crate::resource_options::ResourceOptions;
+use crate::resource_transform::ResourceTransform;
 use crate::response::{Error, Reason, Response};
 use maplibre_native_base::Value;
-use mln_actor::{ActorRef, AsyncTask, Thread, Timer};
+use mln_actor::{ActorRef, AsyncTask, Mailbox, Thread, Timer, scheduler};
 use mln_util::chrono::{Duration, Timestamp, now};
 use mln_util::client_options::ClientOptions;
 use mln_util::constants::{ASSET_PROTOCOL, CLOCK_SKEW_RETRY_TIMEOUT, DEFAULT_MAXIMUM_CONCURRENT_REQUESTS, FILE_PROTOCOL};
@@ -37,7 +41,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// For testing only
 pub const ONLINE_STATUS_KEY: &str = "online-status";
@@ -62,6 +66,34 @@ struct OnlineFileRequest {
     failed_requests: Cell<u32>,
     failed_request_reason: Cell<Reason>,
     retry_after: Cell<Option<Timestamp>>,
+
+    /// Lazily created for the ResourceTransform's reply (`actor()`).
+    mailbox: RefCell<Option<Arc<Mailbox>>>,
+}
+
+/// The target of an `OnlineFileRequest`'s mailbox.
+struct OnlineFileRequestRef {
+    impl_: Weak<ThreadState>,
+    id: u64,
+}
+
+impl OnlineFileRequestRef {
+    /// `OnlineFileRequest::setTransformedURL(const std::string&)`.
+    fn set_transformed_url(&self, url: String) {
+        if let Some(impl_) = self.impl_.upgrade()
+            && let Some(req) = impl_.get(self.id)
+        {
+            req.set_transformed_url(url);
+        }
+    }
+}
+
+impl Drop for OnlineFileRequest {
+    fn drop(&mut self) {
+        if let Some(mailbox) = self.mailbox.borrow_mut().take() {
+            mailbox.close();
+        }
+    }
 }
 
 /// `PendingRequests`: a FIFO preferring regular over low priority requests.
@@ -116,6 +148,7 @@ struct ThreadState {
     online: Cell<bool>,
     maximum_concurrent_requests: Cell<u32>,
     http_file_source: HTTPFileSource,
+    resource_transform: RefCell<ResourceTransform>,
     tasks: RefCell<BTreeMap<u64, Rc<OnlineFileRequest>>>,
 }
 
@@ -176,8 +209,26 @@ impl ThreadState {
     /// `add(OnlineFileRequest*)`
     fn add(&self, req: &OnlineFileRequest) {
         self.all_requests.borrow_mut().insert(req.id);
-        // TODO(port): resourceTransform.
-        req.activate();
+        let transform = self.resource_transform.borrow().clone();
+        if transform.is_set() {
+            // Request the ResourceTransform actor a new url and replace the
+            // resource url with the transformed one before proceeding to
+            // schedule the request.
+            let r = req.actor();
+            let (kind, url) = {
+                let resource = req.resource.borrow();
+                (resource.kind, resource.url.clone())
+            };
+            transform.transform(
+                kind,
+                &url,
+                Box::new(move |url: String| {
+                    r.invoke(move |req: &OnlineFileRequestRef| req.set_transformed_url(url));
+                }),
+            );
+        } else {
+            req.activate();
+        }
     }
 
     /// `remove(OnlineFileRequest*)`
@@ -277,6 +328,27 @@ impl ThreadState {
 }
 
 impl OnlineFileRequest {
+    /// `setTransformedURL(const std::string&)`
+    fn set_transformed_url(&self, url: String) {
+        self.resource.borrow_mut().url = url;
+        self.activate();
+    }
+
+    /// `actor()`
+    fn actor(&self) -> ActorRef<OnlineFileRequestRef> {
+        let mut mailbox = self.mailbox.borrow_mut();
+        // Lazy constructed because this can be costly and the
+        // ResourceTransform is not used by many apps.
+        let mailbox = mailbox.get_or_insert_with(|| {
+            let target = Rc::new(OnlineFileRequestRef {
+                impl_: self.impl_.clone(),
+                id: self.id,
+            });
+            Mailbox::with_target(&scheduler::get_current(), target)
+        });
+        ActorRef::new(mailbox)
+    }
+
     /// `activate()`
     fn activate(&self) {
         // Force an immediate first request if we don't have an expiration time.
@@ -425,6 +497,7 @@ impl OnlineFileSourceThread {
             online: Cell::new(true),
             maximum_concurrent_requests: Cell::new(DEFAULT_MAXIMUM_CONCURRENT_REQUESTS),
             http_file_source,
+            resource_transform: RefCell::new(ResourceTransform::default()),
             tasks: RefCell::new(BTreeMap::new()),
         });
         let weak = Rc::downgrade(&state);
@@ -458,6 +531,7 @@ impl OnlineFileSourceThread {
             failed_requests: Cell::new(0),
             failed_request_reason: Cell::new(Reason::Success),
             retry_after: Cell::new(None),
+            mailbox: RefCell::new(None),
         });
         self.state.tasks.borrow_mut().insert(req, request.clone());
         self.state.add(&request);
@@ -468,6 +542,11 @@ impl OnlineFileSourceThread {
         self.state.remove(req);
         let task = self.state.tasks.borrow_mut().remove(&req);
         drop(task);
+    }
+
+    /// `setResourceTransform(ResourceTransform)`
+    fn set_resource_transform(&self, transform: ResourceTransform) {
+        *self.state.resource_transform.borrow_mut() = transform;
     }
 
     fn set_resource_options(&self, options: ResourceOptions) {
@@ -669,6 +748,13 @@ impl FileSource for OnlineFileSource {
             Log::error(Event::General, format!("Resource provider does not support property {key}"));
             Value::Null
         }
+    }
+
+    fn set_resource_transform(&self, transform: ResourceTransform) {
+        self.impl_
+            .thread
+            .actor()
+            .invoke(move |t: &OnlineFileSourceThread| t.set_resource_transform(transform));
     }
 
     fn set_resource_options(&self, options: ResourceOptions) {

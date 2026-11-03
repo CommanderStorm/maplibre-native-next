@@ -8,15 +8,15 @@
 // mutex in std, so the lock is released while the factory runs; on one
 // thread the result is the same. If two threads create the same file source
 // at once, the first one registered wins and the other is dropped.
-//
-// TODO(port): the Asset, FileSystem (LocalFileSource), Mbtiles and Pmtiles
-// factories; `getFileSource` returns `None` for those types until they are
-// ported. (Network = OnlineFileSource, added by glfw.)
 
+use crate::asset_file_source::AssetFileSource;
 use crate::database_file_source::DatabaseFileSource;
 use crate::file_source::{FileSource, FileSourceType};
+use crate::local_file_source::LocalFileSource;
 use crate::main_resource_loader::MainResourceLoader;
+use crate::mbtiles_file_source::MBTilesFileSource;
 use crate::online_file_source::OnlineFileSource;
+use crate::pmtiles_file_source::PMTilesFileSource;
 use crate::resource_options::ResourceOptions;
 use mln_util::client_options::ClientOptions;
 use mln_util::string::to_string_u64;
@@ -63,9 +63,33 @@ impl FileSourceManager {
                 }),
             );
             manager.register_file_source_factory(
+                FileSourceType::Asset,
+                Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
+                    Arc::new(AssetFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
+                }),
+            );
+            manager.register_file_source_factory(
                 FileSourceType::Database,
                 Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
                     Arc::new(DatabaseFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
+                }),
+            );
+            manager.register_file_source_factory(
+                FileSourceType::FileSystem,
+                Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
+                    Arc::new(LocalFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
+                }),
+            );
+            manager.register_file_source_factory(
+                FileSourceType::Mbtiles,
+                Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
+                    Arc::new(MBTilesFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
+                }),
+            );
+            manager.register_file_source_factory(
+                FileSourceType::Pmtiles,
+                Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
+                    Arc::new(PMTilesFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
                 }),
             );
             manager.register_file_source_factory(

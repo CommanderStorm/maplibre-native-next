@@ -173,6 +173,7 @@ mod tests {
     const AAA: &str = "a";
     const BBB: &str = "b";
 
+    // gtest: MergeLines.SameText
     #[test]
     fn same_text() {
         // merges lines with the same text
@@ -201,6 +202,7 @@ mod tests {
         }
     }
 
+    // gtest: MergeLines.BothEnds
     #[test]
     fn both_ends() {
         // mergeLines handles merge from both ends
@@ -223,6 +225,7 @@ mod tests {
         }
     }
 
+    // gtest: MergeLines.CircularLines
     #[test]
     fn circular_lines() {
         // mergeLines handles circular lines
@@ -245,6 +248,7 @@ mod tests {
         }
     }
 
+    // gtest: MergeLines.EmptyOuterGeometry
     #[test]
     fn empty_outer_geometry() {
         let mut input = vec![symbol_feature_stub(GeometryCollection::new(), AAA)];
@@ -256,6 +260,7 @@ mod tests {
         assert_eq!(input[0].geometry, expected);
     }
 
+    // gtest: MergeLines.EmptyInnerGeometry
     #[test]
     fn empty_inner_geometry() {
         let mut input = vec![symbol_feature_stub(GeometryCollection::new(), AAA)];

@@ -3,7 +3,7 @@
 // callback runs on the RunLoop of the thread that created it.
 
 use crate::run_loop::{AsyncHandle, Core, RunLoop};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -19,6 +19,7 @@ impl AsyncTask {
         let run_loop = RunLoop::get();
         let handle = Rc::new(AsyncHandle {
             pending: Arc::new(AtomicBool::new(false)),
+            closed: Cell::new(false),
             task: RefCell::new(Box::new(task)),
             core: run_loop.core(),
         });
@@ -41,6 +42,14 @@ impl AsyncTask {
             pending: self.handle.pending.clone(),
             core: self.handle.core.clone(),
         }
+    }
+}
+
+impl Drop for AsyncTask {
+    /// `~AsyncTask()`: `uv_close` (gtests-core: the handle may outlive the
+    /// task while the loop runs it, so mark it closed).
+    fn drop(&mut self) {
+        self.handle.closed.set(true);
     }
 }
 

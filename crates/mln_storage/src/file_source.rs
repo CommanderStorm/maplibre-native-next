@@ -1,11 +1,9 @@
 // Ports include/mln/storage/file_source.hpp.
-//
-// TODO(port): `setResourceTransform` (ResourceTransform, online file
-// sources).
 
 use crate::async_request::AsyncRequest;
 use crate::resource::Resource;
 use crate::resource_options::ResourceOptions;
+use crate::resource_transform::ResourceTransform;
 use crate::response::Response;
 use maplibre_native_base::Value;
 use mln_util::client_options::ClientOptions;
@@ -72,6 +70,9 @@ pub trait FileSource: Send + Sync {
     /// that expired while the file source was paused.
     fn resume(&self) {}
 
+    /// Sets a transformer for resource URLs (online file sources).
+    fn set_resource_transform(&self, _transform: ResourceTransform) {}
+
     /// Generic setter method
     fn set_property(&self, _key: &str, _value: &Value) {}
     /// Generic getter method
@@ -84,6 +85,13 @@ pub trait FileSource: Send + Sync {
 
     fn set_client_options(&self, options: ClientOptions);
     fn get_client_options(&self) -> ClientOptions;
+
+    /// Port-only: the concrete file source, for C++'s
+    /// `std::static_pointer_cast<DatabaseFileSource>(fileSource)` on a file
+    /// source from the FileSourceManager. `None` unless overridden.
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 }
 
 // Properties that may be supported by online file sources:

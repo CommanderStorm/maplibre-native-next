@@ -87,6 +87,22 @@ rust_test(
 
 # Ports test/gl/bucket.test.cpp (circle, fill, line; on the WebGPU headless
 # backend) and test/renderer/fill_bucket.test.cpp.
+# gtests-data: the test/style/** gtests that need FormatSectionOverride.
+rust_test(
+    name = "format_section_override_test",
+    srcs = ["tests/format_section_override_test.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_conversion",
+        "//crates/mln_expression",
+        "//crates/mln_style",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:serde_json",
+    ],
+)
+
 rust_test(
     name = "bucket_test",
     srcs = ["tests/bucket_test.rs"],
@@ -161,4 +177,84 @@ rust_test(
     name = "gl_test",
     srcs = glob(["tests/gl/*.rs"]),
     crate_root = "tests/gl/main.rs",
+)
+
+# gtests-core: test/algorithm/update_renderables.test.cpp.
+rust_test(
+    name = "gtest_update_renderables",
+    srcs = ["tests/gtest_update_renderables.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+    ],
+)
+
+# gtests-core: test/geometry/line_atlas.test.cpp.
+rust_test(
+    name = "gtest_line_atlas",
+    srcs = ["tests/gtest_line_atlas.rs"],
+    deps = [":mln_renderer"],
+)
+
+# gtests-core: test/renderer/image_manager.test.cpp.
+rust_test(
+    name = "gtest_image_manager",
+    srcs = ["tests/gtest_image_manager.rs"],
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_actor",
+        "//crates/mln_sprite",
+        "//crates/mln_style_types",
+        "//crates/mln_util",
+    ],
+)
+
+# gtests-core: test/renderer/pattern_atlas.test.cpp.
+rust_test(
+    name = "gtest_pattern_atlas",
+    srcs = ["tests/gtest_pattern_atlas.rs"],
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_sprite",
+        "//crates/mln_style_types",
+        "//crates/mln_util",
+        "//vendor/pixelmatch",
+    ],
+)
+
+# gtests-core: test/renderer/style_diff.test.cpp.
+rust_test(
+    name = "gtest_style_diff",
+    srcs = ["tests/gtest_style_diff.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_style",
+        "//crates/mln_util",
+    ],
+)
+
+# gtests-core: test/renderer/dynamic_texture_atlas.test.cpp.
+rust_test(
+    name = "gtest_dynamic_texture_atlas",
+    srcs = ["tests/gtest_dynamic_texture_atlas.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_style_types",
+        "//crates/mln_util",
+    ],
+)
+
+# Ports test/util/tile_range.test.cpp (marker `// gtest: Group.Name`).
+rust_test(
+    name = "gtest_tile_range",
+    srcs = ["tests/gtest_tile_range.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+    ],
 )

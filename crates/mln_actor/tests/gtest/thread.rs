@@ -2,7 +2,7 @@
 
 use crate::{Failures, get};
 use mln_actor::actor::Actor;
-use mln_actor::scheduler::{self, Scheduler, SchedulerPtr, Task, TaggedScheduler};
+use mln_actor::scheduler::{self, SchedulerPtr, Task, TaggedScheduler};
 use mln_actor::{ActorRef, RunLoop, Thread, Timer};
 use mln_util::chrono::{Duration, milliseconds};
 use mln_util::identity::SimpleIdentity;
@@ -515,8 +515,6 @@ fn pool_wait_add() {
     pool.wait_for_empty();
 
     assert!(state.added.load(Ordering::SeqCst) >= 1);
-    // The sequenced task must be done before `seq` goes away.
-    seq.wait_for_empty();
 }
 
 // gtest: Thread.PoolWaitException

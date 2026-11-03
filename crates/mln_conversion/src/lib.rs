@@ -16,3 +16,6 @@ pub use conversion::{
     is_object, is_undefined, object_member, to_bool, to_double, to_geojson, to_number, to_string, to_value,
 };
 pub use get_json_type::get_json_type;
+
+#[cfg(test)]
+mod tests;

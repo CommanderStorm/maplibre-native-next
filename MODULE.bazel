@@ -55,10 +55,22 @@ crate.spec(
     package = "earcut",
     version = "0.4",
 )
+# zlib backend (libz-sys) instead of miniz_oxide: util::compress output must be
+# byte-identical to the zlib the C++ links (offline database stored sizes and
+# ambient-cache accounting; OfflineDatabase.PutReturnsSize).
 crate.spec(
+    default_features = False,
+    features = ["zlib"],
     package = "flate2",
     version = "1",
 )
+crate.annotation(
+    crate = "libz-sys",
+    deps = ["@@//third_party/zlib:system"],
+    gen_build_script = "off",
+    repositories = ["next_crates"],
+)
+
 # platform/glfw: links the GLFW from the dev shell (dynamic-link) instead of
 # downloading prebuilt libraries in a build script; raw window handles give
 # wgpu its surface.

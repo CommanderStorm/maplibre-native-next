@@ -82,3 +82,17 @@ rust_test(
         "//crates/mln_util",
     ],
 )
+
+# Ports test/util/offscreen_texture.test.cpp (marker `// gtest: Group.Name`).
+rust_test(
+    name = "gtest_offscreen_texture",
+    srcs = ["tests/gtest_offscreen_texture.rs"],
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_webgpu",
+        "//crates/mln_gfx",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_util",
+        "//vendor/pixelmatch",
+    ],
+)

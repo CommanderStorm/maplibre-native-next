@@ -11,8 +11,12 @@ rust_library(
         "//crates/mln_actor",
         "//crates/mln_platform_default_image",
         "//crates/mln_util",
+        "//vendor/geojson",
         "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/pmtiles",
+        "//vendor/rapidjson",
         "@next_crates//:rusqlite",
+        "@next_crates//:serde_json",
         "@next_crates//:ureq",
     ],
 )
@@ -23,5 +27,30 @@ rust_test(
     data = [
         "@maplibre//metrics:render-test-files",
         "@maplibre//test:fixtures",
+    ],
+)
+
+# Ports test/util/http_timeout.test.cpp (marker `// gtest: Group.Name`).
+rust_test(
+    name = "gtest_http_timeout",
+    srcs = ["tests/gtest_http_timeout.rs"],
+    deps = [
+        ":mln_storage",
+        "//crates/mln_util",
+    ],
+)
+
+# test/storage/sync_file_source.test.cpp: needs a Map (mln_map,
+# mln_platform_default depend on this crate, so not in mln_storage_test).
+rust_test(
+    name = "sync_file_source_test",
+    srcs = ["tests/sync_file_source.rs"],
+    data = ["@maplibre//test:fixtures"],
+    deps = [
+        ":mln_storage",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_platform_default",
+        "//crates/mln_util",
     ],
 )

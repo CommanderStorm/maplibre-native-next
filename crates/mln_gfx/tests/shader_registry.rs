@@ -219,3 +219,36 @@ fn named_replace() {
     // Should be different instances
     assert!(!same(&prog_a, prog_b.as_ref().unwrap()));
 }
+
+// The three GLSL replacement tests are OpenGL-only in C++
+// (`#ifdef MLN_RENDER_BACKEND_OPENGL`) and disabled there (`DISABLED_`
+// prefix): they replace the legacy GL ClippingMaskProgram with GLSL sources,
+// render test/fixtures/api/water.json and compare with
+// test/fixtures/shader_registry/glsl_replace_*. The port's shaders are WGSL
+// on wgpu.
+
+/// Test replacing an actual program instance with a similar instance
+// gtest: ShaderRegistry.DISABLED_GLSLReplacement_NoOp
+#[test]
+#[ignore = "disabled in C++ (DISABLED_) and OpenGL-only (replaces the legacy GL ClippingMaskProgram); the port's shaders are WGSL on wgpu"]
+fn disabled_glsl_replacement_no_op() {
+    // test/renderer/shader_registry.test.cpp:214
+}
+
+/// Test replacing an actual program with a similar instance using a
+/// different fragment shader
+// gtest: ShaderRegistry.DISABLED_GLSLReplacement1
+#[test]
+#[ignore = "disabled in C++ (DISABLED_) and OpenGL-only (GLSL fragment source for the legacy GL ClippingMaskProgram); the port's shaders are WGSL on wgpu"]
+fn disabled_glsl_replacement1() {
+    // test/renderer/shader_registry.test.cpp:241
+}
+
+/// Test replacing an actual program with a similar instance using a
+/// different fragment shader
+// gtest: ShaderRegistry.DISABLED_GLSLReplacement2
+#[test]
+#[ignore = "disabled in C++ (DISABLED_) and OpenGL-only (GLSL fragment source for the legacy GL ClippingMaskProgram); the port's shaders are WGSL on wgpu"]
+fn disabled_glsl_replacement2() {
+    // test/renderer/shader_registry.test.cpp:275
+}

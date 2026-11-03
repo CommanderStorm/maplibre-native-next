@@ -25,7 +25,7 @@
 
 use crate::scheduler::{self, Scheduler};
 use crate::timer::TimerHandle;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -137,6 +137,10 @@ impl Core {
 /// callback that runs on the loop's thread.
 pub(crate) struct AsyncHandle {
     pub(crate) pending: Arc<AtomicBool>,
+    /// gtests-core: set when the AsyncTask is destroyed (`uv_close`): a
+    /// signalled task that another callback of the same `run_once` destroys
+    /// must not fire (test/util/async_task.test.cpp DestroyAfterSignaling).
+    pub(crate) closed: Cell<bool>,
     pub(crate) task: RefCell<Box<dyn FnMut()>>,
     pub(crate) core: Arc<Core>,
 }
@@ -229,7 +233,7 @@ impl RunLoop {
             handles.iter().filter_map(Weak::upgrade).collect()
         };
         for handle in handles {
-            if handle.pending.swap(false, Ordering::SeqCst) {
+            if !handle.closed.get() && handle.pending.swap(false, Ordering::SeqCst) {
                 (handle.task.borrow_mut())();
             }
         }

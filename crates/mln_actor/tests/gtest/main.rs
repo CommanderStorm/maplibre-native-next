@@ -19,6 +19,7 @@ mod actor;
 mod actor_ref;
 mod async_task;
 mod run_loop;
+mod settings;
 mod thread;
 mod thread_local;
 mod timer;

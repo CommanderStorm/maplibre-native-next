@@ -382,17 +382,19 @@ impl OfflineRegionStatus {
 
 /// `OfflineRegionObserver`: a region can have a single observer, which gets
 /// notified whenever a change to the region's status occurs. The methods
-/// run on the database thread.
+/// run on the database thread. They take `&self` (C++: non-const virtuals):
+/// the download calls them re-entrantly, e.g. an observer that deactivates
+/// the download from `statusChanged` gets a nested `statusChanged`.
 pub trait OfflineRegionObserver {
     /// Notified of a change in the status of an offline region.
-    fn status_changed(&mut self, _status: OfflineRegionStatus) {}
+    fn status_changed(&self, _status: OfflineRegionStatus) {}
 
     /// Notified of errors encountered while downloading regional resources.
-    fn response_error(&mut self, _error: ResponseError) {}
+    fn response_error(&self, _error: ResponseError) {}
 
     /// Notified when the limit on the number of Mapbox tiles stored for
     /// offline regions has been reached.
-    fn mapbox_tile_count_limit_exceeded(&mut self, _limit: u64) {}
+    fn mapbox_tile_count_limit_exceeded(&self, _limit: u64) {}
 }
 
 /// `OfflineRegion`.

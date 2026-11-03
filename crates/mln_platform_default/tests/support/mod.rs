@@ -101,6 +101,7 @@ pub fn get_image_diff(base: &str, actual: &PremultipliedImage, pixel_threshold: 
 
 /// `test::checkImage(base, actual, imageThreshold, pixelThreshold)`: the
 /// C++ defaults are 0 and 0.
+#[track_caller]
 pub fn check_image(base: &str, actual: &PremultipliedImage, image_threshold: f64, pixel_threshold: f64) {
     let diff = get_image_diff(base, actual, pixel_threshold);
     assert!(
@@ -124,6 +125,7 @@ pub fn center_pixel(image: &PremultipliedImage) -> [u8; 4] {
 // MARK: - ASSERT_DOUBLE_EQ
 
 /// gtest's `DoubleNear`-free `ASSERT_DOUBLE_EQ`: within 4 ULPs.
+#[track_caller]
 pub fn assert_double_eq(actual: f64, expected: f64) {
     fn biased(x: f64) -> u64 {
         let bits = x.to_bits();
@@ -140,6 +142,7 @@ pub fn assert_double_eq(actual: f64, expected: f64) {
 }
 
 /// `EXPECT_NEAR(a, b, tolerance)`.
+#[track_caller]
 pub fn assert_near(actual: f64, expected: f64, tolerance: f64) {
     assert!(
         (actual - expected).abs() <= tolerance,
@@ -411,6 +414,7 @@ impl Drop for FixtureLog {
 
 /// `runLoop.run()`, stopped (and failed) after `seconds` if nothing stopped
 /// it: a hang fails the test instead of running into the Bazel timeout.
+#[track_caller]
 pub fn run_with_timeout(run_loop: &RunLoop, seconds: i64) {
     let timed_out = Rc::new(Cell::new(false));
     let timer = Timer::new();
