@@ -10,10 +10,12 @@
 // at once, the first one registered wins and the other is dropped.
 
 use crate::asset_file_source::AssetFileSource;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::database_file_source::DatabaseFileSource;
 use crate::file_source::{FileSource, FileSourceType};
 use crate::local_file_source::LocalFileSource;
 use crate::main_resource_loader::MainResourceLoader;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use crate::mbtiles_file_source::MBTilesFileSource;
 use crate::online_file_source::OnlineFileSource;
 use crate::pmtiles_file_source::PMTilesFileSource;
@@ -68,6 +70,8 @@ impl FileSourceManager {
                     Arc::new(AssetFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
                 }),
             );
+            // No SQLite in the browser (see the crate docs).
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             manager.register_file_source_factory(
                 FileSourceType::Database,
                 Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
@@ -80,6 +84,8 @@ impl FileSourceManager {
                     Arc::new(LocalFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
                 }),
             );
+            // No SQLite in the browser (see the crate docs).
+            #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
             manager.register_file_source_factory(
                 FileSourceType::Mbtiles,
                 Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {

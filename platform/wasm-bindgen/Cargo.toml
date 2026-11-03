@@ -17,9 +17,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 maplibre-native-next = { path = "../../target/release-crate/maplibre-native-next" }
 console_error_panic_hook = "0.1"
-# rusqlite's bundled SQLite on wasm32-unknown-unknown needs host functions
-# (clock, randomness); this feature implements them with wasm-bindgen.
-sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
 js-sys = "0.3"
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"

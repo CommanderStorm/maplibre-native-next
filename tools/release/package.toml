@@ -31,6 +31,10 @@ version = "0.15.0"
 # instead.
 ureq = 'cfg(not(target_family = "wasm"))'
 
+# The browser build (wasm32-unknown-unknown) has no SQLite: mln_storage leaves
+# its database and MBTiles file sources out, and no C compiler is needed.
+rusqlite = 'cfg(not(all(target_family = "wasm", target_os = "unknown")))'
+
 # The wasm-bindgen browser build (wasm32-unknown-unknown): mln_storage's
 # fetch transport.
 js-sys = 'cfg(all(target_family = "wasm", target_os = "unknown"))'
@@ -44,9 +48,11 @@ web-sys = 'cfg(all(target_family = "wasm", target_os = "unknown"))'
 'cfg(not(all(target_family = "wasm", target_os = "unknown")))' = {}
 'cfg(all(target_family = "wasm", target_os = "unknown"))' = { default-features = false, features = ["rust_backend"] }
 
-# In the browser the port renders through the custom backend over webgpu.h
-# (mln_wgpu_webgpu_h); wgpu's GLES backend would link EGL 1.5 functions that
-# Emscripten doesn't provide.
+# In the Emscripten browser build the port renders through the custom backend
+# over webgpu.h (mln_wgpu_webgpu_h); wgpu's GLES backend would link EGL 1.5
+# functions that Emscripten doesn't provide. The wasm-bindgen browser build
+# uses wgpu's own WebGPU backend, without the WebGL one.
 [target-dependencies.wgpu]
-'cfg(not(target_os = "emscripten"))' = {}
+'cfg(not(target_family = "wasm"))' = {}
 'cfg(target_os = "emscripten")' = { default-features = false, features = ["custom", "parking_lot", "std", "wgsl"] }
+'cfg(all(target_family = "wasm", target_os = "unknown"))' = { default-features = false, features = ["parking_lot", "std", "webgpu", "wgsl"] }
