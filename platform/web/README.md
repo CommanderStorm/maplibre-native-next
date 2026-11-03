@@ -71,8 +71,8 @@ understand. Serve them from the page's origin: browsers don't start module
 workers from another origin, so loading the package from a CDN won't work.
 
 The map loads two modules depending on cross-origin isolation, `wasm/single`
-or `wasm/threads`. It downloads only the one it uses (about 2 MB with
-compression).
+or `wasm/threads`. It downloads only the one it uses: about 1.6 MB with
+brotli, 2.3 MB with gzip.
 
 ## API
 
