@@ -9,6 +9,9 @@ use mln_util::chrono::TimePoint;
 use mln_util::immutable::Immutable;
 use std::sync::Arc;
 
+// Port-only Clone: a renderer on another thread than the map (a host's
+// graphics thread) receives a copy, since TransformState's caches aren't Sync.
+#[derive(Clone)]
 pub struct UpdateParameters {
     pub style_loaded: bool,
     pub mode: MapMode,

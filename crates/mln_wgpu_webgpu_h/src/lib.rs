@@ -50,7 +50,45 @@ pub use resource::{
     BindGroup, BindGroupLayout, Buffer, MappedRange, PipelineLayout, RenderPipeline, Sampler, ShaderModule,
     StagingBuffer, Texture, TextureView,
 };
-pub use surface::{Surface, SurfaceOutputDetail, canvas_surface_target};
+pub use surface::{Surface, SurfaceOutputDetail, canvas_surface_target, host_surface_target};
+
+/// wgpu objects over a `WGPUInstance` and `WGPUDevice` that the host created
+/// through webgpu.h on this thread: the instance and the device with its
+/// queue. Each wrapper takes its own reference, so the host keeps its own.
+/// Make surfaces with [`host_surface_target`].
+///
+/// The instance must have the `TimedWaitAny` feature: the backend blocks in
+/// `wgpuInstanceWaitAny`. The device's lost and uncaptured-error callbacks
+/// stay the host's, so `wgpu::Device::on_uncaptured_error` handlers don't
+/// run for it.
+///
+/// # Safety
+///
+/// `instance` and `device` are valid handles created on this thread, and
+/// `device` comes from `instance`.
+pub unsafe fn wrap_host_objects(
+    instance: core::ptr::NonNull<core::ffi::c_void>,
+    device: core::ptr::NonNull<core::ffi::c_void>,
+) -> (wgpu::Instance, wgpu::Device, wgpu::Queue) {
+    let raw_instance: sys::WGPUInstance = instance.as_ptr().cast();
+    let raw_device: sys::WGPUDevice = device.as_ptr().cast();
+    unsafe {
+        sys::wgpuInstanceAddRef(raw_instance);
+        sys::wgpuDeviceAddRef(raw_device);
+    }
+    let instance = Instance::from_host(
+        unsafe { handle::InstanceHandle::from_raw(raw_instance) }.expect("a non-null instance"),
+    );
+    let device = unsafe { handle::DeviceHandle::from_raw(raw_device) }.expect("a non-null device");
+    let (device, queue) = device::DeviceState::create(device::next_device_id(), device, instance.clone());
+    (wgpu::Instance::from_custom(instance), wgpu::Device::from_custom(device), wgpu::Queue::from_custom(queue))
+}
+
+/// The wgpu format of a `WGPUTextureFormat` that a canvas surface can have
+/// (BGRA8Unorm, RGBA8Unorm, RGBA16Float), or `None`.
+pub fn surface_texture_format(format: u32) -> Option<wgpu::TextureFormat> {
+    surface::texture_format_from(format as sys::WGPUTextureFormat)
+}
 
 /// Creates a `wgpu::Instance` on the browser's WebGPU through webgpu.h.
 ///

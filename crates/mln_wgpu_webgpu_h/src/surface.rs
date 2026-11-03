@@ -41,6 +41,24 @@ pub fn canvas_surface_target(selector: &'static CStr) -> wgpu::SurfaceTargetUnsa
     }
 }
 
+/// A surface target for a `WGPUSurface` that the host created on this
+/// thread, for `wgpu::Instance::create_surface_unsafe` on an instance from
+/// [`crate::wrap_host_objects`]. The surface wrapper takes its own
+/// reference.
+///
+/// The surface travels as the pointer of a `WebOffscreenCanvas` window
+/// handle, which only this backend understands.
+///
+/// # Safety
+///
+/// `surface` is a valid `WGPUSurface` created on this thread.
+pub unsafe fn host_surface_target(surface: NonNull<core::ffi::c_void>) -> wgpu::SurfaceTargetUnsafe {
+    wgpu::SurfaceTargetUnsafe::RawHandle {
+        raw_display_handle: Some(rwh::RawDisplayHandle::Web(rwh::WebDisplayHandle::new())),
+        raw_window_handle: rwh::RawWindowHandle::WebOffscreenCanvas(rwh::WebOffscreenCanvasWindowHandle::new(surface)),
+    }
+}
+
 /// A `wgpu::Surface` backend over a WGPUSurface.
 #[derive(Debug)]
 pub struct Surface {
@@ -71,6 +89,14 @@ pub(crate) fn create_surface(
     let wgpu::SurfaceTargetUnsafe::RawHandle { raw_window_handle, .. } = target else {
         unimplemented!("mln_wgpu_webgpu_h: surfaces need a canvas window handle");
     };
+    // host_surface_target: the host's own WGPUSurface.
+    if let rwh::RawWindowHandle::WebOffscreenCanvas(handle) = raw_window_handle {
+        let surface: WGPUSurface = handle.obj.as_ptr().cast();
+        unsafe { wgpuSurfaceAddRef(surface) };
+        let raw = unsafe { SurfaceHandle::from_raw(surface) };
+        let raw = created(raw, "surface (a null WGPUSurface)");
+        return Ok(DispatchSurface::custom(Surface { raw, instance: instance.clone(), device: RefCell::new(None) }));
+    }
     // emdawnwebgpu reads the selector as a C string, whatever its length.
     let selector = match raw_window_handle {
         // canvas_surface_target: a NUL-terminated selector.
@@ -93,7 +119,7 @@ pub(crate) fn create_surface(
     Ok(DispatchSurface::custom(Surface { raw, instance: instance.clone(), device: RefCell::new(None) }))
 }
 
-fn texture_format_from(format: WGPUTextureFormat) -> Option<wgpu::TextureFormat> {
+pub(crate) fn texture_format_from(format: WGPUTextureFormat) -> Option<wgpu::TextureFormat> {
     Some(match format {
         WGPUTextureFormat_BGRA8Unorm => wgpu::TextureFormat::Bgra8Unorm,
         WGPUTextureFormat_RGBA8Unorm => wgpu::TextureFormat::Rgba8Unorm,

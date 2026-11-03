@@ -409,6 +409,23 @@ impl RenderableResource for SurfaceRenderableResource {
     }
 }
 
+/// What `SurfaceBackend::finish` builds on.
+struct Parts {
+    instance: wgpu::Instance,
+    adapter: Option<wgpu::Adapter>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+}
+
+/// The surface configuration `SurfaceBackend::finish` uses.
+struct SurfaceChoice {
+    swap_chain_format: wgpu::TextureFormat,
+    surface_usage: wgpu::TextureUsages,
+    present_mode: wgpu::PresentMode,
+    depth_stencil_format: wgpu::TextureFormat,
+}
+
 /// `GLFWWebGPUBackend` without the window: a `webgpu::RendererBackend` and
 /// `gfx::Renderable` presenting to a surface.
 pub struct SurfaceBackend {
@@ -494,6 +511,72 @@ impl SurfaceBackend {
             surface_usage |= wgpu::TextureUsages::COPY_SRC;
         }
 
+        let present_mode = if capabilities.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+        Ok(Self::finish(
+            renderer_backend,
+            Parts { instance, adapter: Some(adapter), device, queue, surface },
+            SurfaceChoice { swap_chain_format, surface_usage, present_mode, depth_stencil_format },
+            framebuffer_size,
+            cap_frame_rate,
+            adapter_info,
+        ))
+    }
+
+    /// Port-only: a backend on a device and surface that the host created,
+    /// as maplibre-native-ffi's `mln_map_attach_web_gpu_surface` passes them
+    /// (wrapped by `mln_wgpu_webgpu_h::wrap_host_objects`). There is no
+    /// adapter: the surface is configured with `format`, for rendering only,
+    /// and presents in FIFO order, which every surface supports.
+    pub fn from_host(
+        instance: wgpu::Instance,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+        format: wgpu::TextureFormat,
+        framebuffer_size: Size,
+    ) -> SurfaceBackend {
+        let renderer_backend = RendererBackend::new(ContextMode::Unique);
+        let adapter_info = device.adapter_info();
+        let depth_stencil_format = if device.features().contains(wgpu::Features::DEPTH32FLOAT_STENCIL8) {
+            wgpu::TextureFormat::Depth32FloatStencil8
+        } else {
+            wgpu::TextureFormat::Depth24PlusStencil8
+        };
+        device.on_uncaptured_error(std::sync::Arc::new(|error: wgpu::Error| {
+            Log::error(Event::Render, format!("WebGPU validation error: {error}"));
+        }));
+        renderer_backend.set_depth_stencil_format(Some(depth_stencil_format));
+        Self::finish(
+            renderer_backend,
+            Parts { instance, adapter: None, device, queue, surface },
+            SurfaceChoice {
+                swap_chain_format: format,
+                surface_usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                present_mode: wgpu::PresentMode::Fifo,
+                depth_stencil_format,
+            },
+            framebuffer_size,
+            true,
+            adapter_info,
+        )
+    }
+
+    /// The rest of the construction, once the device, surface and formats
+    /// are there.
+    fn finish(
+        renderer_backend: RendererBackend,
+        parts: Parts,
+        choice: SurfaceChoice,
+        framebuffer_size: Size,
+        cap_frame_rate: bool,
+        adapter_info: wgpu::AdapterInfo,
+    ) -> SurfaceBackend {
+        let Parts { instance, adapter, device, queue, surface } = parts;
+        let SurfaceChoice { swap_chain_format, surface_usage, present_mode, depth_stencil_format } = choice;
         renderer_backend.set_color_format(Some(swap_chain_format));
 
         let backend_impl = renderer_backend.backend_impl().clone();
@@ -512,11 +595,7 @@ impl SurfaceBackend {
             last_configured_size: Cell::new(Size::default()),
             consecutive_errors: Cell::new(0),
             enable_vsync: cap_frame_rate,
-            vsync_present_mode: if capabilities.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-                wgpu::PresentMode::Mailbox
-            } else {
-                wgpu::PresentMode::Fifo
-            },
+            vsync_present_mode: present_mode,
             framebuffer_size: Cell::new(framebuffer_size),
             last_swap_time: Cell::new(Instant::now()),
             readback_requested: Cell::new(false),
@@ -534,17 +613,17 @@ impl SurfaceBackend {
 
         // Store WebGPU instance, device and queue in the base class
         backend_impl.set_instance(Some(instance));
-        backend_impl.set_adapter(Some(adapter));
+        backend_impl.set_adapter(adapter);
         backend_impl.set_device(Some(device));
         backend_impl.set_queue(Some(queue));
 
         let resource = RenderableResourceBox::new_rc(SurfaceRenderableResource { state: state.clone() });
-        Ok(SurfaceBackend {
+        SurfaceBackend {
             renderer_backend,
             renderable: RenderableBase::new(framebuffer_size, Some(resource)),
             state,
             adapter_info,
-        })
+        }
     }
 
     pub fn webgpu_backend(&self) -> &RendererBackend {

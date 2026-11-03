@@ -35,6 +35,14 @@ impl Instance {
         &self.inner.raw
     }
 
+    /// An instance over `raw`, which the host created (see
+    /// [`crate::wrap_host_objects`]).
+    pub(crate) fn from_host(raw: InstanceHandle) -> Self {
+        Instance {
+            inner: Rc::new(InstanceInner { raw, backends: wgpu::Backends::BROWSER_WEBGPU, devices: RefCell::default() }),
+        }
+    }
+
     fn request_adapter_now(&self, options: &wgpu::RequestAdapterOptions<'_, '_>) -> Option<Adapter> {
         let raw_options = WGPURequestAdapterOptions {
             nextInChain: core::ptr::null_mut(),

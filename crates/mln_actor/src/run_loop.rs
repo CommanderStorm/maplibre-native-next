@@ -57,6 +57,9 @@ pub(crate) struct Core {
     condvar: Condvar,
     /// The holder handle is unref'd (`stop()` ran).
     stopped: AtomicBool,
+    /// Port-only: told about every wake-up, for a loop that a host drives
+    /// with `run_once` instead of `run` (see `RunLoop::set_waker`).
+    waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Core {
@@ -67,6 +70,7 @@ impl Core {
             signal: Mutex::new(false),
             condvar: Condvar::new(),
             stopped: AtomicBool::new(false),
+            waker: Mutex::new(None),
         }
     }
 
@@ -85,9 +89,15 @@ impl Core {
 
     /// Wakes a blocking `run()` (what `uv_async_send` does for libuv).
     pub(crate) fn wake(&self) {
-        let mut signalled = self.signal.lock().unwrap();
-        *signalled = true;
-        self.condvar.notify_all();
+        {
+            let mut signalled = self.signal.lock().unwrap();
+            *signalled = true;
+            self.condvar.notify_all();
+        }
+        let waker = self.waker.lock().unwrap().clone();
+        if let Some(waker) = waker {
+            waker();
+        }
     }
 
     fn wait(&self) {
@@ -218,6 +228,14 @@ impl RunLoop {
 
     pub fn invoke_with_priority(&self, priority: Priority, task: impl FnOnce() + Send + 'static) {
         self.inner.core.push(priority, Box::new(task));
+    }
+
+    /// Port-only: calls `waker`, from the waking thread, whenever this loop
+    /// gets work (a task or an AsyncTask send), so that a host that drives
+    /// the loop with `run_once` on its own thread knows to run it. Timers
+    /// don't wake: such a host runs the loop at least once a frame.
+    pub fn set_waker(&self, waker: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self.inner.core.waker.lock().unwrap() = waker;
     }
 
     /// `uv_run(loop, UV_RUN_NOWAIT)`.
