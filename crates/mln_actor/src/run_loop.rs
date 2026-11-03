@@ -16,10 +16,15 @@
 // other threads post to it, as they post through a C++ `RunLoop*`. The async
 // handles stay on the loop's thread.
 //
-// TODO(port): timers (`util::Timer`), fd watches (`addWatch`/`removeWatch`,
-// only for libcurl), `invokeCancellable`, `updateTime`, `setPlatformCallback`.
+// Timers (`util::Timer`, timer.rs) run first in `run_once`, as `uv_run` runs
+// due timers before the poll phase; a blocking `run()` sleeps until the next
+// timer is due. Timers do not keep `run()` alive (libuv unrefs them).
+//
+// TODO(port): fd watches (`addWatch`/`removeWatch`, only for libcurl),
+// `invokeCancellable`, `setPlatformCallback`.
 
 use crate::scheduler::{self, Scheduler};
+use crate::timer::TimerHandle;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
@@ -93,6 +98,19 @@ impl Core {
         *signalled = false;
     }
 
+    /// `wait`, but returns at `deadline` at the latest.
+    fn wait_until(&self, deadline: std::time::Instant) {
+        let mut signalled = self.signal.lock().unwrap();
+        while !*signalled {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            signalled = self.condvar.wait_timeout(signalled, deadline - now).unwrap().0;
+        }
+        *signalled = false;
+    }
+
     fn process(&self) {
         loop {
             let task = {
@@ -126,6 +144,7 @@ pub(crate) struct AsyncHandle {
 struct Inner {
     core: Arc<Core>,
     handles: RefCell<Vec<Weak<AsyncHandle>>>,
+    timers: RefCell<Vec<Weak<TimerHandle>>>,
 }
 
 thread_local! {
@@ -154,6 +173,7 @@ impl RunLoop {
         let inner = Rc::new(Inner {
             core: Arc::new(Core::new()),
             handles: RefCell::new(Vec::new()),
+            timers: RefCell::new(Vec::new()),
         });
         CURRENT.with(|c| *c.borrow_mut() = Some(inner.clone()));
         let scheduler: Arc<dyn Scheduler + Send + Sync> = Arc::new(RunLoopHandle {
@@ -198,6 +218,7 @@ impl RunLoop {
 
     /// `uv_run(loop, UV_RUN_NOWAIT)`.
     pub fn run_once(&self) {
+        self.run_timers();
         if self.inner.core.queue_pending.swap(false, Ordering::SeqCst) {
             self.inner.core.process();
         }
@@ -223,9 +244,53 @@ impl RunLoop {
             if core.stopped.load(Ordering::SeqCst) {
                 return;
             }
-            core.wait();
+            match self.next_timer_due() {
+                Some(deadline) => core.wait_until(deadline),
+                None => core.wait(),
+            }
         }
     }
+
+    /// `uv__run_timers`: runs the timers that are due, earliest first (ties
+    /// in start order). A callback may stop, restart or drop any timer.
+    fn run_timers(&self) {
+        let now = std::time::Instant::now();
+        let mut due: Vec<Rc<TimerHandle>> = {
+            let mut timers = self.inner.timers.borrow_mut();
+            timers.retain(|t| t.strong_count() > 0);
+            timers
+                .iter()
+                .filter_map(Weak::upgrade)
+                .filter(|t| t.due.get().is_some_and(|d| d <= now))
+                .collect()
+        };
+        due.sort_by_key(|t| (t.due.get(), t.start_id.get()));
+        for timer in due {
+            // An earlier callback may have stopped or restarted it.
+            if timer.due.get().is_some_and(|d| d <= now) {
+                timer.fire(now);
+            }
+        }
+    }
+
+    /// The earliest due time of this loop's running timers.
+    fn next_timer_due(&self) -> Option<std::time::Instant> {
+        self.inner
+            .timers
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter_map(|t| t.due.get())
+            .min()
+    }
+
+    pub(crate) fn register_timer(&self, timer: &Rc<TimerHandle>) {
+        self.inner.timers.borrow_mut().push(Rc::downgrade(timer));
+    }
+
+    /// `updateTime()`: libuv caches the loop time; this loop reads the clock
+    /// whenever it needs it, so there is nothing to update.
+    pub fn update_time(&self) {}
 
     /// `stop()`: `invoke([&] { uv_unref(holder) })`.
     pub fn stop(&self) {

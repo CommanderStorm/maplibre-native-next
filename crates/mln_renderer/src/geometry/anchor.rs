@@ -1,0 +1,21 @@
+// Ports src/mln/geometry/anchor.hpp.
+
+use maplibre_native_base::Point;
+
+/// `Anchor`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anchor {
+    pub point: Point<f32>,
+    pub angle: f32,
+    pub segment: Option<usize>,
+}
+
+impl Anchor {
+    /// `Anchor(x, y, angle, segment = std::nullopt)`.
+    pub fn new(x: f32, y: f32, angle: f32, segment: Option<usize>) -> Self {
+        Anchor { point: Point::new(x, y), angle, segment }
+    }
+}
+
+/// `Anchors`.
+pub type Anchors = Vec<Anchor>;

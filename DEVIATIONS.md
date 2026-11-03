@@ -188,9 +188,12 @@ account for it.
 - **[webgpu] Registered shader types** (renderer_backend.cpp `initShaders`).
   C++ registers all 31 WebGPU shader groups; the port registers those whose
   attribute/texture tables (src/mln/shaders/webgpu/*.cpp) are ported:
-  BackgroundShader, BackgroundPatternShader, ClippingMaskProgram. The WGSL of
-  all of them is extracted (tools/extract_wgsl.rs). Others arrive with their
-  layers.
+  BackgroundShader, BackgroundPatternShader, ClippingMaskProgram, and (M3,
+  layers) CircleShader, FillShader, FillOutlineShader, FillPatternShader,
+  FillOutlinePatternShader, FillOutlineTriangulatedShader, LineShader,
+  LineGradientShader, LinePatternShader, LineSDFShader,
+  LineGradientSDFShader. The WGSL of all of them is extracted
+  (tools/extract_wgsl.rs). Others arrive with their layers.
 - **[expression] nunicode `b4_utf8` writes invalid UTF-8**
   (vendor/nunicode/include/libnu/utf8_internal.h). For 4-byte codepoints with
   bit 12 set, the C puts that bit into the third byte (mask `0x001F00`
@@ -489,3 +492,210 @@ account for it.
   `__stable_sort_adaptive_resize` when it cannot allocate the `(n + 1) / 2`
   buffer; the port only has the full-buffer path (an allocation failure
   aborts). Results are identical whenever the C++ allocation succeeds.
+- **[shaping] BiDi on unicode-bidi instead of ICU's ubidi**
+  (platform/default/src/mln/text/bidi.cpp; policy change of 2026-11-03).
+  Levels, paragraphs and visual runs come from `unicode-bidi` 0.3.18
+  (UAX #9 at Unicode 16.0); the C++ uses ICU 78.3's ubidi (Unicode 17.0).
+  The port writes runs as `ubidi_writeReordered`/`ubidi_writeReverse` with
+  UBIDI_DO_MIRRORING | UBIDI_REMOVE_BIDI_CONTROLS do (RTL runs reversed by
+  code point and mirrored with ICU 78.3's u_charMirror data; ZWNJ, ZWJ, LRM,
+  RLM, LRE..RLO, LRI..PDI dropped). Known differences, not yet measured
+  against ICU: ICU treats CR LF as one paragraph separator, unicode-bidi
+  splits after each (an extra line break inside "\r\n"); ICU's line-level
+  L1 handling (setTrailingWSStart, the trailing-WS run's odd bit) and
+  bracket-pair quirks may differ from unicode-bidi's; Bidi_Class of code
+  points new in Unicode 17. The bidi.test.cpp gtests pass unchanged.
+  Arabic letter shaping (`applyArabicShaping`) is a port of ICU 78.3's
+  u_shapeArabic for the options bidi.cpp passes (no crate implements it).
+  `getShaping`'s `static_cast<uint32_t>` of a negative image display size
+  and `static_cast<int32_t>` of an infinite line count are UB in C++; the
+  port's `as` casts saturate.
+- **[mlt] MLT tiles are decoded by mlt-core 0.22.1, not the C++ decoder**
+  (src/mln/tile/vector_mlt_tile_data.cpp on vendor/maplibre-tile-spec/cpp).
+  `crates/mln_tile/src/mlt.rs` fills the C++ decoder's output model from
+  mlt-core; `vector_mlt_tile_data.rs` ports the glue. On every fixture tile
+  both decoders read, `//difftest/mlt` finds no difference (layers, types,
+  ids, property variants and bits, scaled geometry, triangles, log). Known
+  differences:
+  1. *DOUBLE columns stored as 4-byte floats* (fixtures `14-4357-6245`,
+     `counties-7-37-48`, `mapbox.mapbox-streets-v7/4-4-7`, `4-5-7` and their
+     copies in `metrics/cache-style.db`): each has one optional DOUBLE
+     column (`len`, `pop_density`, `area`) whose data stream holds
+     `num_values` binary32 values (`byte_length = 4 * num_values`). The spec
+     defines DOUBLE as IEEE754 binary64; the C++ decoder has a compatibility
+     branch ("tilesets encoded before double support was added",
+     decode/property.hpp) that widens the floats; mlt-core rejects the tile
+     ("decodable stream size expected 2n, got n"), so the Rust tile has no
+     layers and logs "MLT parse failed: ...". Not an RLE check, as an earlier
+     note said. Minimal reproducer (31 bytes, one point, DOUBLE "v" = 1.5f):
+     `1e 01 01 61 80 20 02 04 1a 01 76 02 10 02 01 01 00 13 42 02 02 02 04
+     10 00 01 04 00 00 c0 3f` (`mlt_difftest.rs` `DOUBLE_AS_FLOAT_TILE`).
+     No render or query test uses these tiles (the five `source-replace` MLT
+     render tests load others), so it is a recorded tolerance.
+  2. *Malformed tiles* (measured by `mlt_difftest` `mutations`, not
+     asserted): mlt-core rejects invalid UTF-8, extent 0, empty layer names
+     and inconsistent offsets that the C++ accepts or reads out of bounds;
+     the C++ rejects integer streams with physical technique NONE, varints
+     over 32 bits and trailing layer bytes that mlt-core accepts; the C++
+     always applies componentwise delta to vertex streams, mlt-core follows
+     the stream's logical encoding. mlt-core also caps decoded memory at
+     64 MiB per tile (C++: no cap). Error texts after "MLT parse failed: "
+     are mlt-core's.
+  3. Ported C++ quirks: MULTIPOLYGON geometries start with one empty ring per
+     ring (`lines.emplace(n)` + `back_inserter`); multi-points report
+     `FeatureType::LineString`; `getProperties` after a throwing column keeps
+     the partial map in wire order (C++: hash order). `getFeature` past the
+     end panics (C++: unchecked index).
+- **[layers] Buckets hold plain vectors; drawables get copies**
+  (renderer/buckets/*.hpp, render_{circle,fill,line}_layer.cpp). C++ buckets
+  own `std::shared_ptr<gfx::VertexVector>`/`IndexVector`s that the drawables
+  share (and that the backend attaches GPU buffers to). A Rust bucket is
+  built on the worker thread and shared as `Arc<dyn Bucket>` (Send + Sync),
+  so it holds `Vec`s, and the render layer copies them into the
+  render-thread `Rc` gfx vectors when it builds a tile's drawables (once per
+  tile and bucket, as C++ builds the drawables). Same vertex/index data on
+  the GPU. Feature-state updates of binders (`Bucket::update`) are a
+  TODO(port) (no M3 render test uses feature state outside patterns).
+- **[layers] Layouts keep feature indices** (layout/circle_layout.hpp,
+  pattern_layout.hpp). C++ layouts keep the `unique_ptr<GeometryTileFeature>`s
+  their filter accepted; a Rust feature borrows its tile layer, so the
+  layouts keep the indices (and sort keys) and get the features again in
+  `createBucket`. Same features, same order.
+- **[layers] gfx/fill_generator lives in mln_renderer**
+  (src/mln/gfx/fill_generator.cpp): it includes the renderer's bucket
+  headers (vertex types, `FillBucket::layoutVertex`,
+  `LineBucket::layoutVertex`), so it is `mln_renderer::gfx::fill_generator`;
+  the generic `gfx/polyline_generator.cpp` is `mln_gfx::polyline_generator`.
+- **[layers] LineAtlas keyed by value** (geometry/line_atlas.cpp). C++ keys
+  the dash textures by a hash of the dash arrays and cap and ignores hash
+  collisions; the port keys by the values (float bits). Same textures
+  without the collision case.
+- **[layers] Fill outlines with data-driven color/opacity**
+  (render_fill_layer.cpp, `MLN_TRIANGULATE_FILL_OUTLINES`). As in the C++
+  WebGPU backend, data-driven outlines are drawn as `gfx::Lines(2)`, which
+  WebGPU rasterizes 1px wide, so `fill-outline-color/{property-function,
+  zoom-and-property-function}` differ from the OpenGL baselines; C++ WebGPU
+  ignores both (metrics/ignores/platform-macos-webgpu.json), the port lists
+  them in tools/render-test/ignores/rust-port.json with that reason.
+- **[mlt] Spec compliance over C++ compatibility (user decision, 2026-11-03).**
+  Four fixture tiles (metrics/integration/tiles/14-4357-6245.mlt,
+  counties-7-37-48.mlt, mapbox.mapbox-streets-v7/4-4-7.mlt and 4-5-7.mlt, and
+  the same tiles in metrics/cache-style.db) store a DOUBLE column as 4-byte
+  floats. The MLT spec defines DOUBLE as an 8-byte IEEE754 value; only the C++
+  decoder's legacy path accepts them, and mlt-core rejects them. The port
+  stays spec compliant: `//difftest/mlt` ignores these tiles by name
+  (`NON_SPEC_TILES`) and fails on any other tile with the same pattern, and the
+  test documenting the C++ behaviour is `#[ignore]`d. To do (upstream,
+  maplibre-native): re-encode these fixtures with real doubles. No render or
+  query test uses them.
+- **[sources] Sources and tiles are handles to `Rc`'d state** (style/source.cpp,
+  sources/*, tile/tile.cpp, geometry_tile.cpp, renderer/render_source.cpp).
+  C++ sources, tiles and render sources are reached from asynchronous
+  callbacks through raw pointers / WeakPtrs (`observer->onSourceLoaded(*this)`,
+  the worker's `ActorRef<GeometryTile>`, TileLoader request callbacks).
+  The port keeps the mutable state in cells behind an `Rc` that the callbacks
+  reach through a `Weak`; every `Source`/`Tile` method takes `&self`.
+  `Style::Impl`'s `sources.update(source)` (onSourceLoaded/Changed) happens
+  when the impls are read (`get_source_impls` picks up every changed source
+  impl). Observers get the tile's `TileBase` (C++ `Tile&`) and the render
+  source's id (C++ `RenderSource&`). A `RenderTile` copies the tile id and
+  hold-for-fade state when prepared (C++ keeps a `Tile&`).
+- **[sources] Tile worker threads** (tile/geometry_tile_worker.cpp,
+  actor/actor.hpp). GeometryTileWorker is a pool actor
+  (`mln_actor::actor::Actor`: object behind a mutex, one message at a time
+  on the thread pool); its replies reach the tile through the tile's mailbox
+  on the render thread. With `synchronousUpdate` the worker runs on the
+  render thread (C++ OptionalActor); a call into the synchronous worker
+  while it is running (C++ re-enters it) is logged and dropped (TODO(port)).
+  C++ `catch (...)` in the worker's handlers catches panics too
+  (`catch_unwind`), and `Err`s from `Layout::create_bucket`. GeoJSON tiles
+  use a sequenced scheduler as C++ (`get_sequenced`, ported next to the
+  GeoJSON source), geojson-vt behind a mutex. TileCache drops released
+  tiles on the render thread (C++: on the thread pool).
+- **[sources] Unported tile-pipeline parts**: the ImageManager (a tile's
+  image request, e.g. for *-pattern dependencies, is answered at once
+  without images, so the tile completes without its pattern), glyph
+  requests and symbol layouts, FeatureIndex's grid and queries, feature
+  state, debug buckets/drawables, raster/raster-dem/image/custom sources
+  (raster sources convert but have no render source: the orchestrator skips
+  their layers), `canonicalizeSourceURL`/`canonicalizeTileset` (mapbox://
+  URLs). C++ throws out of the style parse for a clustered GeoJSON source
+  with non-point features; the port reports it as the source conversion
+  error. JSON syntax errors in TileJSON/GeoJSON responses carry serde_json's
+  message. groupLayers keeps groups in first-appearance order (C++:
+  unordered_map order; only the feature index sort order, used by queries,
+  depends on it). Out-of-range numbers in GeoJSON options (`static_cast` UB
+  in C++) saturate. Covered by `//difftest/sources` (source conversion,
+  TilePyramid tile sets, GeoJSON tile features) and the render tests.
+- **[glfw] GLFW platform: Wayland first** (glfw_view.cpp `glfwInitHint(GLFW_PLATFORM,
+  GLFW_PLATFORM_X11)`). C++ forces X11 because Dawn lacks Wayland; wgpu
+  presents to Wayland, so `mln-glfw` tries Wayland, then X11
+  (`MLN_GLFW_PLATFORM=x11|wayland` forces one). GLFW events are polled and
+  dispatched from the window's queue right after `glfwPollEvents` (C++ runs
+  callbacks inside it); `swap()` does not call `glfwPollEvents`.
+- **[glfw] Window surface backend** (glfw_webgpu_backend_impl.ipp →
+  `mln_webgpu::SurfaceBackend`): the window reports its framebuffer size
+  instead of the backend calling `glfwGetFramebufferSize`; a pending resize
+  is applied before acquiring the next swapchain texture (C++ renders one
+  frame into the old-size texture with the new-size viewport, which Dawn
+  reports as a validation error); a zero-size (minimized) window keeps the
+  old configuration; wgpu validation errors are logged (the Dawn branch's
+  `logUncapturedError`) instead of panicking; the surface gets COPY_SRC when
+  supported (port-only `--readback`). The view skips a frame whose
+  swapchain texture can't be acquired (timeout/occluded) and retries on the
+  next tick; C++ renders it without a color attachment.
+- **[glfw] Style::loadURL response** (style_impl.cpp `loadURL` lambda capturing
+  `this`). The FileSource callback cannot reach the `&mut Style::Impl` that
+  the Map owns, so it queues the response and calls the port-only
+  `Observer::on_style_response`; the Map then runs
+  `Impl::process_style_responses` (the lambda body) and replays the observer
+  calls. Same order of effects, one RunLoop task later.
+- **[glfw] HTTP file source on ureq** (platform/default http_file_source.cpp,
+  curl). Transfers run on 20 worker threads (blocking ureq) instead of a curl
+  multi handle on the RunLoop; results come back to the requesting thread
+  through a mailbox, so callbacks run on the same thread as in C++. ureq
+  sends `Accept-Encoding: gzip` and decodes gzip (curl: "gzip, deflate");
+  transport errors carry ureq's message (C++: `curl_easy_strerror: buffer`),
+  mapped to `Connection` for DNS/connect/timeout/IO errors, else `Other`;
+  `Last-Modified`/`Expires` parse with the vendored parsedate (libcurl's
+  `curl_getdate` differs only after 2037). Status mapping, caching headers,
+  conditional requests and the user agent match C++. Not observable in the
+  app beyond error texts.
+- **[glfw] OnlineFileSource**: request sets are ordered by request id, not
+  pointer; ResourceTransform is a TODO(port); `normalizeSourceURL`'s
+  "You must provide API key" exception becomes an error response.
+- **[glfw] util::Timer on the port's RunLoop** (`mln_actor::Timer`): timers
+  run first in `run_once` and `run()` sleeps until the next one, like libuv;
+  millisecond truncation and the negative-timeout-never-fires quirk are kept.
+- **[glfw] mln-glfw command line and features**: hand-parsed options (C++'s
+  duplicate `-b`/`-F` short flags go to benchmark/showFeatures' places: `-b`
+  benchmark, bearing and fov long-only). Not ported (TODO(port), logged
+  when used): annotations, snapshots, queries, custom/GeoJSON demo sources,
+  extrusion/route/free-camera demos, location indicator, rendering stats,
+  render-test writer, settings load/save, SIGINT handling, database reset.
+  Port-only: `--readback FILE.png`, `--quit-after SECONDS`,
+  `--gesture-test`, and one summary log line of drawn/skipped layers.
+- **[conformance] Raster drawables get their own tile's texture**
+  (render_raster_layer.cpp `update`). C++ reuses one DrawableBuilder for all
+  tiles that need new drawables in a frame and calls `setTextures` only while
+  the builder has no texture yet; builders keep their textures across
+  `flush`, so every tile built in the same frame after the first is drawn
+  with the first tile's image (seen when several raster tiles finish
+  loading between two frames). The port creates a builder per tile, so each
+  tile shows its own image, as the baselines do. Textures live in the
+  render layer per bucket id (C++: `RasterBucket::texture2d`), because
+  buckets are shared across threads; two raster layers on one source
+  therefore have separate textures (C++ shares one, and the last
+  `setSamplerConfiguration` wins). Existing tile drawables are not handed
+  the (unchanged) static vertex attributes again every frame; they are
+  rebuilt when the bucket's mask geometry changed, as in C++.
+- **[conformance] PatternAtlas texture after the atlas grows**
+  (pattern_atlas.cpp `upload`, webgpu/texture2d.cpp `upload`). C++ uploads
+  the grown atlas image into the existing smaller texture, which Dawn
+  rejects with a validation error (wgpu: a fatal error). The port creates a
+  new texture of the new size. Only reachable when a second pattern no
+  longer fits the 64x64 start size.
+- **[conformance] `fill-extrusion-rounded-corner-distance`**
+  (geometry_tile_data.cpp `roundPolygonCorners`, fill_extrusion_bucket.cpp).
+  TODO(port): the port extrudes the unrounded polygon and logs one
+  warning. No render test sets the property.

@@ -21,8 +21,11 @@ pub enum ChangeRequest {
     /// orchestrator keeps the lists. The request is executed by
     /// `processChanges`, before the tweakers first run in the same frame.
     AddLayerTweaker(LayerGroupBasePtr, Weak<RefCell<dyn LayerTweaker>>),
-    // TODO(port): AddRenderTargetRequest / RemoveRenderTargetRequest (render
-    // targets: hillshade, heatmap, custom drawable layers).
+    // dem-heatmap: render targets (hillshade, heatmap).
+    /// `AddRenderTargetRequest`.
+    AddRenderTarget(crate::render_target::RenderTargetPtr),
+    /// `RemoveRenderTargetRequest`.
+    RemoveRenderTarget(crate::render_target::RenderTargetPtr),
 }
 
 pub type UniqueChangeRequest = ChangeRequest;

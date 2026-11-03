@@ -199,7 +199,7 @@ impl TileBase {
 
 /// The virtual interface of `Tile`.
 // TODO(port): queryRenderedFeatures, querySourceFeatures, getQueryPadding
-// and setFeatureState (queries and feature state, M6).
+// (queries, M6).
 pub trait Tile {
     fn base(&self) -> &TileBase;
 
@@ -233,6 +233,10 @@ pub trait Tile {
     fn set_layers(&self, _layers: &[Immutable<dyn LayerProperties>], _global_state: Option<Arc<GlobalStateMap>>) {}
 
     fn set_mask(&self, _mask: TileMask) {}
+
+    // layers: feature state
+    /// `setFeatureState(const LayerFeatureStates&)`.
+    fn set_feature_state(&self, _states: &crate::bucket::LayerFeatureStates) {}
 
     /// "holdForFade" is used to keep tiles in the render tree after they're
     /// no longer ideal tiles in order to allow symbols to fade out

@@ -1,22 +1,46 @@
 //! Ports `src/mln/renderer` (+ `include/mln/renderer`) and `util/tile_cover`.
 
+pub mod algorithm;
+pub mod bucket;
+pub mod bucket_parameters;
+pub mod buckets;
 pub mod change_request;
+pub mod geometry;
+pub mod gfx;
+pub mod group_by_layout;
 pub mod image_manager;
 pub mod layer_group;
 pub mod layer_tweaker;
+pub mod layermanager;
 pub mod layers;
+pub mod layout;
+pub mod line_atlas;
 pub mod paint_parameters;
+pub mod paint_property_binder;
+pub mod paint_property_statistics;
 pub mod pattern_atlas;
 pub mod render_layer;
+pub mod render_light;
 pub mod render_orchestrator;
 pub mod render_pass;
+pub mod render_source;
 pub mod render_static_data;
+pub mod render_target;
+pub mod render_tile;
 pub mod render_tree;
 pub mod renderer;
 pub mod renderer_frontend;
 pub mod renderer_impl;
 pub mod renderer_observer;
+pub mod source_state;
+pub mod sources;
 pub mod style_diff;
+pub mod text;
+pub mod tile;
+pub mod tile_mask;
+pub mod tile_parameters;
+pub mod tile_pyramid;
+pub mod tile_render_data;
 pub mod update_parameters;
 pub mod util;
 

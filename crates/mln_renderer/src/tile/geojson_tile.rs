@@ -114,6 +114,11 @@ impl Tile for GeoJSONTile {
         self.tile.set_show_collision_boxes(show);
     }
 
+    // layers: feature state
+    fn set_feature_state(&self, states: &crate::bucket::LayerFeatureStates) {
+        self.tile.set_feature_state(states);
+    }
+
     fn set_layers(&self, layers: &[Immutable<dyn LayerProperties>], global_state: Option<Arc<GlobalStateMap>>) {
         self.tile.set_layers(layers, global_state);
     }

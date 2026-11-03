@@ -3,29 +3,42 @@
 // impls into render layers, layer evaluation, the render tree, and the layer
 // group bookkeeping of the drawable path.
 //
-// Not yet ported (TODO(port) at each use): render sources and tiles (M3/M4),
-// the glyph and image managers beyond the loaded flag, the light, symbol
-// placement, queries, feature state, render targets, debug layer groups.
+// The orchestrator is the RenderSourceObserver of its render sources; their
+// tiles call it from asynchronous replies while the orchestrator is owned by
+// the renderer, so that half is `OrchestratorSourceObserver`, an `Rc` that
+// shares the orchestrator's observer.
+//
+// Not yet ported (TODO(port) at each use): the glyph and image managers
+// beyond the loaded flag, the light, symbol placement, queries, feature
+// state, render targets, debug layer groups.
 
 use crate::change_request::{ChangeRequest, UniqueChangeRequestVec};
+use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlas, DynamicTextureAtlasPtr};
 use crate::image_manager::ImageManager;
+use crate::text::glyph_manager::GlyphManager;
 use crate::layer_tweaker::LayerTweaker;
-use crate::layers::RenderBackgroundLayer;
+use crate::layermanager;
+use crate::line_atlas::LineAtlas;
 use crate::paint_parameters::PaintParameters;
 use crate::pattern_atlas::PatternAtlas;
 use crate::render_layer::{LayerPrepareParameters, RenderLayerPtr};
-use crate::render_tree::{LayerRenderItem, RenderTree, RenderTreeParameters};
+use crate::render_source::{self, RenderSource, RenderSourceObserver, SourcePrepareParameters};
+use crate::render_tree::{LayerRenderItem, RenderItem, RenderTree, RenderTreeParameters};
+use crate::tile::tile::TileOperation;
+use crate::tile_parameters::TileParameters;
 use crate::renderer_observer::RendererObserver;
 use crate::style_diff::{diff_images, diff_layers, diff_sources, has_layout_difference};
 use crate::update_parameters::UpdateParameters;
+use mln_actor::{TaggedScheduler, scheduler};
 use mln_gfx::{Context, LayerGroupBase, LayerGroupBasePtr, ShaderRegistry};
+use mln_style::layer_properties::LayerProperties;
+use mln_tile_id::OverscaledTileID;
+use mln_util::exception::ExceptionPtr;
 use mln_map_types::{MapMode, TransformState};
 use mln_style::collection::ImmutableVector;
 use mln_style::expression::{Dependency, GlobalStateMap};
 use mln_style::layer;
 use mln_style::layer::layer_type_info;
-use mln_style::layer::static_immutable_cast;
-use mln_style::layers::background_layer_impl::Impl as BackgroundLayerImpl;
 use mln_style::map::zoom_history::ZoomHistory;
 use mln_style::{image, source, PropertyEvaluationParameters, TransitionOptions, TransitionParameters};
 use mln_util::chrono::{Duration, TimePoint};
@@ -60,21 +73,72 @@ fn diff_global_state_keys(previous: &GlobalStateMap, current: &GlobalStateMap) -
     keys
 }
 
-/// `LayerManager::get()->createRenderLayer(impl)`: dispatches on the layer
-/// type info to the layer factory.
-// TODO(port): the other layer types (each arrives with its RenderLayer).
-fn create_render_layer(impl_: &Immutable<dyn layer::Impl>) -> Option<RenderLayerPtr> {
-    if std::ptr::eq(impl_.get_type_info(), BackgroundLayerImpl::static_type_info()) {
-        let layer: RenderLayerPtr = Rc::new(RefCell::new(RenderBackgroundLayer::new(static_immutable_cast::<
-            BackgroundLayerImpl,
-        >(impl_))));
-        return Some(layer);
+/// The orchestrator's `observer` member, shared with its
+/// RenderSourceObserver half.
+type SharedObserver = Rc<RefCell<Option<Weak<dyn RendererObserver>>>>;
+
+fn shared_observer(observer: &SharedObserver) -> Option<Rc<dyn RendererObserver>> {
+    observer.borrow().as_ref().and_then(Weak::upgrade)
+}
+
+/// The ImageManagerObserver half of `RenderOrchestrator`
+/// (`onStyleImageMissing`, `onRemoveUnusedStyleImages` forward to the
+/// renderer observer, which re-renders after `done`, as Map::Impl does).
+struct OrchestratorImageObserver {
+    observer: SharedObserver,
+}
+
+impl crate::image_manager::ImageManagerObserver for OrchestratorImageObserver {
+    fn on_style_image_missing(&self, id: &str, done: Box<dyn FnOnce()>) {
+        let mut done = Some(done);
+        let mut call_done = || {
+            if let Some(done) = done.take() {
+                done();
+            }
+        };
+        match shared_observer(&self.observer) {
+            Some(observer) => observer.on_style_image_missing(id, &mut call_done),
+            None => call_done(),
+        }
     }
-    Log::error(
-        Event::Render,
-        format!("TODO(port): no render layer for layer type '{}'", impl_.get_type_info().type_),
-    );
-    None
+
+    fn on_remove_unused_style_images(&self, ids: &[String]) {
+        if let Some(observer) = shared_observer(&self.observer) {
+            observer.on_remove_unused_style_images(ids);
+        }
+    }
+}
+
+/// The RenderSourceObserver half of `RenderOrchestrator`.
+struct OrchestratorSourceObserver {
+    observer: SharedObserver,
+}
+
+impl RenderSourceObserver for OrchestratorSourceObserver {
+    /// `onTileChanged(RenderSource&, const OverscaledTileID&)`.
+    fn on_tile_changed(&self, _source_id: &str, _tile_id: &OverscaledTileID) {
+        if let Some(observer) = shared_observer(&self.observer) {
+            observer.on_invalidate();
+        }
+    }
+
+    /// `onTileError(RenderSource&, const OverscaledTileID&, std::exception_ptr)`.
+    fn on_tile_error(&self, source_id: &str, tile_id: &OverscaledTileID, error: ExceptionPtr) {
+        Log::error(
+            Event::Style,
+            format!("Failed to load tile {tile_id} for source {source_id}: {error}"),
+        );
+        if let Some(observer) = shared_observer(&self.observer) {
+            observer.on_resource_error(error);
+        }
+    }
+
+    /// `onTileAction(RenderSource&, TileOperation, const OverscaledTileID&,
+    /// const std::string&)`.
+    fn on_tile_action(&self, _source_id: &str, _op: TileOperation, _tile_id: &OverscaledTileID, _tile_source_id: &str) {
+        // TODO(port): observer->onTileAction(op, id, sourceID)
+        // (RendererObserver tile callbacks).
+    }
 }
 
 fn ptr_eq_option<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
@@ -86,23 +150,29 @@ fn ptr_eq_option<T: ?Sized>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
 }
 
 pub struct RenderOrchestrator {
-    observer: Option<Weak<dyn RendererObserver>>,
+    observer: SharedObserver,
+    source_observer: Rc<OrchestratorSourceObserver>,
 
     zoom_history: ZoomHistory,
     transform_state: TransformState,
 
-    // TODO(port): glyphManager, lineAtlas.
-    image_manager: ImageManager,
+    // symbols: the glyph and image managers (shared with the tiles), and the
+    // dynamic texture atlas (C++ Renderer::Impl owns it and passes it to
+    // createRenderTree; see `reset_dynamic_texture_atlas`).
+    glyph_manager: Rc<GlyphManager>,
+    image_manager: Rc<ImageManager>,
+    dynamic_texture_atlas: DynamicTextureAtlasPtr,
+    line_atlas: Rc<RefCell<LineAtlas>>,
     pattern_atlas: Rc<RefCell<PatternAtlas>>,
 
     image_impls: Immutable<Vec<Immutable<image::Impl>>>,
     source_impls: ImmutableVector<dyn source::Impl>,
     layer_impls: ImmutableVector<dyn layer::Impl>,
 
-    // TODO(port): renderSources (std::unordered_map<std::string,
-    // std::unique_ptr<RenderSource>>).
+    render_sources: HashMap<String, Box<dyn RenderSource>>,
     render_layers: HashMap<String, RenderLayerPtr>,
-    // TODO(port): renderLight.
+    // conformance: renderLight.
+    render_light: crate::render_light::RenderLight,
 
     // TODO(port): crossTileSymbolIndex, placementController,
     // layersNeedPlacement, filteredLayersForSource.
@@ -113,6 +183,9 @@ pub struct RenderOrchestrator {
 
     /// Vector with reference wrappers to the layers in style order.
     ordered_layers: Vec<RenderLayerPtr>,
+    filtered_layers_for_source: Vec<Immutable<dyn LayerProperties>>,
+
+    thread_pool: TaggedScheduler,
 
     global_state: Option<Arc<GlobalStateMap>>,
 
@@ -124,32 +197,52 @@ pub struct RenderOrchestrator {
     /// keyed by the layer group's id (see change_request.rs).
     layer_group_tweakers: HashMap<SimpleIdentity, Vec<Weak<RefCell<dyn LayerTweaker>>>>,
 
+    // dem-heatmap: `std::vector<RenderTargetPtr> renderTargets`.
+    render_targets: Vec<crate::render_target::RenderTargetPtr>,
+
     pending_changes: UniqueChangeRequestVec,
 }
 
 impl RenderOrchestrator {
     /// `RenderOrchestrator(bool backgroundLayerAsColor, TaggedScheduler&,
     /// const std::optional<std::string>& localFontFamily)`.
-    // TODO(port): thread pool, local font family (glyph manager).
+    // TODO(port): local font family (glyph manager). C++ gets the map's
+    // thread pool; the port uses the background pool with its own tag.
     pub fn new(background_layer_as_color: bool) -> Self {
+        let observer: SharedObserver = Rc::new(RefCell::new(None));
+        // `imageManager->setObserver(this)`.
+        let image_manager = ImageManager::create();
+        image_manager.set_observer(Some(Rc::new(OrchestratorImageObserver {
+            observer: observer.clone(),
+        })));
         RenderOrchestrator {
-            observer: None,
+            observer: observer.clone(),
+            source_observer: Rc::new(OrchestratorSourceObserver { observer }),
             zoom_history: ZoomHistory::default(),
             transform_state: TransformState::default(),
-            image_manager: ImageManager::new(),
+            glyph_manager: GlyphManager::new(None),
+            image_manager,
+            dynamic_texture_atlas: Arc::new(DynamicTextureAtlas::new()),
+            line_atlas: Rc::new(RefCell::new(LineAtlas::new())),
             pattern_atlas: Rc::new(RefCell::new(PatternAtlas::new())),
             image_impls: Arc::new(Vec::new()),
             source_impls: Arc::new(Vec::new()),
             layer_impls: Arc::new(Vec::new()),
+            render_sources: HashMap::new(),
             render_layers: HashMap::new(),
+            // conformance: renderLight(makeMutable<Light::Impl>())
+            render_light: crate::render_light::RenderLight::new(Arc::new(mln_style::light::Impl::default())),
             background_layer_as_color,
             context_lost: false,
             placed_symbol_data_collected: false,
             tile_cache_enabled: true,
             ordered_layers: Vec::new(),
+            filtered_layers_for_source: Vec::new(),
+            thread_pool: TaggedScheduler::new(scheduler::get_background(), SimpleIdentity::new()),
             global_state: None,
             layer_groups_by_layer_index: BTreeMap::new(),
             layer_group_tweakers: HashMap::new(),
+            render_targets: Vec::new(), // dem-heatmap
             pending_changes: Vec::new(),
         }
     }
@@ -159,15 +252,25 @@ impl RenderOrchestrator {
     }
 
     pub fn set_observer(&mut self, observer: Option<Weak<dyn RendererObserver>>) {
-        self.observer = observer;
+        *self.observer.borrow_mut() = observer;
     }
 
     fn observer(&self) -> Option<Rc<dyn RendererObserver>> {
-        self.observer.as_ref().and_then(Weak::upgrade)
+        shared_observer(&self.observer)
+    }
+
+    /// `getRenderSource(id)`.
+    pub fn get_render_source(&self, id: &str) -> Option<&dyn RenderSource> {
+        self.render_sources.get(id).map(|source| source.as_ref())
     }
 
     pub fn get_zoom_history(&self) -> &ZoomHistory {
         &self.zoom_history
+    }
+
+    /// `RenderTree::getLineAtlas()` (the orchestrator's atlas).
+    pub fn get_line_atlas(&self) -> &Rc<RefCell<LineAtlas>> {
+        &self.line_atlas
     }
 
     pub fn get_pattern_atlas(&self) -> &Rc<RefCell<PatternAtlas>> {
@@ -224,21 +327,69 @@ impl RenderOrchestrator {
         evaluation_parameters.global_state_changed = global_state_changed;
         evaluation_parameters.changed_global_state_keys = changed_global_state_keys.clone();
 
-        // TODO(port): TileParameters (sources), glyphManager->setURL /
-        // setFontFaces.
+        // TODO(port): annotationManager in TileParameters; glyphManager->setFontFaces.
+        let mut tile_parameters = TileParameters {
+            pixel_ratio: update_parameters.pixel_ratio,
+            debug_options: update_parameters.debug_options,
+            transform_state: &update_parameters.transform_state,
+            file_source: update_parameters.file_source.clone(),
+            mode: update_parameters.mode,
+            prefetch_zoom_delta: update_parameters.prefetch_zoom_delta,
+            thread_pool: self.thread_pool.clone(),
+            tile_lod_min_radius: update_parameters.tile_lod_min_radius,
+            tile_lod_scale: update_parameters.tile_lod_scale,
+            tile_lod_pitch_threshold: update_parameters.tile_lod_pitch_threshold,
+            tile_lod_zoom_shift: update_parameters.tile_lod_zoom_shift,
+            tile_lod_mode: update_parameters.tile_lod_mode,
+            global_state: self.global_state.clone(),
+            is_update_synchronous: false,
+            capture_rendered_features: update_parameters.capture_rendered_features,
+            image_manager: self.image_manager.clone(),
+            glyph_manager: self.glyph_manager.clone(),
+            dynamic_texture_atlas: self.dynamic_texture_atlas.clone(),
+        };
 
-        // Update light.
-        // TODO(port): renderLight.transition / evaluate (RenderLight).
+        self.glyph_manager.set_url(&update_parameters.glyph_url);
+
+        // Update light. (conformance)
+        let light_changed = !Arc::ptr_eq(&self.render_light.impl_, &update_parameters.light);
+
+        if light_changed {
+            self.render_light.impl_ = update_parameters.light.clone();
+            self.render_light.transition(&transition_parameters);
+        }
+
+        if light_changed || zoom_changed || global_state_changed || self.render_light.has_transition() {
+            self.render_light.evaluate(&evaluation_parameters);
+        }
 
         let image_diff = diff_images(&self.image_impls, &update_parameters.images);
         self.image_impls = update_parameters.images.clone();
 
         // Only trigger tile reparse for changed images. Changed images only
         // need a relayout when they have a different size.
-        let _has_image_diff = !image_diff.removed.is_empty();
+        let mut _has_image_diff = !image_diff.removed.is_empty();
 
-        // TODO(port): imageManager->removeImage/addImage/updateImage,
-        // patternAtlas->removePattern, notifyIfMissingImageAdded (sprites).
+        // Remove removed images from sprite atlas.
+        for id in image_diff.removed.keys() {
+            self.image_manager.remove_image(id);
+            // TODO(port): patternAtlas->removePattern(id) (background-pattern).
+        }
+
+        // Add added images to sprite atlas.
+        for image in image_diff.added.values() {
+            self.image_manager.add_image(image.clone());
+        }
+
+        // Update changed images.
+        for change in image_diff.changed.values() {
+            if self.image_manager.update_image(change.after.clone()) {
+                // TODO(port): patternAtlas->removePattern(id) (background-pattern).
+                _has_image_diff = true;
+            }
+        }
+
+        self.image_manager.notify_if_missing_image_added();
         self.image_manager.set_loaded(update_parameters.sprite_loaded);
 
         let layer_diff = diff_layers(&self.layer_impls, &update_parameters.layers);
@@ -256,7 +407,7 @@ impl RenderOrchestrator {
 
         // Create render layers for newly added layers.
         for (id, impl_) in &layer_diff.added {
-            if let Some(render_layer) = create_render_layer(impl_) {
+            if let Some(render_layer) = layermanager::create_render_layer(impl_) {
                 render_layer.borrow_mut().transition(&transition_parameters);
                 // `emplace` keeps an existing entry.
                 self.render_layers.entry(id.clone()).or_insert(render_layer);
@@ -333,8 +484,21 @@ impl RenderOrchestrator {
         let source_diff = diff_sources(&self.source_impls, &update_parameters.sources);
         self.source_impls = update_parameters.sources.clone();
 
-        // TODO(port): remove/create render sources from sourceDiff (M3).
-        let _ = source_diff;
+        // Remove render layers for removed sources.
+        for id in source_diff.removed.keys() {
+            self.render_sources.remove(id);
+        }
+
+        // Create render sources for newly added sources.
+        for (id, impl_) in &source_diff.added {
+            if let Some(mut render_source) = render_source::create(impl_, &self.thread_pool) {
+                render_source.set_observer(self.source_observer.clone());
+                render_source.set_cache_enabled(self.tile_cache_enabled);
+                render_source.set_fast_pfor_enabled(update_parameters.fast_pfor_enabled);
+                // `emplace` keeps an existing entry.
+                self.render_sources.entry(id.clone()).or_insert(render_source);
+            }
+        }
         self.transform_state = update_parameters.transform_state.clone();
         let _tilted_view = self.transform_state.get_pitch() != 0.0;
 
@@ -345,8 +509,15 @@ impl RenderOrchestrator {
             update_parameters.debug_options,
             update_parameters.time_point,
         ));
+        // conformance: the RenderTreeParameters ctor's `renderLight.getEvaluated()`.
+        render_tree_parameters.light = self.render_light.get_evaluated().clone();
 
         let mut layer_render_items: BTreeMap<u32, LayerRenderItem> = BTreeMap::new();
+
+        // Reserve size for filteredLayersForSource if there are sources.
+        if !self.source_impls.is_empty() {
+            self.filtered_layers_for_source.reserve(self.layer_impls.len());
+        }
 
         // Track which layers are flagged for rendering
         let mut update_list: Vec<bool> = vec![false; self.ordered_layers.len()];
@@ -362,8 +533,13 @@ impl RenderOrchestrator {
         let source_count = std::cmp::max(self.source_impls.len(), 1);
         for source_index in 0..source_count {
             let source_impl = self.source_impls.get(source_index).cloned();
-            let mut _source_needs_rendering = false;
-            let mut _source_needs_relayout = false;
+            let mut source_needs_rendering = false;
+            let mut source_needs_relayout = false;
+            // C++ has a render source for every source type; the port skips
+            // the layers of a source type without one (TODO(port)).
+            let has_render_source = source_impl
+                .as_ref()
+                .is_some_and(|source_impl| self.render_sources.contains_key(&source_impl.base().id));
 
             for (index, layer_ptr) in self.ordered_layers.iter().enumerate() {
                 let layer = layer_ptr.borrow();
@@ -375,7 +551,7 @@ impl RenderOrchestrator {
 
                 if layer_info.source != layer_type_info::Source::NotRequired {
                     if let Some(source_impl) = &source_impl {
-                        if base_impl.source == source_impl.base().id {
+                        if has_render_source && base_impl.source == source_impl.base().id {
                             let layer_id = layer.get_id().to_owned();
                             // A global state change requires a relayout of
                             // this layer's source if one of the changed state
@@ -403,18 +579,20 @@ impl RenderOrchestrator {
                                     )
                                 }
                             };
-                            _source_needs_relayout = _source_needs_relayout
+                            source_needs_relayout = source_needs_relayout
                                 || _has_image_diff
                                 || constants_mask_changed.contains(&layer_id)
                                 || has_layout_difference(&layer_diff, &layer_id)
                                 || global_state_requires_relayout;
                             if layer_is_visible {
-                                // TODO(port): filteredLayersForSource.
+                                self.filtered_layers_for_source
+                                    .push(layer.base().evaluated_properties.clone());
                                 if zoom_fits_layer {
-                                    _source_needs_rendering = true;
-                                    layer_render_items
-                                        .entry(index as u32)
-                                        .or_insert_with(|| LayerRenderItem::new(layer_ptr.clone(), index as u32));
+                                    source_needs_rendering = true;
+                                    let source_id = source_impl.base().id.clone();
+                                    layer_render_items.entry(index as u32).or_insert_with(|| {
+                                        LayerRenderItem::new(layer_ptr.clone(), Some(source_id), index as u32)
+                                    });
                                     update_list[index] = true;
                                 }
                             }
@@ -436,13 +614,27 @@ impl RenderOrchestrator {
                     }
                     layer_render_items
                         .entry(index as u32)
-                        .or_insert_with(|| LayerRenderItem::new(layer_ptr.clone(), index as u32));
+                        .or_insert_with(|| LayerRenderItem::new(layer_ptr.clone(), None, index as u32));
                     update_list[index] = true;
                 }
             }
-            // TODO(port): tileParameters.isUpdateSynchronous,
-            // source->update(sourceImpl, filteredLayersForSource,
-            // sourceNeedsRendering, sourceNeedsRelayout, tileParameters).
+            if let Some(source_impl) = &source_impl {
+                tile_parameters.is_update_synchronous = source_impl.is_update_synchronous();
+                let filtered_layers = std::mem::take(&mut self.filtered_layers_for_source);
+                // C++ `renderSources.at(sourceImpl->id)`; a source type
+                // without a render source port has none (TODO(port)).
+                if let Some(source) = self.render_sources.get_mut(&source_impl.base().id) {
+                    source.update(
+                        source_impl.clone(),
+                        &filtered_layers,
+                        source_needs_rendering,
+                        source_needs_relayout,
+                        &tile_parameters,
+                    );
+                }
+                self.filtered_layers_for_source = filtered_layers;
+                self.filtered_layers_for_source.clear();
+            }
 
             // Update all layers with their new renderability status, if it
             // changed.
@@ -462,13 +654,30 @@ impl RenderOrchestrator {
 
         // Prepare. Update all matrices and generate data that we should upload
         // to the GPU.
-        // TODO(port): renderSource->prepare for the enabled render sources.
+        for (name, render_source) in self.render_sources.iter_mut() {
+            if render_source.is_enabled() {
+                render_source.prepare(&SourcePrepareParameters {
+                    transform: &render_tree_parameters.transform_params,
+                    debug_options: update_parameters.debug_options,
+                    image_manager: &self.image_manager,
+                    source_name: name.clone(),
+                });
+            }
+        }
 
         let mut opaque_pass_cut_off_estimation = layer_render_items.len();
         for render_item in layer_render_items.values() {
             let mut render_layer = render_item.layer.borrow_mut();
+            let source = render_item
+                .source
+                .as_ref()
+                .and_then(|id| self.render_sources.get(id))
+                .map(|source| source.as_ref());
             render_layer.prepare(&mut LayerPrepareParameters {
+                source,
+                image_manager: &self.image_manager, // conformance
                 pattern_atlas: &self.pattern_atlas,
+                line_atlas: &self.line_atlas,
                 state: &update_parameters.transform_state,
             });
             if render_layer.needs_placement() {
@@ -507,13 +716,26 @@ impl RenderOrchestrator {
             // TODO(port): imageManager->reduceMemoryUseIfCacheSizeExceedsLimit().
         }
 
-        // TODO(port): sourceRenderItems from the enabled render sources.
+        let mut source_render_items: Vec<Box<dyn RenderItem>> = Vec::new();
+        for render_source in self.render_sources.values_mut() {
+            if render_source.is_enabled() {
+                source_render_items.push(render_source.create_render_item());
+            }
+        }
 
-        Some(RenderTree::new(render_tree_parameters, layer_render_items, start_time))
+        Some(RenderTree::new(
+            render_tree_parameters,
+            layer_render_items,
+            source_render_items,
+            start_time,
+        ))
     }
 
     pub fn has_transitions(&self, _time_point: TimePoint) -> bool {
-        // TODO(port): renderLight.hasTransition().
+        // conformance
+        if self.render_light.has_transition() {
+            return true;
+        }
 
         for layer in self.render_layers.values() {
             if layer.borrow().has_transition() {
@@ -521,8 +743,13 @@ impl RenderOrchestrator {
             }
         }
 
-        // TODO(port): placementController.hasTransitions(timePoint),
-        // renderSource->hasFadingTiles().
+        // TODO(port): placementController.hasTransitions(timePoint).
+
+        for source in self.render_sources.values() {
+            if source.has_fading_tiles() {
+                return true;
+            }
+        }
 
         false
     }
@@ -534,7 +761,11 @@ impl RenderOrchestrator {
             return false;
         }
 
-        // TODO(port): renderSource->isLoaded() for every render source.
+        for source in self.render_sources.values() {
+            if !source.is_loaded() {
+                return false;
+            }
+        }
 
         true
     }
@@ -556,18 +787,39 @@ impl RenderOrchestrator {
         }
         self.add_changes(&mut changes);
 
-        // TODO(port): debugLayerGroups.clear(), renderSources.clear().
+        // TODO(port): debugLayerGroups.clear().
+        self.render_sources.clear();
         self.render_layers.clear();
         // C++ keeps orderedLayers here and rebuilds it on the next
         // createRenderTree (the layer diff then reports additions).
         self.ordered_layers.clear();
 
-        // TODO(port): crossTileSymbolIndex.reset(), lineAtlas.
+        // TODO(port): crossTileSymbolIndex.reset().
+        if !self.line_atlas.borrow().is_empty() {
+            self.line_atlas = Rc::new(RefCell::new(LineAtlas::new()));
+        }
+
         if !self.pattern_atlas.borrow().is_empty() {
             self.pattern_atlas = Rc::new(RefCell::new(PatternAtlas::new()));
         }
 
-        // TODO(port): imageManager->clear(), glyphManager->evict.
+        self.image_manager.clear();
+        // TODO(port): glyphManager->evict(fontStacks(*layerImpls)).
+    }
+
+    /// symbols: C++ `Renderer::render` recreates the dynamic texture atlas
+    /// when the style changed (`impl->dynamicTextureAtlas` is owned by the
+    /// renderer and handed to createRenderTree).
+    pub fn reset_dynamic_texture_atlas(&mut self) {
+        self.dynamic_texture_atlas = Arc::new(DynamicTextureAtlas::new());
+    }
+
+    pub fn get_glyph_manager(&self) -> &Rc<GlyphManager> {
+        &self.glyph_manager
+    }
+
+    pub fn get_image_manager(&self) -> &Rc<ImageManager> {
+        &self.image_manager
     }
 
     fn add_changes(&mut self, changes: &mut UniqueChangeRequestVec) {
@@ -717,8 +969,43 @@ impl RenderOrchestrator {
                     let id = layer_group.borrow().get_id();
                     self.layer_group_tweakers.entry(id).or_default().push(tweaker);
                 }
+                // dem-heatmap
+                ChangeRequest::AddRenderTarget(render_target) => {
+                    self.add_render_target(render_target);
+                }
+                ChangeRequest::RemoveRenderTarget(render_target) => {
+                    self.remove_render_target(&render_target);
+                }
             }
         }
+    }
+
+    // dem-heatmap: render targets.
+    /// `addRenderTarget(RenderTargetPtr)`.
+    pub fn add_render_target(&mut self, render_target: crate::render_target::RenderTargetPtr) -> bool {
+        if self.render_targets.iter().any(|t| Rc::ptr_eq(t, &render_target)) {
+            false
+        } else {
+            self.render_targets.push(render_target);
+            true
+        }
+    }
+
+    /// `removeRenderTarget(const RenderTargetPtr&)`.
+    pub fn remove_render_target(&mut self, render_target: &crate::render_target::RenderTargetPtr) -> bool {
+        match self.render_targets.iter().position(|t| Rc::ptr_eq(t, render_target)) {
+            Some(pos) => {
+                self.render_targets.remove(pos);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The render targets, for `visitRenderTargets` (cloned, so that the
+    /// visitor may use the orchestrator).
+    pub fn render_targets(&self) -> Vec<crate::render_target::RenderTargetPtr> {
+        self.render_targets.clone()
     }
 
     // TODO(port): queryRenderedFeatures, querySourceFeatures,
@@ -726,12 +1013,66 @@ impl RenderOrchestrator {
     // targets, collectPlacedSymbolData, setTileCacheEnabled,
     // reduceMemoryUse, dumpDebugLogs and the glyph/image/tile observer
     // callbacks.
+    // layers: feature state
+    /// `setFeatureState(sourceID, sourceLayerID, featureID, state)`.
+    pub fn set_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer_id: Option<&str>,
+        feature_id: &str,
+        state: &mln_style::expression::expression::FeatureState,
+    ) {
+        if let Some(render_source) = self.render_sources.get_mut(source_id) {
+            render_source.set_feature_state(source_layer_id, feature_id, state);
+        }
+    }
+
+    /// `getFeatureState(state, sourceID, sourceLayerID, featureID)`.
+    pub fn get_feature_state(
+        &self,
+        source_id: &str,
+        source_layer_id: Option<&str>,
+        feature_id: &str,
+    ) -> mln_style::expression::expression::FeatureState {
+        match self.render_sources.get(source_id) {
+            Some(render_source) => render_source.get_feature_state(source_layer_id, feature_id),
+            None => Default::default(),
+        }
+    }
+
+    /// `removeFeatureState(sourceID, sourceLayerID, featureID, stateKey)`.
+    pub fn remove_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer_id: Option<&str>,
+        feature_id: Option<&str>,
+        state_key: Option<&str>,
+    ) {
+        if let Some(render_source) = self.render_sources.get_mut(source_id) {
+            render_source.remove_feature_state(source_layer_id, feature_id, state_key);
+        }
+    }
+
     pub fn collect_placed_symbol_data(&mut self, enable: bool) {
         self.placed_symbol_data_collected = enable;
     }
 
     pub fn set_tile_cache_enabled(&mut self, enable: bool) {
         self.tile_cache_enabled = enable;
+
+        for source in self.render_sources.values_mut() {
+            source.set_cache_enabled(enable);
+        }
+    }
+
+    /// `reduceMemoryUse()`.
+    pub fn reduce_memory_use(&mut self) {
+        self.filtered_layers_for_source.shrink_to_fit();
+        for source in self.render_sources.values_mut() {
+            source.reduce_memory_use();
+        }
+        // TODO(port): imageManager->reduceMemoryUse(), observer->onInvalidate()
+        // as C++ does afterwards.
     }
 
     pub fn get_tile_cache_enabled(&self) -> bool {
@@ -752,6 +1093,9 @@ impl Drop for RenderOrchestrator {
                 layer.borrow_mut().mark_context_destroyed();
             }
         }
-        // TODO(port): threadPool.waitForEmpty().
+        // Destroy the render sources (and their tiles and workers) before
+        // waiting for the thread pool, as the C++ members' destructors do.
+        self.render_sources.clear();
+        self.thread_pool.wait_for_empty();
     }
 }

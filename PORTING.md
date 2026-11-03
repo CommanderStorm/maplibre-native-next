@@ -10,10 +10,19 @@ everyone working in this repo).
   snake_case (`getZoom` → `get_zoom`), same algorithms in the same order.
 - Start every file with the C++ file(s) it ports:
   `// Ports src/mln/renderer/layers/render_background_layer.cpp`.
-- **Port quirks, don't fix them.** Keep float types (`float` → `f32`), the
-  order of float operations, integer overflow behaviour (`wrapping_*` where
-  C++ uses unsigned arithmetic), `std::min`/`fmin` semantics. Comment
-  load-bearing quirks. If you must deviate, add an entry to `DEVIATIONS.md`.
+- **Match C++ where it is observable** (render, query and expression tests
+  with the C++ baselines; public API behaviour). Keep float types
+  (`float` → `f32`) and the order of float operations, because they decide
+  pixels. Port quirks that change those outcomes and comment them.
+- **Don't reproduce** undefined behaviour, libstdc++ internals (sort tie
+  order, container iteration order) or x86-64-specific conversion results,
+  unless a test outcome depends on it. Record differences in `DEVIATIONS.md`.
+- **Prefer a crate** when a comparison against the C++ (a difftest, run once)
+  shows it doesn't change observable outcomes; port only when it does or
+  when there is no crate. Ask the coordinator for new crates in
+  `COORDINATION.md`.
+- Difftests are a tool, not a gate for every function: write them where a
+  crate or a port is in doubt, or to debug a render-test difference.
 - Port only what the current milestone needs, but port those code paths
   completely. For a C++ branch you skip, leave a `// TODO(port): <what>`
   comment. Don't add `todo!()` on paths that run.

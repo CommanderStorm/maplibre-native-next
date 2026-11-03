@@ -1,6 +1,8 @@
 // Ports src/mln/renderer/paint_parameters.hpp and src/mln/renderer/paint_parameters.cpp
 // (non-OpenGL backend branches; the port's backend is WebGPU).
 
+use crate::line_atlas::LineAtlas;
+use mln_gfx::shaders::clipping_mask_ubo::ClipUBO;
 use crate::pattern_atlas::PatternAtlas;
 use crate::render_pass::RenderPass;
 use crate::render_static_data::RenderStaticData;
@@ -70,8 +72,14 @@ pub struct PaintParameters<'a> {
 
     pub transform_params: &'a TransformParameters,
     pub state: &'a TransformState,
-    // TODO(port): const EvaluatedLight& evaluatedLight, LineAtlas& lineAtlas.
+    /// conformance: `const EvaluatedLight& evaluatedLight` (a copy; the
+    /// renderer sets it from the render tree's parameters).
+    pub evaluated_light: crate::render_light::EvaluatedLight,
     pub static_data: &'a RenderStaticData,
+    /// `LineAtlas& lineAtlas`: the orchestrator's atlas (`RenderTree::
+    /// getLineAtlas()`); `new` starts with an empty one, the renderer
+    /// assigns the orchestrator's.
+    pub line_atlas: Rc<RefCell<LineAtlas>>,
     pub pattern_atlas: Rc<RefCell<PatternAtlas>>,
 
     pub pass: RenderPass,
@@ -147,6 +155,8 @@ impl<'a> PaintParameters<'a> {
             transform_params,
             state,
             static_data,
+            evaluated_light: Default::default(),
+            line_atlas: Rc::new(RefCell::new(LineAtlas::new())),
             pattern_atlas,
             pass: RenderPass::Opaque,
             map_mode,
@@ -263,15 +273,34 @@ impl<'a> PaintParameters<'a> {
             self.clear_stencil();
         }
 
-        // TODO(port): MLN_RENDER_BACKEND_WEBGPU: build ClipUBOs and call
-        // webgpu::Context::renderTileClippingMasks (fill/line layers, M3).
-        // Background layers don't clip.
+        // MLN_RENDER_BACKEND_WEBGPU
+        let mut tile_ubos: Vec<ClipUBO> = Vec::new();
         for tile_id in tile_ids {
             let stencil_id = self.next_stencil_id;
-            if !self.tile_clipping_mask_ids.contains_key(tile_id) {
-                self.tile_clipping_mask_ids.insert(*tile_id, stencil_id);
-                self.next_stencil_id += 1;
+            if self.tile_clipping_mask_ids.contains_key(tile_id) {
+                continue;
             }
+            self.tile_clipping_mask_ids.insert(*tile_id, stencil_id);
+            self.next_stencil_id += 1;
+
+            if tile_ubos.is_empty() {
+                tile_ubos.reserve(count);
+            }
+
+            let matrix = self.matrix_for_tile(tile_id, false);
+            tile_ubos.push(ClipUBO {
+                matrix: std::array::from_fn(|i| matrix[i] as f32),
+                stencil_ref: stencil_id as u32,
+                pad1: 0.0,
+                pad2: 0.0,
+                pad3: 0.0,
+            });
+        }
+
+        if !tile_ubos.is_empty() {
+            let render_pass = self.render_pass.as_deref().expect("render pass");
+            self.context.render_tile_clipping_masks(render_pass, self.shaders, &tile_ubos);
+            self.context.rendering_stats().stencil_updates += 1;
         }
 
         true
@@ -353,5 +382,14 @@ impl GfxPaintParameters for PaintParameters<'_> {
 
     fn stencil_mode_for_3d(&mut self) -> StencilMode {
         PaintParameters::stencil_mode_for_3d(self)
+    }
+
+    // conformance: for DrawableAtlasesTweaker.
+    fn state_pitch(&self) -> f64 {
+        self.state.get_pitch()
+    }
+
+    fn state_is_changing(&self) -> bool {
+        self.state.is_changing()
     }
 }

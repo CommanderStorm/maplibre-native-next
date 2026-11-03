@@ -163,6 +163,37 @@ pub trait TestRunnerImpl {
     fn set_global_state_property(&mut self, _name: &str, _value: &Value) -> Result<(), MapError> {
         not_ported("Style::setGlobalStateProperty")
     }
+    /// `frontend.render(map)` (an exception makes the operation return
+    /// false), then `frontend.getRenderer()->setFeatureState(sourceID,
+    /// sourceLayer, featureID, state)`.
+    fn set_feature_state(
+        &mut self,
+        _source_id: &str,
+        _source_layer: Option<&str>,
+        _feature_id: &str,
+        _state: &maplibre_native_base::PropertyMap,
+    ) -> Result<bool, MapError> {
+        not_ported("setFeatureState operation (Renderer feature state)")
+    }
+    /// `frontend.render(map)`, then `getRenderer()->getFeatureState(..)`.
+    fn get_feature_state(
+        &mut self,
+        _source_id: &str,
+        _source_layer: Option<&str>,
+        _feature_id: &str,
+    ) -> Result<bool, MapError> {
+        not_ported("getFeatureState operation (Renderer feature state)")
+    }
+    /// `frontend.render(map)`, then `getRenderer()->removeFeatureState(..)`.
+    fn remove_feature_state(
+        &mut self,
+        _source_id: &str,
+        _source_layer: Option<&str>,
+        _feature_id: Option<&str>,
+        _state_key: Option<&str>,
+    ) -> Result<bool, MapError> {
+        not_ported("removeFeatureState operation (Renderer feature state)")
+    }
     /// The `sleep` operation: run the run loop until a `util::Timer` of
     /// `duration` fires.
     fn sleep(&mut self, _duration: Duration) -> Result<(), MapError> {

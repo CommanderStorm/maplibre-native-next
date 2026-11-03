@@ -1,9 +1,11 @@
-//! Ports `src/mln/text` (text shaping and glyphs) of the C++ core.
+//! Ports `src/mln/text` (text shaping and glyphs) of the C++ core, with
+//! the ICU parts its platform/default BiDi uses (`icu`).
 //!
 //! Shaping uses HarfRust instead of HarfBuzz, and the ported FreeType subset
 //! in `ft` (charmaps, sizing, advances) instead of FreeType; outlines come
 //! from skrifa. See PLAN.md section 4.
 
+pub mod bidi;
 pub mod freetype;
 pub mod ft;
 pub mod glyph;
@@ -12,11 +14,22 @@ pub mod harfbuzz;
 pub mod harfbuzz_impl;
 pub mod hb_ft;
 pub mod hb_ucd;
+pub mod icu;
 pub mod language_tag;
+pub mod local_glyph_rasterizer;
+pub mod shaping;
 pub mod tagged_string;
 mod hb_ucd_table;
 mod rasterize;
+#[cfg(test)]
+mod shaping_test;
 
 pub use freetype::{FreeTypeFace, FreeTypeLibrary};
-pub use glyph::{Glyph, GlyphID, GlyphIDType, GlyphMetrics, GlyphRange};
+pub use bidi::{BiDi, StyledText, apply_arabic_shaping};
+pub use glyph::{
+    Glyph, GlyphID, GlyphIDType, GlyphMap, GlyphMetrics, GlyphPosition, GlyphPositions, GlyphRange, PositionedGlyph,
+    PositionedLine, Shaping, WritingModeType,
+};
 pub use harfbuzz::{HBShapeAdjust, HBShaper};
+pub use shaping::{AnchorAlignment, PositionedIcon, get_anchor_justification, get_shaping};
+pub use tagged_string::{SectionOptions, TaggedString};

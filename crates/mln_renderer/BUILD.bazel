@@ -7,14 +7,24 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//crates/mln_actor",
+        "//crates/mln_expression",
         "//crates/mln_gfx",
         "//crates/mln_map_types",
         "//crates/mln_math",
+        "//crates/mln_platform_default_image",
+        "//crates/mln_storage",
         "//crates/mln_style",
         "//crates/mln_style_types",
+        "//crates/mln_text",
+        "//crates/mln_tile",
         "//crates/mln_tile_id",
         "//crates/mln_util",
+        "//vendor/earcut",
+        "//vendor/libstdcxx",
         "//vendor/maplibre-native-base:maplibre_native_base",
+        "//vendor/nunicode",
+        "//vendor/polylabel",
+        "//vendor/shelf-pack:shelf_pack",
         "@next_crates//:bytemuck",
     ],
 )
@@ -38,5 +48,72 @@ rust_test(
         "//crates/mln_tile_id",
         "//crates/mln_util",
         "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+# test/tile/geojson_tile.test.cpp and the GeoJSON parts of
+# test/style/source.test.cpp: need mln_map's Transform (above this crate).
+rust_test(
+    name = "geojson_tile_test",
+    srcs = ["tests/geojson_tile_test.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_map_types",
+        "//crates/mln_style",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+rust_test(
+    name = "source_test",
+    srcs = ["tests/source_test.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_map_types",
+        "//crates/mln_storage",
+        "//crates/mln_style",
+        "//crates/mln_style_types",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/geojson",
+    ],
+)
+
+# Ports test/gl/bucket.test.cpp (circle, fill, line; on the WebGPU headless
+# backend) and test/renderer/fill_bucket.test.cpp.
+rust_test(
+    name = "bucket_test",
+    srcs = ["tests/bucket_test.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_gfx",
+        "//crates/mln_map_types",
+        "//crates/mln_style",
+        "//crates/mln_style_types",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//crates/mln_webgpu",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+    ],
+)
+
+# The VectorTile tests of test/tile/vector_tile.test.cpp.
+rust_test(
+    name = "vector_tile_test",
+    srcs = ["tests/vector_tile_test.rs"],
+    deps = [
+        ":mln_renderer",
+        "//crates/mln_actor",
+        "//crates/mln_map",
+        "//crates/mln_map_types",
+        "//crates/mln_storage",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
     ],
 )

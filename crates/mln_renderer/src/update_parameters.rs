@@ -28,8 +28,8 @@ pub struct UpdateParameters {
     /// The style's global state, used by "global-state" expressions.
     pub global_state: Option<Arc<GlobalStateMap>>,
 
-    // TODO(port): mapbox::base::WeakPtr<AnnotationManager> annotationManager,
-    // std::shared_ptr<FileSource> fileSource.
+    // TODO(port): mapbox::base::WeakPtr<AnnotationManager> annotationManager.
+    pub file_source: Option<Arc<dyn mln_storage::FileSource>>,
     pub prefetch_zoom_delta: u8,
 
     /// For still image requests, render requested.

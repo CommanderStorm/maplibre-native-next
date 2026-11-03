@@ -4,14 +4,14 @@ use crate::map_impl::{MapImpl, StillImageCallback, StillImageRequest, StyleMut};
 use crate::map_observer::MapObserver;
 use crate::map_options::MapOptions;
 use mln_map_types::{
-    BoundOptions, CameraOptions, ConstrainMode, MapDebugOptions, MapMode, NorthOrientation, ProjectionMode,
-    TransformState, ViewportMode,
+    AnimationOptions, BoundOptions, CameraOptions, ConstrainMode, MapDebugOptions, MapMode, NorthOrientation,
+    ProjectionMode, TileLodMode, TransformState, ViewportMode,
 };
 use mln_renderer::{ExceptionPtr, RendererFrontend};
 use mln_storage::{ClientOptions, FileSourceManager, FileSourceType, ResourceOptions};
 use mln_style::Style;
 use mln_util::exception::MisuseException;
-use mln_util::geo::EdgeInsets;
+use mln_util::geo::{EdgeInsets, ScreenCoordinate};
 use mln_util::size::Size;
 use std::cell::Ref;
 use std::rc::Rc;
@@ -165,9 +165,45 @@ impl Map {
         self.impl_.jump_to(camera);
     }
 
-    // TODO(port): easeTo, flyTo, moveBy, scaleBy, pitchBy, rotateBy,
-    // cameraForLatLngBounds, cameraForLatLngs, cameraForGeometry,
-    // latLngBoundsForCamera(Unwrapped).
+    pub fn ease_to(&mut self, camera: &CameraOptions, animation: &AnimationOptions) {
+        self.impl_.camera_mutated.set(true);
+        self.impl_.transform.borrow_mut().ease_to(camera, animation);
+        self.impl_.on_update();
+    }
+
+    pub fn fly_to(&mut self, camera: &CameraOptions, animation: &AnimationOptions) {
+        self.impl_.camera_mutated.set(true);
+        self.impl_.transform.borrow_mut().fly_to(camera, animation, false);
+        self.impl_.on_update();
+    }
+
+    pub fn move_by(&mut self, point: &ScreenCoordinate, animation: &AnimationOptions) {
+        self.impl_.camera_mutated.set(true);
+        self.impl_.transform.borrow_mut().move_by(point, animation);
+        self.impl_.on_update();
+    }
+
+    pub fn pitch_by(&mut self, pitch: f64, animation: &AnimationOptions) {
+        let current = mln_math::rad2deg(self.impl_.transform.borrow().get_pitch());
+        self.ease_to(&CameraOptions::default().with_pitch(Some(current - pitch)), animation);
+    }
+
+    pub fn scale_by(&mut self, scale: f64, anchor: Option<ScreenCoordinate>, animation: &AnimationOptions) {
+        let zoom = {
+            let transform = self.impl_.transform.borrow();
+            transform.get_zoom() + transform.get_state().scale_zoom(scale)
+        };
+        self.ease_to(&CameraOptions::default().with_zoom(Some(zoom)).with_anchor(anchor), animation);
+    }
+
+    pub fn rotate_by(&mut self, first: &ScreenCoordinate, second: &ScreenCoordinate, animation: &AnimationOptions) {
+        self.impl_.camera_mutated.set(true);
+        self.impl_.transform.borrow_mut().rotate_by(first, second, animation);
+        self.impl_.on_update();
+    }
+
+    // TODO(port): cameraForLatLngBounds, cameraForLatLngs,
+    // cameraForGeometry, latLngBoundsForCamera(Unwrapped).
 
     // MARK: - Bounds
 
@@ -298,9 +334,70 @@ impl Map {
         self.impl_.transform.borrow().get_state().clone()
     }
 
+    // MARK: - Tile LOD
+
+    pub fn set_tile_lod_min_radius(&mut self, radius: f64) {
+        if self.impl_.tile_lod_min_radius.get() == radius {
+            return;
+        }
+        self.impl_.tile_lod_min_radius.set(radius);
+        self.impl_.on_update();
+    }
+
+    pub fn get_tile_lod_min_radius(&self) -> f64 {
+        self.impl_.tile_lod_min_radius.get()
+    }
+
+    pub fn set_tile_lod_scale(&mut self, scale: f64) {
+        if self.impl_.tile_lod_scale.get() == scale {
+            return;
+        }
+        self.impl_.tile_lod_scale.set(scale);
+        self.impl_.on_update();
+    }
+
+    pub fn get_tile_lod_scale(&self) -> f64 {
+        self.impl_.tile_lod_scale.get()
+    }
+
+    pub fn set_tile_lod_pitch_threshold(&mut self, threshold: f64) {
+        if self.impl_.tile_lod_pitch_threshold.get() == threshold {
+            return;
+        }
+        self.impl_.tile_lod_pitch_threshold.set(threshold);
+        self.impl_.on_update();
+    }
+
+    pub fn get_tile_lod_pitch_threshold(&self) -> f64 {
+        self.impl_.tile_lod_pitch_threshold.get()
+    }
+
+    pub fn set_tile_lod_zoom_shift(&mut self, shift: f64) {
+        if self.impl_.tile_lod_zoom_shift.get() == shift {
+            return;
+        }
+        self.impl_.tile_lod_zoom_shift.set(shift);
+        self.impl_.on_update();
+    }
+
+    pub fn get_tile_lod_zoom_shift(&self) -> f64 {
+        self.impl_.tile_lod_zoom_shift.get()
+    }
+
+    pub fn set_tile_lod_mode(&mut self, mode: TileLodMode) {
+        if self.impl_.tile_lod_mode.get() == mode {
+            return;
+        }
+        self.impl_.tile_lod_mode.set(mode);
+        self.impl_.on_update();
+    }
+
+    pub fn get_tile_lod_mode(&self) -> TileLodMode {
+        self.impl_.tile_lod_mode.get()
+    }
+
     // TODO(port): pixelForLatLng, latLngForPixel, annotations, prefetch zoom
-    // delta, rendering stats view, free camera options, tile LOD setters,
-    // rendered features.
+    // delta, rendering stats view, free camera options, rendered features.
 
     // MARK: - Debug
 

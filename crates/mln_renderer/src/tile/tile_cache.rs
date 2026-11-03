@@ -142,3 +142,102 @@ impl Drop for TileCache {
         self.pending_releases.clear();
     }
 }
+
+// Ports test/tile/tile_cache.test.cpp. C++ uses a renderable VectorTile
+// mock; vector tiles are not ported yet (M4), so the mock is a plain tile.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tile::tile::{Kind, TileBase};
+    use crate::tile_render_data::TileRenderData;
+    use mln_actor::scheduler;
+    use mln_style::layer_properties::LayerProperties;
+    use mln_util::identity::SimpleIdentity;
+    use mln_util::immutable::Immutable;
+    use std::any::Any;
+
+    struct VectorTileMock {
+        base: TileBase,
+        unique_id: SimpleIdentity,
+    }
+
+    impl VectorTileMock {
+        fn new(id: OverscaledTileID) -> Box<VectorTileMock> {
+            let base = TileBase::new(Kind::Geometry, id, "source".to_owned(), None);
+            base.renderable.set(true);
+            Box::new(VectorTileMock {
+                base,
+                unique_id: SimpleIdentity::new(),
+            })
+        }
+    }
+
+    impl Tile for VectorTileMock {
+        fn base(&self) -> &TileBase {
+            &self.base
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn create_render_data(&self) -> Box<dyn TileRenderData> {
+            unreachable!()
+        }
+        fn cancel(&self) {}
+        fn layer_properties_updated(&self, _layer_properties: &Immutable<dyn LayerProperties>) -> bool {
+            false
+        }
+    }
+
+    fn thread_pool() -> TaggedScheduler {
+        TaggedScheduler::new(scheduler::get_background(), SimpleIdentity::new())
+    }
+
+    #[test]
+    fn smoke() {
+        let mut cache = TileCache::new(thread_pool(), 1);
+        let id = OverscaledTileID::from_zxy(0, 0, 0);
+        let tile = VectorTileMock::new(id);
+
+        cache.add(id, tile);
+        assert!(cache.has(&id));
+        cache.clear();
+        assert!(!cache.has(&id));
+    }
+
+    #[test]
+    fn issue_15926() {
+        let mut cache = TileCache::new(thread_pool(), 2);
+        let id0 = OverscaledTileID::from_zxy(0, 0, 0);
+        let id1 = OverscaledTileID::from_zxy(1, 0, 0);
+        let tile1 = VectorTileMock::new(id0);
+        let tile2 = VectorTileMock::new(id0);
+        let tile3 = VectorTileMock::new(id1);
+        let tile4 = VectorTileMock::new(id0);
+        let tile1_id = tile1.unique_id;
+
+        // add
+        cache.add(id0, tile1);
+        assert!(cache.has(&id0));
+
+        // adding a key already present doesn't replace the existing item
+        cache.add(id0, tile2);
+        let cached = cache.get(&id0).unwrap().as_any().downcast_ref::<VectorTileMock>().unwrap();
+        assert_eq!(tile1_id, cached.unique_id);
+
+        // Evict on add
+        cache.set_size(1);
+        cache.add(id1, tile3);
+        assert!(!cache.has(&id0));
+        assert!(cache.has(&id1));
+
+        // Evict due to size limit change
+        cache.set_size(2);
+        cache.add(id0, tile4);
+        assert!(cache.has(&id0));
+        assert!(cache.has(&id1));
+        cache.set_size(1);
+        // older item should be evicted
+        assert!(cache.has(&id0));
+        assert!(!cache.has(&id1));
+    }
+}

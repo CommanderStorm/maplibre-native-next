@@ -175,12 +175,14 @@ pub struct VectorMVTTileData {
     data: Arc<Vec<u8>>,
     /// C++ `mutable bool parsed` + `mutable std::map<std::string, const
     /// protozero::data_view> layers`; views as (offset, length) into `data`.
-    layers: OnceCell<BTreeMap<Vec<u8>, (usize, usize)>>,
+    // OnceLock (not OnceCell): the tile data is shared with the tile
+    // worker thread (mln_renderer, `Arc<dyn GeometryTileData + Send + Sync>`).
+    layers: std::sync::OnceLock<BTreeMap<Vec<u8>, (usize, usize)>>,
 }
 
 impl VectorMVTTileData {
     pub fn new(data: Arc<Vec<u8>>) -> Self {
-        VectorMVTTileData { data, layers: OnceCell::new() }
+        VectorMVTTileData { data, layers: std::sync::OnceLock::new() }
     }
 
     pub fn data(&self) -> &Arc<Vec<u8>> {

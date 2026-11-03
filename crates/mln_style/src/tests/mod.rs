@@ -10,6 +10,7 @@ mod filter;
 mod layer_properties;
 mod m1_render_test_styles;
 mod properties;
+mod source;
 mod property_expression;
 mod style;
 mod style_layer;

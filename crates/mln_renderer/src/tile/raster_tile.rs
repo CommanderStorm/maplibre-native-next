@@ -1,0 +1,236 @@
+// Ports src/mln/tile/raster_tile.hpp, src/mln/tile/raster_tile.cpp,
+// src/mln/tile/raster_tile_worker.hpp and src/mln/tile/raster_tile_worker.cpp.
+//
+// As for GeometryTile (see geometry_tile.rs), the state the worker's
+// replies change is `RasterTileInner`, the target of the tile's mailbox.
+
+use crate::bucket::BucketPtr;
+use crate::buckets::raster_bucket::RasterBucket;
+use crate::tile::tile::{Kind, Tile, TileBase, TileNecessity, TileOperation, TileUpdateParameters};
+use crate::tile::tile_loader::{LoaderTile, TileLoader, VectorTileEncoding};
+use crate::tile::tile_observer::TileObserver;
+use crate::tile_mask::TileMask;
+use crate::tile_parameters::TileParameters;
+use crate::tile_render_data::{SharedBucketTileRenderData, TileRenderData};
+use mln_actor::actor::{Actor, PoolActorRef};
+use mln_actor::{ActorRef, Mailbox, scheduler};
+use mln_storage::Data;
+use mln_style::layer_properties::LayerProperties;
+use mln_tile_id::OverscaledTileID;
+use mln_util::chrono::Timestamp;
+use mln_util::exception::{ExceptionPtr, RuntimeError};
+use mln_util::immutable::Immutable;
+use mln_util::tileset::Tileset;
+use std::any::Any;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::Arc;
+
+/// `RasterTileWorker`.
+pub struct RasterTileWorker {
+    parent: ActorRef<RasterTileInner>,
+}
+
+impl RasterTileWorker {
+    /// `parse(data, correlationID)`.
+    pub fn parse(&mut self, data: Option<Data>, correlation_id: u64) {
+        let Some(data) = data else {
+            // No data; empty tile.
+            self.parent
+                .invoke(move |tile: &RasterTileInner| tile.on_parsed(None, correlation_id));
+            return;
+        };
+
+        match mln_platform_default_image::decode_image(&data) {
+            Ok(image) => {
+                let bucket = Arc::new(RasterBucket::new(image));
+                self.parent
+                    .invoke(move |tile: &RasterTileInner| tile.on_parsed(Some(bucket), correlation_id));
+            }
+            Err(error) => {
+                let error = RuntimeError::ptr(error);
+                self.parent
+                    .invoke(move |tile: &RasterTileInner| tile.on_error(error, correlation_id));
+            }
+        }
+    }
+}
+
+/// The render-thread state of a `RasterTile`.
+pub struct RasterTileInner {
+    pub base: TileBase,
+    obsolete: Cell<bool>,
+    correlation_id: Cell<u64>,
+    bucket: RefCell<Option<Arc<RasterBucket>>>,
+    worker: PoolActorRef<RasterTileWorker>,
+    mailbox: Arc<Mailbox>,
+}
+
+impl RasterTileInner {
+    /// `onParsed(std::unique_ptr<RasterBucket>, correlationID)`.
+    pub fn on_parsed(&self, result: Option<Arc<RasterBucket>>, result_correlation_id: u64) {
+        if !self.obsolete.get() {
+            let renderable = result.is_some();
+            *self.bucket.borrow_mut() = result;
+            self.base.loaded.set(true);
+            if result_correlation_id == self.correlation_id.get() {
+                self.base.pending.set(false);
+                self.base.on_tile_action(TileOperation::EndParse);
+            }
+            self.base.renderable.set(renderable);
+            self.base.observer().on_tile_changed(&self.base);
+        }
+    }
+
+    /// `onError(std::exception_ptr, correlationID)`.
+    pub fn on_error(&self, err: ExceptionPtr, result_correlation_id: u64) {
+        self.base.loaded.set(true);
+        if result_correlation_id == self.correlation_id.get() {
+            self.base.pending.set(false);
+            self.base.on_tile_action(TileOperation::Error);
+        }
+        self.base.observer().on_tile_error(&self.base, err);
+    }
+
+    /// `markObsolete()`.
+    fn mark_obsolete(&self) {
+        self.obsolete.set(true);
+        if self.base.pending.get() {
+            self.base.on_tile_action(TileOperation::Cancelled);
+        }
+        self.base.pending.set(false);
+        // `mailbox->abandon()`
+        self.mailbox.close();
+    }
+}
+
+impl LoaderTile for RasterTileInner {
+    /// `setError(std::exception_ptr)`.
+    fn set_error(&self, err: ExceptionPtr) {
+        self.base.loaded.set(true);
+        self.base.observer().on_tile_error(&self.base, err);
+    }
+
+    fn set_tried_cache(&self) {
+        self.base.set_tried_cache();
+    }
+
+    fn on_tile_action(&self, op: TileOperation) {
+        self.base.on_tile_action(op);
+    }
+
+    /// `setMetadata(modified, expires)`.
+    fn set_metadata(&self, modified: Option<Timestamp>, expires: Option<Timestamp>) {
+        self.base.modified.set(modified);
+        self.base.expires.set(expires);
+    }
+
+    /// `setData(data)`.
+    fn set_data(&self, data: Option<Data>, _encoding: VectorTileEncoding) {
+        if !self.obsolete.get() {
+            self.correlation_id.set(self.correlation_id.get() + 1);
+            if !self.base.pending.get() {
+                self.base.on_tile_action(TileOperation::StartParse);
+            }
+            self.base.pending.set(true);
+            let correlation_id = self.correlation_id.get();
+            self.worker
+                .invoke(move |worker: &mut RasterTileWorker| worker.parse(data, correlation_id));
+        }
+    }
+}
+
+/// `RasterTile`.
+pub struct RasterTile {
+    inner: Rc<RasterTileInner>,
+    loader: Option<TileLoader>,
+    _worker: Actor<RasterTileWorker>,
+}
+
+impl RasterTile {
+    /// `RasterTile(id, sourceID, parameters, tileset, observer)`.
+    pub fn new(
+        id: OverscaledTileID,
+        source_id: String,
+        parameters: &TileParameters<'_>,
+        tileset: &Tileset,
+        observer: Option<Rc<dyn TileObserver>>,
+    ) -> Self {
+        let mailbox = Mailbox::new();
+        let parent: ActorRef<RasterTileInner> = ActorRef::new(&mailbox);
+        let worker = Actor::new_tagged(&parameters.thread_pool, move |_self_ref| RasterTileWorker { parent });
+        let inner = Rc::new(RasterTileInner {
+            base: TileBase::new(Kind::Raster, id, source_id, observer),
+            obsolete: Cell::new(false),
+            correlation_id: Cell::new(0),
+            bucket: RefCell::new(None),
+            worker: worker.self_ref(),
+            mailbox: mailbox.clone(),
+        });
+        mailbox.open(&scheduler::get_current(), inner.clone() as Rc<dyn Any>);
+        let weak: std::rc::Weak<RasterTileInner> = Rc::downgrade(&inner);
+        let loader = TileLoader::new(weak, VectorTileEncoding::Mvt, &id, parameters, tileset);
+        RasterTile {
+            inner,
+            loader: Some(loader),
+            _worker: worker,
+        }
+    }
+
+    pub fn inner(&self) -> &Rc<RasterTileInner> {
+        &self.inner
+    }
+}
+
+impl Drop for RasterTile {
+    fn drop(&mut self) {
+        self.loader = None;
+        self.inner.mark_obsolete();
+        if self.inner.base.pending.get() {
+            // This tile never finished loading or was abandoned, emit a
+            // cancellation event
+            self.inner.base.on_tile_action(TileOperation::Cancelled);
+        }
+    }
+}
+
+impl Tile for RasterTile {
+    fn base(&self) -> &TileBase {
+        &self.inner.base
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn create_render_data(&self) -> Box<dyn TileRenderData> {
+        let bucket: Option<BucketPtr> = self.inner.bucket.borrow().clone().map(|b| b as BucketPtr);
+        Box::new(SharedBucketTileRenderData::new(bucket))
+    }
+
+    fn set_necessity(&self, necessity: TileNecessity) {
+        if let Some(loader) = &self.loader {
+            loader.set_necessity(necessity);
+        }
+    }
+
+    fn set_update_parameters(&self, parameters: &TileUpdateParameters) {
+        if let Some(loader) = &self.loader {
+            loader.set_update_parameters(parameters);
+        }
+    }
+
+    fn cancel(&self) {
+        self.inner.mark_obsolete();
+    }
+
+    fn layer_properties_updated(&self, _layer_properties: &Immutable<dyn LayerProperties>) -> bool {
+        self.inner.bucket.borrow().is_some()
+    }
+
+    fn set_mask(&self, mask: TileMask) {
+        if let Some(bucket) = &*self.inner.bucket.borrow() {
+            bucket.set_mask(mask);
+        }
+    }
+}

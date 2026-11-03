@@ -5,8 +5,8 @@
 // captureRenderedFeatures (UpdateParameters::captureRenderedFeatures).
 
 use super::circle_layer_tweaker::CircleLayerTweaker;
-use super::{drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
-use crate::buckets::circle_bucket::CircleBucket;
+use super::{TileDrawables, refresh_if_bucket_updated, drawable_binders_slot, drawable_has_layer_tweaker, drawable_render_tile_slot, shared_vertices};
+use crate::buckets::circle_bucket::{CircleBinders, CircleBucket};
 use crate::change_request::{ChangeRequest, UniqueChangeRequestVec};
 use crate::layer_tweaker::{layer_tweaker_slot, LayerTweakerPtr};
 use crate::paint_parameters::PaintParameters;
@@ -39,6 +39,28 @@ fn impl_cast(impl_: &Immutable<dyn layer::Impl>) -> &CircleLayerImpl {
 }
 
 const CIRCLE_SHADER_GROUP_NAME: &str = "CircleShader";
+
+/// `vertexAttrs->readDataDrivenPaintProperties<CircleColor, CircleRadius,
+/// CircleBlur, CircleOpacity, CircleStrokeColor, CircleStrokeWidth,
+/// CircleStrokeOpacity>(binders, evaluated, propertiesAsUniforms,
+/// idCircleColorVertexAttribute)`.
+fn read_circle_attributes(
+    attrs: &mut mln_gfx::vertex_attribute::VertexAttributeArray,
+    b: &CircleBinders,
+    evaluated: &CirclePaintProperties::PossiblyEvaluated,
+    pau: &mut StringIDSetsPair,
+) {
+    let buffer = &b.interleaved_vertex_buffer;
+    let shared = shared_vertices(&buffer.shared_vertex_vector);
+    let mut id = ID_CIRCLE_COLOR_VERTEX_ATTRIBUTE;
+    read_data_driven_paint_property(attrs, &b.circle_color, buffer, &shared, &["a_color"], evaluated.get::<CircleColor>().is_constant(), pau, &mut id);
+    read_data_driven_paint_property(attrs, &b.circle_radius, buffer, &shared, &["a_radius"], evaluated.get::<CircleRadius>().is_constant(), pau, &mut id);
+    read_data_driven_paint_property(attrs, &b.circle_blur, buffer, &shared, &["a_blur"], evaluated.get::<CircleBlur>().is_constant(), pau, &mut id);
+    read_data_driven_paint_property(attrs, &b.circle_opacity, buffer, &shared, &["a_opacity"], evaluated.get::<CircleOpacity>().is_constant(), pau, &mut id);
+    read_data_driven_paint_property(attrs, &b.circle_stroke_color, buffer, &shared, &["a_stroke_color"], evaluated.get::<CircleStrokeColor>().is_constant(), pau, &mut id);
+    read_data_driven_paint_property(attrs, &b.circle_stroke_width, buffer, &shared, &["a_stroke_width"], evaluated.get::<CircleStrokeWidth>().is_constant(), pau, &mut id);
+    read_data_driven_paint_property(attrs, &b.circle_stroke_opacity, buffer, &shared, &["a_stroke_opacity"], evaluated.get::<CircleStrokeOpacity>().is_constant(), pau, &mut id);
+}
 
 pub struct RenderCircleLayer {
     base: RenderLayerBase,
@@ -162,7 +184,7 @@ impl RenderLayer for RenderCircleLayer {
             let tile_layer_group = group.as_tile_layer_group_mut().expect("circle layer group is a TileLayerGroup");
             let base = &self.base;
             let removed = tile_layer_group
-                .remove_drawables_if(|drawable| drawable.get_tile_id().is_some_and(|id| !base.has_render_tile(&id)));
+                .remove_drawables_if(|drawable| drawable.get_tile_id().is_some_and(|id| !base.render_tile_ids.contains_key(&id)));
             self.base.stats.drawables_removed += removed;
         }
 
@@ -174,7 +196,8 @@ impl RenderLayer for RenderCircleLayer {
         for tile in render_tiles.iter() {
             let tile_id = *tile.get_overscaled_tile_id();
 
-            let render_data = self.get_render_data_for_pass(tile, render_pass);
+            let base_impl = self.base.base_impl.clone();
+            let render_data = super::render_data_for_pass(tile, &*base_impl, render_pass);
             let Some(render_data) = render_data.filter(|r| r.bucket.has_data()) else {
                 self.remove_tile(render_pass, &tile_id);
                 continue;
@@ -184,17 +207,19 @@ impl RenderLayer for RenderCircleLayer {
                 continue;
             };
             let vertex_count = bucket.vertices.len();
-            let Some(paint_property_binders) = bucket.paint_property_binders.get(self.get_id()) else {
+            let Some(binders_lock) = bucket.paint_property_binders.get(self.get_id()) else {
                 continue;
             };
+            let binders_guard = binders_lock.read().unwrap();
+            let paint_property_binders = &*binders_guard;
 
-            let prev_bucket_id = self.base.get_render_tile_bucket_id(&tile_id);
+            let prev_bucket_id = self.get_render_tile_bucket_id(&tile_id);
             if prev_bucket_id != SimpleIdentity::EMPTY && prev_bucket_id != bucket.base.bucket_id {
                 // This tile was previously set up from a different bucket,
                 // drop and re-create any drawables for it.
                 self.remove_tile(render_pass, &tile_id);
             }
-            self.base.set_render_tile_bucket_id(&tile_id, bucket.base.bucket_id);
+            self.set_render_tile_bucket_id(&tile_id, bucket.base.bucket_id);
 
             // TODO(port): captureRenderedFeatures (updateParameters->captureRenderedFeatures).
 
@@ -202,7 +227,13 @@ impl RenderLayer for RenderCircleLayer {
             // and move on to the next tile.
             let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
                 // A drawable produced on a previous style/bucket should not be updated.
-                drawable_has_layer_tweaker(drawable, &layer_tweaker)
+                let current = drawable_has_layer_tweaker(drawable, &layer_tweaker);
+                if current {
+                    refresh_if_bucket_updated(drawable, |attrs| {
+                        read_circle_attributes(attrs, paint_property_binders, evaluated, &mut Default::default())
+                    });
+                }
+                current
             };
             if self.update_tile(render_pass, &tile_id, update_existing) {
                 continue;
@@ -212,21 +243,12 @@ impl RenderLayer for RenderCircleLayer {
             properties_as_uniforms.1.clear();
 
             let circle_vertex_attrs = context.create_vertex_attribute_array();
-            {
-                let buffer = &paint_property_binders.interleaved_vertex_buffer;
-                let shared = shared_vertices(&buffer.shared_vertex_vector);
-                let mut attrs = circle_vertex_attrs.borrow_mut();
-                let mut id = ID_CIRCLE_COLOR_VERTEX_ATTRIBUTE;
-                let b = paint_property_binders;
-                let pau = &mut properties_as_uniforms;
-                read_data_driven_paint_property(&mut attrs, &b.circle_color, buffer, &shared, &["a_color"], evaluated.get::<CircleColor>().is_constant(), pau, &mut id);
-                read_data_driven_paint_property(&mut attrs, &b.circle_radius, buffer, &shared, &["a_radius"], evaluated.get::<CircleRadius>().is_constant(), pau, &mut id);
-                read_data_driven_paint_property(&mut attrs, &b.circle_blur, buffer, &shared, &["a_blur"], evaluated.get::<CircleBlur>().is_constant(), pau, &mut id);
-                read_data_driven_paint_property(&mut attrs, &b.circle_opacity, buffer, &shared, &["a_opacity"], evaluated.get::<CircleOpacity>().is_constant(), pau, &mut id);
-                read_data_driven_paint_property(&mut attrs, &b.circle_stroke_color, buffer, &shared, &["a_stroke_color"], evaluated.get::<CircleStrokeColor>().is_constant(), pau, &mut id);
-                read_data_driven_paint_property(&mut attrs, &b.circle_stroke_width, buffer, &shared, &["a_stroke_width"], evaluated.get::<CircleStrokeWidth>().is_constant(), pau, &mut id);
-                read_data_driven_paint_property(&mut attrs, &b.circle_stroke_opacity, buffer, &shared, &["a_stroke_opacity"], evaluated.get::<CircleStrokeOpacity>().is_constant(), pau, &mut id);
-            }
+            read_circle_attributes(
+                &mut circle_vertex_attrs.borrow_mut(),
+                paint_property_binders,
+                evaluated,
+                &mut properties_as_uniforms,
+            );
 
             let Some(circle_shader) = circle_shader_group.get_or_create_shader(context, &properties_as_uniforms, "a_pos")
             else {

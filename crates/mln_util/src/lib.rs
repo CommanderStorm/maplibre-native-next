@@ -42,3 +42,8 @@ pub mod font_stack;
 pub mod tileset;
 pub mod tiny_sdf;
 pub mod feature;
+pub mod i18n;
+pub mod http_header;
+pub mod mapbox;
+pub mod parsedate;
+pub mod grid_index;

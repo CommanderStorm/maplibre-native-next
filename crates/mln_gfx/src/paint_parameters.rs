@@ -38,4 +38,14 @@ pub trait PaintParameters {
     fn stencil_mode_for_clipping(&self, tile_id: &UnwrappedTileID) -> StencilMode;
     /// Initialize a stencil mode for 3D rendering (each value is unique).
     fn stencil_mode_for_3d(&mut self) -> StencilMode;
+
+    /// conformance: `parameters.state.getPitch()` and
+    /// `parameters.state.isChanging()`, which `gfx::DrawableAtlasesTweaker`
+    /// reads (the transform state is a map type, above mln_gfx).
+    fn state_pitch(&self) -> f64 {
+        0.0
+    }
+    fn state_is_changing(&self) -> bool {
+        false
+    }
 }

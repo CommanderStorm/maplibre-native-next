@@ -26,6 +26,7 @@ use mln_util::logging::{Event, Log};
 use mln_util::Color;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 
 crate::paint_property_binders!(
     /// `LineBinders = PaintPropertyBinders<LinePaintProperties::DataDrivenProperties>`.
@@ -57,7 +58,9 @@ pub struct LineBucket {
     /// `gfx::IndexVector<gfx::Triangles>`.
     pub triangles: Vec<u16>,
     pub segments: Vec<SegmentBase>,
-    pub paint_property_binders: BTreeMap<String, LineBinders>,
+    /// Behind `RwLock`s: `update` (feature state) changes them while the
+    /// bucket is shared.
+    pub paint_property_binders: BTreeMap<String, RwLock<LineBinders>>,
     zoom: f32,
     overscaling: u32,
 }
@@ -83,7 +86,7 @@ impl LineBucket {
         for (id, properties) in layer_paint_properties {
             paint_property_binders
                 .entry(id.clone())
-                .or_insert_with(|| LineBinders::new(get_evaluated::<LineLayerProperties>(properties), zoom));
+                .or_insert_with(|| RwLock::new(LineBinders::new(get_evaluated::<LineLayerProperties>(properties), zoom)));
         }
         LineBucket {
             base: BucketBase::default(),
@@ -250,7 +253,7 @@ impl Bucket for LineBucket {
 
         let length = self.vertices.len();
         for (id, binders) in self.paint_property_binders.iter_mut() {
-            binders.populate_vertex_vectors(
+            binders.get_mut().unwrap().populate_vertex_vectors(
                 feature,
                 length,
                 index,
@@ -278,17 +281,17 @@ impl Bucket for LineBucket {
         let offset = get_or_max(
             evaluated.get::<LineOffset>().constant(),
             LineOffset::default_value(),
-            binders.map(|b| b.line_offset.statistics.max()),
+            binders.map(|b| b.read().unwrap().line_offset.statistics.max()),
         );
         let mut line_width = get_or_max(
             evaluated.get::<LineWidth>().constant(),
             LineWidth::default_value(),
-            binders.map(|b| b.line_width.statistics.max()),
+            binders.map(|b| b.read().unwrap().line_width.statistics.max()),
         );
         let gap_width = get_or_max(
             evaluated.get::<LineGapWidth>().constant(),
             LineGapWidth::default_value(),
-            binders.map(|b| b.line_gap_width.statistics.max()),
+            binders.map(|b| b.read().unwrap().line_gap_width.statistics.max()),
         );
         if gap_width != 0.0 {
             line_width = gap_width + 2.0 * line_width;
@@ -297,5 +300,19 @@ impl Bucket for LineBucket {
         line_width / 2.0 + offset.abs() + (translate[0] * translate[0] + translate[1] * translate[1]).sqrt()
     }
 
-    // TODO(port): update(FeatureStates, ...) (feature state).
+    fn update(
+        &self,
+        states: &crate::bucket::FeatureStates,
+        layer: &dyn mln_tile_id::geometry_tile_data::GeometryTileLayer,
+        layer_id: &str,
+        image_positions: &ImagePositions,
+    ) {
+        if let Some(binders) = self.paint_property_binders.get(layer_id) {
+            binders.write().unwrap().update_vertex_vectors(states, layer, image_positions);
+            self.base.uploaded.store(false, Ordering::SeqCst);
+
+            // sharedVertices->updateModified()
+            self.base.version.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }

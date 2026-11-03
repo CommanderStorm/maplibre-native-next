@@ -16,6 +16,8 @@ use crate::bucket::{Bucket, BucketPtr};
 use crate::bucket_parameters::BucketParameters;
 use crate::buckets::fill_bucket::FillBucket;
 use crate::buckets::line_bucket::LineBucket;
+use crate::geometry::feature_index::FeatureIndex;
+use crate::layout::layout::{Layout, LayoutParameters, SourceLayer};
 use crate::render_layer::LayerRenderData;
 use mln_style::expression::{EvaluationContext, Image};
 use mln_style::layer_properties::{get_evaluated, LayerProperties};
@@ -100,6 +102,10 @@ pub struct PatternLayout<S: PatternLayoutSpec> {
     pub source_layer_id: String,
     pub has_pattern: bool,
     pub retain_features_by_id: bool,
+
+    /// `const std::unique_ptr<GeometryTileLayer> sourceLayer` (see
+    /// layout.rs); `None` when built from a borrowed layer.
+    pub source_layer: Option<SourceLayer>,
 }
 
 /// `constantOr(Faded<expression::Image>{.from = "", .to = ""})`.
@@ -212,7 +218,28 @@ impl<S: PatternLayoutSpec> PatternLayout<S> {
             source_layer_id,
             has_pattern,
             retain_features_by_id: parameters.retain_features_by_id,
+            source_layer: None,
         }
+    }
+
+    /// `PatternLayout(parameters, group, std::move(sourceLayer),
+    /// layoutParameters)` as the factories call it.
+    pub fn with_source_layer(
+        parameters: &mut LayoutParameters<'_>,
+        group: &[Immutable<dyn LayerProperties>],
+        source_layer: SourceLayer,
+        sorted: bool,
+    ) -> Self {
+        let mut layout = PatternLayout::new(
+            parameters.bucket_parameters,
+            group,
+            &*source_layer.layer(),
+            parameters.image_dependencies,
+            parameters.available_images,
+            sorted,
+        );
+        layout.source_layer = Some(source_layer);
+        layout
     }
 
     /// `hasDependencies()`.
@@ -351,4 +378,32 @@ pub fn fill_layout_is_sorted(leader: &Immutable<dyn LayerProperties>) -> bool {
 pub fn line_layout_is_sorted(leader: &Immutable<dyn LayerProperties>) -> bool {
     let properties = (**leader).as_any().downcast_ref::<LineLayerProperties>().expect("LineLayerProperties");
     !properties.layer_impl().layout.get::<LineSortKey>().is_undefined()
+}
+
+impl<S: PatternLayoutSpec> Layout for PatternLayout<S> {
+    fn has_dependencies(&self) -> bool {
+        PatternLayout::has_dependencies(self)
+    }
+
+    fn create_bucket(
+        &mut self,
+        pattern_positions: &ImagePositions,
+        feature_index: &mut FeatureIndex,
+        render_data: &mut HashMap<String, LayerRenderData>,
+        _first_load: bool,
+        _show_collision_boxes: bool,
+        canonical: &CanonicalTileID,
+    ) -> Result<(), ExceptionPtr> {
+        let source_layer = self.source_layer.clone().expect("PatternLayout: source layer");
+        let layer = source_layer.layer();
+        self.create_bucket_with(
+            &*layer,
+            pattern_positions,
+            &mut |geometries, i, source_layer_id, bucket_leader_id| {
+                feature_index.insert(geometries, i, source_layer_id, bucket_leader_id)
+            },
+            render_data,
+            canonical,
+        )
+    }
 }

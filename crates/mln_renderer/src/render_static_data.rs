@@ -45,8 +45,45 @@ impl RenderStaticData {
         vec![0, 1, 2, 1, 2, 3]
     }
 
+    /// `rasterVertices()`.
+    pub fn raster_vertices() -> Vec<crate::buckets::raster_bucket::RasterLayoutVertex> {
+        use crate::buckets::raster_bucket::RasterBucket;
+        use maplibre_native_base::Point;
+        let e = constants::EXTENT as i16;
+        let t = constants::EXTENT as u16;
+        vec![
+            RasterBucket::layout_vertex(Point::new(0, 0), Point::new(0, 0)),
+            RasterBucket::layout_vertex(Point::new(e, 0), Point::new(t, 0)),
+            RasterBucket::layout_vertex(Point::new(0, e), Point::new(0, t)),
+            RasterBucket::layout_vertex(Point::new(e, e), Point::new(t, t)),
+        ]
+    }
+
+    /// `rasterSegments()`.
+    pub fn raster_segments() -> Vec<SegmentBase> {
+        vec![SegmentBase::with_lengths(0, 0, 4, 6)]
+    }
+
     /// `tileTriangleSegments()`.
     pub fn tile_triangle_segments() -> Vec<SegmentBase> {
+        vec![SegmentBase::with_lengths(0, 0, 4, 6)]
+    }
+
+    // dem-heatmap
+    /// `heatmapTextureVertices()`.
+    pub fn heatmap_texture_vertices() -> Vec<crate::buckets::heatmap_bucket::HeatmapTextureLayoutVertex> {
+        use crate::buckets::heatmap_bucket::HeatmapBucket;
+        use maplibre_native_base::Point;
+        vec![
+            HeatmapBucket::texture_vertex(Point::new(0, 0)),
+            HeatmapBucket::texture_vertex(Point::new(1, 0)),
+            HeatmapBucket::texture_vertex(Point::new(0, 1)),
+            HeatmapBucket::texture_vertex(Point::new(1, 1)),
+        ]
+    }
+
+    /// `heatmapTextureSegments()`.
+    pub fn heatmap_texture_segments() -> Vec<SegmentBase> {
         vec![SegmentBase::with_lengths(0, 0, 4, 6)]
     }
 }

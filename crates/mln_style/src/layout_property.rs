@@ -200,8 +200,25 @@ macro_rules! layout_properties {
 
                 $crate::__possibly_evaluated_feature_methods!();
 
-                // TODO(port): `Evaluated evaluate(z, feature)` (all properties
-                // at once; symbol layout, M5).
+                /// `Evaluated evaluate(float z, const GeometryTileFeature&,
+                /// const CanonicalTileID&)`: every property at once (symbol
+                /// layout; added by `symbols`).
+                pub fn evaluate_all(
+                    &self,
+                    z: f32,
+                    feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
+                    canonical: &mln_tile_id::CanonicalTileID,
+                ) -> Evaluated {
+                    Evaluated {
+                        $($field: <$prop as Property>::evaluate_possibly_evaluated(
+                            &self.$field,
+                            z,
+                            feature,
+                            $crate::properties::FeatureEvaluationExtra::Canonical(canonical),
+                            <$prop as Property>::default_value(),
+                        ),)+
+                    }
+                }
             }
         }
     };

@@ -12,6 +12,8 @@ use crate::paint_parameters::TransformParameters;
 use crate::render_tile::RenderTile;
 use crate::render_tree::RenderItem;
 use crate::sources::render_geojson_source::RenderGeoJSONSource;
+use crate::sources::render_raster_source::RenderRasterSource;
+use crate::sources::render_vector_source::RenderVectorSource;
 use crate::tile::tile::{TileBase, TileOperation};
 use crate::tile::tile_observer::TileObserver;
 use crate::tile_parameters::TileParameters;
@@ -20,7 +22,7 @@ use mln_actor::TaggedScheduler;
 use mln_map_types::MapDebugOptions;
 use mln_style::layer_properties::LayerProperties;
 use mln_style::source;
-use mln_style::sources::geojson_source_impl;
+use mln_style::sources::{geojson_source_impl, tile_source};
 use mln_style_types::SourceType;
 use mln_tile_id::OverscaledTileID;
 use mln_util::constants;
@@ -191,11 +193,46 @@ pub trait RenderSource {
         None
     }
 
+    /// conformance: `getImageRenderData()` (image sources).
+    fn get_image_render_data(&self) -> Option<Rc<crate::sources::render_image_source::ImageSourceRenderData>> {
+        None
+    }
+
     fn get_raw_render_tiles(&self) -> Rc<Vec<RenderTile>> {
         Rc::new(Vec::new())
     }
 
+    // layers: feature state
+    /// `setFeatureState(sourceLayerID, featureID, state)`.
+    fn set_feature_state(
+        &mut self,
+        _source_layer_id: Option<&str>,
+        _feature_id: &str,
+        _state: &mln_style::expression::expression::FeatureState,
+    ) {
+    }
+
+    /// `getFeatureState(state, sourceLayerID, featureID)`.
+    fn get_feature_state(
+        &self,
+        _source_layer_id: Option<&str>,
+        _feature_id: &str,
+    ) -> mln_style::expression::expression::FeatureState {
+        Default::default()
+    }
+
+    /// `removeFeatureState(sourceLayerID, featureID, stateKey)`.
+    fn remove_feature_state(
+        &mut self,
+        _source_layer_id: Option<&str>,
+        _feature_id: Option<&str>,
+        _state_key: Option<&str>,
+    ) {
+    }
+
     fn set_cache_enabled(&mut self, _enable: bool) {}
+
+    fn set_fast_pfor_enabled(&mut self, _enable: bool) {}
 
     fn reduce_memory_use(&mut self);
 
@@ -225,19 +262,37 @@ pub trait RenderSource {
 /// `RenderSource::create(impl, threadPool)`.
 pub fn create(impl_: &Immutable<dyn source::Impl>, thread_pool: &TaggedScheduler) -> Option<Box<dyn RenderSource>> {
     match impl_.type_ {
+        // the TileSet isn't available yet, so we can't make different
+        // sources by format
+        SourceType::Vector => Some(Box::new(RenderVectorSource::new(
+            source::static_immutable_cast::<tile_source::Impl>(impl_),
+            thread_pool,
+        ))),
+        SourceType::Raster => Some(Box::new(RenderRasterSource::new(
+            source::static_immutable_cast::<tile_source::Impl>(impl_),
+            thread_pool,
+        ))),
+        // dem-heatmap
+        SourceType::RasterDEM => Some(Box::new(crate::sources::render_raster_dem_source::RenderRasterDEMSource::new(
+            source::static_immutable_cast::<tile_source::Impl>(impl_),
+            thread_pool,
+        ))),
         SourceType::GeoJSON => Some(Box::new(RenderGeoJSONSource::new(
             source::static_immutable_cast::<geojson_source_impl::Impl>(impl_),
             thread_pool,
+        ))),
+        // conformance
+        SourceType::Image => Some(Box::new(crate::sources::render_image_source::RenderImageSource::new(
+            source::static_immutable_cast::<mln_style::sources::image_source::Impl>(impl_),
         ))),
         SourceType::Video => {
             debug_assert!(false);
             None
         }
-        // TODO(port): RenderVectorSource, RenderRasterSource,
-        // RenderRasterDEMSource, RenderAnnotationSource, RenderImageSource,
-        // RenderCustomGeometrySource, RenderCustomVectorSource. Their style
-        // sources don't convert yet (conversion/source.rs), so no impl of
-        // these types reaches the renderer.
+        // TODO(port): RenderRasterDEMSource,
+        // RenderAnnotationSource, RenderImageSource,
+        // RenderCustomGeometrySource, RenderCustomVectorSource. The
+        // orchestrator skips the layers of a source without a render source.
         _ => None,
     }
 }

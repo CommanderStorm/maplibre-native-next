@@ -48,9 +48,11 @@ impl Renderer {
         // TODO(port): ErrorScope (SymbolErrorObserver routing).
 
         let impl_ = self.impl_mut();
-        let _style_changed = impl_.style_loaded && !update_parameters.style_loaded;
+        let style_changed = impl_.style_loaded && !update_parameters.style_loaded;
         impl_.style_loaded = update_parameters.style_loaded;
-        // TODO(port): dynamicTextureAtlas (re)creation on styleChanged.
+        if style_changed {
+            impl_.orchestrator.reset_dynamic_texture_atlas();
+        }
         if let Some(mut render_tree) = impl_.orchestrator.create_render_tree(update_parameters) {
             render_tree.prepare();
             impl_.render(&render_tree, update_parameters);
@@ -60,6 +62,41 @@ impl Renderer {
     // TODO(port): queryRenderedFeatures, querySourceFeatures,
     // queryPointAnnotations, queryShapeAnnotations, queryFeatureExtensions,
     // feature state, dumpDebugLogs, getPlacedSymbolsData.
+
+    // layers: feature state
+    /// `setFeatureState(sourceID, sourceLayerID, featureID, state)`.
+    pub fn set_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer_id: Option<&str>,
+        feature_id: &str,
+        state: &mln_style::expression::expression::FeatureState,
+    ) {
+        self.impl_mut().orchestrator.set_feature_state(source_id, source_layer_id, feature_id, state);
+    }
+
+    /// `getFeatureState(sourceID, sourceLayerID, featureID)`.
+    pub fn get_feature_state(
+        &self,
+        source_id: &str,
+        source_layer_id: Option<&str>,
+        feature_id: &str,
+    ) -> mln_style::expression::expression::FeatureState {
+        self.impl_ref().orchestrator.get_feature_state(source_id, source_layer_id, feature_id)
+    }
+
+    /// `removeFeatureState(sourceID, sourceLayerID, featureID, stateKey)`.
+    pub fn remove_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer_id: Option<&str>,
+        feature_id: Option<&str>,
+        state_key: Option<&str>,
+    ) {
+        self.impl_mut()
+            .orchestrator
+            .remove_feature_state(source_id, source_layer_id, feature_id, state_key);
+    }
 
     pub fn collect_placed_symbol_data(&mut self, enable: bool) {
         self.impl_mut().orchestrator.collect_placed_symbol_data(enable);
@@ -77,7 +114,7 @@ impl Renderer {
         let backend = self.impl_ref().backend.clone();
         let _guard = BackendScope::new(&*backend, ScopeType::Explicit);
         self.impl_mut().reduce_memory_use();
-        // TODO(port): orchestrator.reduceMemoryUse().
+        self.impl_mut().orchestrator.reduce_memory_use();
     }
 
     pub fn clear_data(&mut self) {

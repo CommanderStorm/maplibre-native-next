@@ -252,3 +252,62 @@ pub fn now() -> Timestamp {
     };
     Timestamp(secs)
 }
+
+// Wall-clock formatting and parsing (src/mln/util/chrono.cpp; added by glfw).
+
+/// `gmtime_r` fields for `rfc1123`: (weekday 0 = Sunday, mday, month 0-11,
+/// year, hour, minute, second).
+fn gmtime(secs: i64) -> (usize, i64, usize, i64, i64, i64, i64) {
+    let days = secs.div_euclid(86400);
+    let rem = secs.rem_euclid(86400);
+    let (hour, min, sec) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    // 1970-01-01 was a Thursday.
+    let wday = (days + 4).rem_euclid(7) as usize;
+    // Civil from days (Howard Hinnant's algorithm).
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let mday = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (wday, mday, (month - 1) as usize, year, hour, min, sec)
+}
+
+/// `util::rfc1123(Timestamp)`: e.g. "Sun, 06 Nov 1994 08:49:37 GMT".
+pub fn rfc1123(timestamp: Timestamp) -> String {
+    const WEEK: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let (wday, mday, month, year, hour, min, sec) = gmtime(timestamp.secs_since_epoch());
+    format!(
+        "{}, {:02} {} {:4} {:02}:{:02}:{:02} GMT",
+        WEEK[wday], mday, MONTHS[month], year, hour, min, sec
+    )
+}
+
+/// `util::parseTimestamp(const char*)`: vendor/parsedate's `parse_date`
+/// (-1 when the date does not parse).
+pub fn parse_timestamp_str(timestamp: &str) -> Timestamp {
+    Timestamp::from_secs(crate::parsedate::parse_date(timestamp))
+}
+
+/// `util::parseTimestamp(int32_t)`.
+pub fn parse_timestamp_i32(timestamp: i32) -> Timestamp {
+    Timestamp::from_secs(i64::from(timestamp))
+}
+
+#[cfg(test)]
+mod wall_clock_tests {
+    use super::*;
+
+    #[test]
+    fn rfc1123_format() {
+        // test/util/timestamp... the C++ formats with gmtime_r + snprintf.
+        assert_eq!(rfc1123(Timestamp::from_secs(784111777)), "Sun, 06 Nov 1994 08:49:37 GMT");
+        assert_eq!(rfc1123(Timestamp::from_secs(0)), "Thu, 01 Jan 1970 00:00:00 GMT");
+        assert_eq!(rfc1123(Timestamp::from_secs(951782400)), "Tue, 29 Feb 2000 00:00:00 GMT");
+        assert_eq!(parse_timestamp_str(&rfc1123(Timestamp::from_secs(1445412480))), Timestamp::from_secs(1445412480));
+    }
+}

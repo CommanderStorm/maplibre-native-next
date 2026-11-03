@@ -535,6 +535,70 @@ fn parse_global_state_value(value: &serde_json::Value) -> Value {
     }
 }
 
+/// `ConversionTraits<const JSValue*>::toValue`: null and false are
+/// `false`, arrays and objects have no value.
+fn json_to_value(value: &serde_json::Value) -> Option<Value> {
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(false) => Some(Value::Bool(false)),
+        serde_json::Value::Bool(true) => Some(Value::Bool(true)),
+        serde_json::Value::String(s) => Some(Value::String(s.clone())),
+        serde_json::Value::Number(n) => Some(if let Some(u) = n.as_u64() {
+            Value::Uint(u)
+        } else if let Some(i) = n.as_i64() {
+            Value::Int(i)
+        } else {
+            Value::Double(n.as_f64().unwrap_or(0.0))
+        }),
+        _ => None,
+    }
+}
+
+/// The state conversion of the setFeatureState operation (parser.cpp
+/// `convertFn` over `eachMember(state, ...)`), with its quirks: an array
+/// value becomes `{key: [...]}` but is not stored, an object recurses and
+/// stores the last nested value under the outer key too.
+fn parse_feature_state(state: &serde_json::Value, metadata: &mut TestMetadata) -> maplibre_native_base::PropertyMap {
+    struct Parse {
+        state_value: Value,
+        value_parsed: bool,
+        parsed_state: maplibre_native_base::PropertyMap,
+    }
+    fn convert(p: &mut Parse, k: &str, v: &serde_json::Value, metadata: &mut TestMetadata) {
+        if let Some(value) = json_to_value(v) {
+            p.state_value = value;
+            p.value_parsed = true;
+        } else if let serde_json::Value::Array(elements) = v {
+            let array: Vec<Value> = elements.iter().filter_map(json_to_value).collect();
+            let mut values = maplibre_native_base::ValueObject::new();
+            values.insert(k.to_string(), Value::Array(array));
+            p.state_value = Value::Object(values);
+            p.value_parsed = true;
+            return;
+        } else if let serde_json::Value::Object(members) = v {
+            for (mk, mv) in members {
+                convert(p, mk, mv, metadata);
+            }
+        }
+
+        if !p.value_parsed {
+            metadata.error_message = format!("Could not get feature state value, state key: {k}");
+            return;
+        }
+        p.parsed_state.insert(k.to_string(), p.state_value.clone());
+    }
+    let mut p = Parse {
+        state_value: Value::Null,
+        value_parsed: false,
+        parsed_state: maplibre_native_base::PropertyMap::new(),
+    };
+    if let serde_json::Value::Object(members) = state {
+        for (k, v) in members {
+            convert(&mut p, k, v, metadata);
+        }
+    }
+    p.parsed_state
+}
+
 /// An operation the port cannot execute yet: the test errors (see
 /// `TestContext::fail_not_ported`).
 fn not_ported(what: String) -> TestOperation {
@@ -876,10 +940,49 @@ pub fn parse_test_operations(metadata: &mut TestMetadata) -> TestOperations {
             || name == GET_FEATURE_STATE_OP
             || name == REMOVE_FEATURE_STATE_OP
         {
-            // TODO(port): set/get/removeFeatureState: render first, then call
-            // Renderer::{set,get,remove}FeatureState; setFeatureState also
-            // converts the state object here (parse-time error message).
-            result.push(not_ported(format!("{name} operation (Renderer feature state)")));
+            let feature_options = arg(1);
+            let source_id = feature_options.get("source").map(|v| get_str(v).to_string()).unwrap_or_default();
+            let source_layer: Option<String> = feature_options.get("sourceLayer").map(|v| get_str(v).to_string());
+            let feature_id = match feature_options.get("id") {
+                Some(serde_json::Value::String(id)) => id.clone(),
+                // `util::toString(GetUint64())`
+                Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0).to_string(),
+                _ => String::new(),
+            };
+            let finish = |ctx: &mut TestContext<'_>, result: Result<bool, MapError>| match result {
+                Ok(ok) => ok,
+                Err(MapError::NotPorted(what)) => ctx.fail_not_ported(&what),
+                Err(MapError::Exception(what)) => ctx.fail_exception(&what),
+                Err(_) => false,
+            };
+            if name == SET_FEATURE_STATE_OP {
+                // setFeatureState
+                let parsed_state = parse_feature_state(arg(2), metadata);
+                result.push(Box::new(move |ctx: &mut TestContext<'_>| {
+                    let result =
+                        ctx.get_map().set_feature_state(&source_id, source_layer.as_deref(), &feature_id, &parsed_state);
+                    finish(ctx, result)
+                }));
+            } else if name == GET_FEATURE_STATE_OP {
+                // getFeatureState
+                result.push(Box::new(move |ctx: &mut TestContext<'_>| {
+                    let result = ctx.get_map().get_feature_state(&source_id, source_layer.as_deref(), &feature_id);
+                    finish(ctx, result)
+                }));
+            } else {
+                // removeFeatureState: featureID is always passed (a
+                // std::string converts to a non-empty optional).
+                let state_key: Option<String> = if size >= 3 { Some(get_str(arg(2)).to_string()) } else { None };
+                result.push(Box::new(move |ctx: &mut TestContext<'_>| {
+                    let result = ctx.get_map().remove_feature_state(
+                        &source_id,
+                        source_layer.as_deref(),
+                        Some(&feature_id),
+                        state_key.as_deref(),
+                    );
+                    finish(ctx, result)
+                }));
+            }
         } else if name == PAN_GESTURE_OP {
             // benchmarkPanGesture
             if metadata.map_mode != MapMode::Continuous {

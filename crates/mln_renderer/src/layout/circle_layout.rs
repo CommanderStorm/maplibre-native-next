@@ -7,7 +7,10 @@
 use crate::bucket::{Bucket, BucketPtr};
 use crate::bucket_parameters::BucketParameters;
 use crate::buckets::circle_bucket::CircleBucket;
+use crate::geometry::feature_index::FeatureIndex;
+use crate::layout::layout::{Layout, SourceLayer};
 use crate::render_layer::LayerRenderData;
+use mln_style_types::image::ImagePositions;
 use mln_map_types::MapMode;
 use mln_style::expression::{EvaluationContext, Value};
 use mln_style::layer_properties::LayerProperties;
@@ -41,6 +44,10 @@ pub struct CircleLayout {
     pub mode: MapMode,
     pub source_layer_id: String,
     pub retain_features_by_id: bool,
+
+    /// `const std::unique_ptr<GeometryTileLayer> sourceLayer` (see
+    /// layout.rs); `None` when built from a borrowed layer.
+    pub source_layer: Option<SourceLayer>,
 }
 
 static EMPTY_FORMATTED_SECTION: Value = Value::Null;
@@ -106,7 +113,20 @@ impl CircleLayout {
             mode: parameters.mode,
             source_layer_id,
             retain_features_by_id: parameters.retain_features_by_id,
+            source_layer: None,
         }
+    }
+
+    /// `CircleLayout(parameters, group, std::move(sourceLayer))` as the
+    /// factory calls it.
+    pub fn with_source_layer(
+        parameters: &BucketParameters,
+        group: &[Immutable<dyn LayerProperties>],
+        source_layer: SourceLayer,
+    ) -> Self {
+        let mut layout = CircleLayout::new(parameters, group, &*source_layer.layer());
+        layout.source_layer = Some(source_layer);
+        layout
     }
 
     /// `hasDependencies()`.
@@ -236,7 +256,7 @@ impl CircleLayout {
 
         let length = bucket.vertices.len();
         for binders in bucket.paint_property_binders.values_mut() {
-            binders.populate_vertex_vectors(
+            binders.get_mut().unwrap().populate_vertex_vectors(
                 feature,
                 length,
                 feature_index,
@@ -246,5 +266,32 @@ impl CircleLayout {
                 &EMPTY_FORMATTED_SECTION,
             );
         }
+    }
+}
+
+impl Layout for CircleLayout {
+    fn has_dependencies(&self) -> bool {
+        CircleLayout::has_dependencies(self)
+    }
+
+    fn create_bucket(
+        &mut self,
+        _pattern_positions: &ImagePositions,
+        feature_index: &mut FeatureIndex,
+        render_data: &mut HashMap<String, LayerRenderData>,
+        _first_load: bool,
+        _show_collision_boxes: bool,
+        canonical: &CanonicalTileID,
+    ) -> Result<(), ExceptionPtr> {
+        let source_layer = self.source_layer.clone().expect("CircleLayout: source layer");
+        let layer = source_layer.layer();
+        self.create_bucket_with(
+            &*layer,
+            &mut |geometries, i, source_layer_id, bucket_leader_id| {
+                feature_index.insert(geometries, i, source_layer_id, bucket_leader_id)
+            },
+            render_data,
+            canonical,
+        )
     }
 }

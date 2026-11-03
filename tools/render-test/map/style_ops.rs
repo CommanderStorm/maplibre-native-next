@@ -63,6 +63,32 @@ pub fn add_layer(style: &mut Style, json: &str) -> Result<(), MapError> {
     style.add_layer(layer, None).map_err(|e| MapError::Exception(e.to_string()))
 }
 
+/// `setFilter`: `convert<style::Filter>(filter)` (a conversion error
+/// first), then `getLayer(layerName)` (`LayerNotFound`), then
+/// `layer->setFilter(filter)`.
+pub fn set_layer_filter(style: &mut Style, layer_name: &str, filter: &serde_json::Value) -> Result<(), MapError> {
+    let mut error = mln_conversion::Error::default();
+    let Some(filter) = mln_style::conversion::convert::<mln_style::filter::Filter>(&Convertible::from(filter), &mut error)
+    else {
+        return Err(MapError::Conversion(error.message));
+    };
+    let Some(mut layer) = style.get_layer_mut(layer_name) else {
+        return Err(MapError::LayerNotFound);
+    };
+    layer.set_filter(&filter);
+    Ok(())
+}
+
+/// `setGlobalStateProperty`: `style.setGlobalStateProperty(name, value)`;
+/// its MisuseException (style not loaded) is not caught by the runner.
+pub fn set_global_state_property(
+    style: &mut Style,
+    name: &str,
+    value: &maplibre_native_base::Value,
+) -> Result<(), MapError> {
+    style.set_global_state_property(name, value).map_err(|e| MapError::Exception(e.to_string()))
+}
+
 /// `removeLayer`: `bool(style.removeLayer(layerName))`.
 pub fn remove_layer(style: &mut Style, layer_name: &str) -> bool {
     style.remove_layer(layer_name).is_some()

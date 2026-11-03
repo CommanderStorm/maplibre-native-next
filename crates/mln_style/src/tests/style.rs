@@ -460,3 +460,94 @@ fn visibility_expression_rejects_other_dependencies() {
 // TODO(port): DuplicateSource, RemoveSourceInUse, SourceImplsOrder,
 // LoadJSONCancelsPendingLoadURL, PublicLoadStateDoesNotWaitForResources
 // (need sources / a file source).
+
+// Style::loadURL (added by glfw).
+
+/// An observer that records `on_style_response` and style errors.
+#[derive(Default)]
+struct ResponseObserver {
+    responses: Cell<usize>,
+    errors: std::cell::RefCell<Vec<String>>,
+}
+
+impl SourceObserver for ResponseObserver {}
+
+impl Observer for ResponseObserver {
+    fn on_style_response(&self) {
+        self.responses.set(self.responses.get() + 1);
+    }
+    fn on_style_error(&self, error: mln_util::exception::ExceptionPtr) {
+        self.errors.borrow_mut().push(error.to_string());
+    }
+}
+
+fn stub_with_style_response(
+    responder: impl Fn(&mln_storage::Resource) -> Option<mln_storage::Response> + 'static,
+) -> (Impl, Rc<ResponseObserver>, mln_actor::RunLoop) {
+    let run_loop = mln_actor::RunLoop::new();
+    let file_source = mln_storage::stub_file_source::StubFileSource::new(
+        mln_storage::stub_file_source::ResponseType::Asynchronous,
+    );
+    file_source.set_response(mln_storage::Kind::Style, responder);
+    let mut style = Impl::with_file_source(
+        Some(Arc::new(file_source)),
+        1.0,
+        mln_actor::TaggedScheduler::new(mln_actor::scheduler::get_background(), mln_util::identity::SimpleIdentity::new()),
+    );
+    let observer = Rc::new(ResponseObserver::default());
+    style.set_observer(Some(observer.clone()));
+    (style, observer, run_loop)
+}
+
+#[test]
+fn load_url_parses_the_response() {
+    let (mut style, observer, run_loop) = stub_with_style_response(|resource| {
+        assert_eq!(resource.url, "http://some-url");
+        let mut response = mln_storage::Response::new();
+        response.data = Some(Arc::new(br#"{"version": 8, "name": "Remote", "sources": {}, "layers": []}"#.to_vec()));
+        Some(response)
+    });
+    style.load_url("http://some-url");
+    assert!(!style.is_loaded());
+    assert_eq!("http://some-url", style.get_url());
+    run_loop.run_once();
+    assert_eq!(1, observer.responses.get());
+    style.process_style_responses();
+    assert_eq!("Remote", style.get_name());
+    assert_eq!("http://some-url", style.get_url());
+}
+
+#[test]
+fn load_url_error() {
+    let (mut style, observer, run_loop) = stub_with_style_response(|_| {
+        let mut response = mln_storage::Response::new();
+        response.error = Some(Box::new(mln_storage::response::Error::new(
+            mln_storage::response::Reason::NotFound,
+            "HTTP status code 404",
+        )));
+        Some(response)
+    });
+    style.load_url("http://some-url");
+    run_loop.run_once();
+    style.process_style_responses();
+    assert_eq!(vec!["loading style failed: HTTP status code 404".to_owned()], *observer.errors.borrow());
+    assert!(!style.is_loaded());
+}
+
+#[test]
+fn load_json_cancels_pending_load_url() {
+    // TEST(Style, LoadJSONCancelsPendingLoadURL)
+    let (mut style, _observer, run_loop) = stub_with_style_response(|_| {
+        let mut response = mln_storage::Response::new();
+        response.data = Some(Arc::new(br#"{"version": 8, "name": "Streets", "sources": {}, "layers": []}"#.to_vec()));
+        Some(response)
+    });
+    style.load_url("http://some-url");
+    style.load_json(r#"{"version": 8, "name": "Test Style", "sources": {}, "layers": []}"#);
+    assert_eq!("Test Style", style.get_name());
+    assert_eq!("", style.get_url());
+    assert!(style.get_json().contains("Test Style"));
+    run_loop.run_once();
+    style.process_style_responses();
+    assert_eq!("Test Style", style.get_name());
+}

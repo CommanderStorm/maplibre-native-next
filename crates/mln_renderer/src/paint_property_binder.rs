@@ -20,8 +20,6 @@
 // the tweakers call `setPatternParameters` every frame: the state that call
 // writes (cross-faded binders) is behind a `Mutex`.
 //
-// TODO(port): `updateVertexVectors` / `updateVertexVector` (feature state:
-// `Bucket::update`).
 
 use crate::layout::pattern_layout::PatternDependency;
 use crate::paint_property_statistics::{PaintPropertyStatistics, StatisticValue};
@@ -38,7 +36,7 @@ use mln_style::renderer::possibly_evaluated_property_value::{
 };
 use mln_style::CrossfadeParameters;
 use mln_style_types::image::{ImagePosition, ImagePositions};
-use mln_tile_id::geometry_tile_data::GeometryTileFeature;
+use mln_tile_id::geometry_tile_data::{GeometryTileFeature, GeometryTileLayer};
 use mln_tile_id::CanonicalTileID;
 use mln_util::feature::feature_id_to_string;
 use mln_util::Color;
@@ -314,6 +312,75 @@ impl<T: BinderValue> PaintPropertyBinder<T> {
                         start: elements,
                         end: length,
                     });
+                }
+            }
+        }
+    }
+
+    /// `updateVertexVectors(states, layer, imagePositions)`.
+    pub fn update_vertex_vectors(
+        &mut self,
+        buffer: &mut InterleavedVertexBuffer,
+        states: &crate::bucket::FeatureStates,
+        layer: &dyn GeometryTileLayer,
+    ) {
+        let feature_map = match &self.kind {
+            PaintPropertyBinderKind::Constant { .. } => return,
+            PaintPropertyBinderKind::SourceFunction { feature_map, .. }
+            | PaintPropertyBinderKind::CompositeFunction { feature_map, .. } => feature_map.clone(),
+        };
+        for (id, state) in states {
+            let Some(positions) = feature_map.get(id) else {
+                continue;
+            };
+            for pos in positions {
+                let feature = layer.get_feature(pos.feature_index);
+                self.update_vertex_vector(buffer, pos.start, pos.end, &*feature, state);
+            }
+        }
+    }
+
+    /// `updateVertexVector(start, end, feature, state)`.
+    pub fn update_vertex_vector(
+        &mut self,
+        buffer: &mut InterleavedVertexBuffer,
+        start: usize,
+        end: usize,
+        feature: &dyn GeometryTileFeature,
+        state: &mln_style::expression::expression::FeatureState,
+    ) {
+        let vertex_offset = self.vertex_offset;
+        match &self.kind {
+            PaintPropertyBinderKind::Constant { .. } => {}
+            PaintPropertyBinderKind::SourceFunction { expression, default_value, .. } => {
+                let evaluated = expression.evaluate(
+                    &EvaluationContext::from_feature(Some(feature)).with_feature_state(Some(state)),
+                    default_value.clone(),
+                );
+                self.statistics.add(&evaluated);
+                let value = evaluated.attribute_value();
+                let bytes = floats_to_bytes(&value[..T::DIMENSIONS]);
+                for i in start..end {
+                    buffer.set(i, vertex_offset, &bytes);
+                }
+            }
+            PaintPropertyBinderKind::CompositeFunction { expression, default_value, zoom_range, .. } => {
+                let min = expression.evaluate(
+                    &EvaluationContext::with_zoom_feature_state(zoom_range.min, Some(feature), Some(state)),
+                    default_value.clone(),
+                );
+                let max = expression.evaluate(
+                    &EvaluationContext::with_zoom_feature_state(zoom_range.max, Some(feature), Some(state)),
+                    default_value.clone(),
+                );
+                self.statistics.add(&min);
+                self.statistics.add(&max);
+                let mut value = Vec::with_capacity(2 * T::DIMENSIONS);
+                value.extend_from_slice(&min.attribute_value()[..T::DIMENSIONS]);
+                value.extend_from_slice(&max.attribute_value()[..T::DIMENSIONS]);
+                let bytes = floats_to_bytes(&value);
+                for i in start..end {
+                    buffer.set(i, vertex_offset, &bytes);
                 }
             }
         }
@@ -620,6 +687,15 @@ pub trait PaintPropertyBinderBase {
     );
     /// `setPatternParameters(posA, posB, crossfade)`.
     fn pattern_parameters(&self, pos_a: Option<&ImagePosition>, pos_b: Option<&ImagePosition>, crossfade: &CrossfadeParameters);
+    /// `updateVertexVectors(states, layer, imagePositions)` (the base no-op
+    /// for the constant and cross-faded binders).
+    fn update_vectors(
+        &mut self,
+        _buffer: &mut InterleavedVertexBuffer,
+        _states: &crate::bucket::FeatureStates,
+        _layer: &dyn GeometryTileLayer,
+    ) {
+    }
     /// `getVertexCount()`.
     fn binder_vertex_count(&self, buffer: &InterleavedVertexBuffer) -> usize;
     /// `applyPaintProperty<Attribute>(attrIndex, attrib)`.
@@ -644,6 +720,14 @@ impl<T: BinderValue> PaintPropertyBinderBase for PaintPropertyBinder<T> {
         self.populate_vertex_vector(buffer, feature, length, index, canonical, formatted_section);
     }
     fn pattern_parameters(&self, _: Option<&ImagePosition>, _: Option<&ImagePosition>, _: &CrossfadeParameters) {}
+    fn update_vectors(
+        &mut self,
+        buffer: &mut InterleavedVertexBuffer,
+        states: &crate::bucket::FeatureStates,
+        layer: &dyn GeometryTileLayer,
+    ) {
+        self.update_vertex_vectors(buffer, states, layer);
+    }
     fn binder_vertex_count(&self, buffer: &InterleavedVertexBuffer) -> usize {
         self.get_vertex_count(buffer)
     }
@@ -779,6 +863,18 @@ macro_rules! paint_property_binders {
                 buffer.vertex_count += length - buffer.vertex_count;
                 // sharedVertexVector->updateModified(true): the render side
                 // copies the vector when it builds drawables.
+            }
+
+            /// `updateVertexVectors(states, layer, imagePositions)`.
+            pub fn update_vertex_vectors(
+                &mut self,
+                states: &$crate::bucket::FeatureStates,
+                layer: &dyn mln_tile_id::geometry_tile_data::GeometryTileLayer,
+                _image_positions: &mln_style_types::image::ImagePositions,
+            ) {
+                $($crate::paint_property_binder::PaintPropertyBinderBase::update_vectors(
+                    &mut self.$field, &mut self.interleaved_vertex_buffer, states, layer);)+
+                // interleavedVertexBuffer.sharedVertexVector->updateModified(true)
             }
 
             /// `setPatternParameters(posA, posB, crossfade)`.

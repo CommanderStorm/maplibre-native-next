@@ -136,7 +136,9 @@ impl RendererImpl {
             update_parameters.capture_rendered_features,
         );
 
+        parameters.line_atlas = orchestrator.get_line_atlas().clone();
         parameters.symbol_fade_change = render_tree_parameters.symbol_fade_change;
+        parameters.evaluated_light = render_tree_parameters.light.clone(); // conformance
         parameters.opaque_pass_cutoff = render_tree_parameters.opaque_pass_cut_off;
 
         let layer_render_items = render_tree.get_layer_render_item_map();
@@ -149,12 +151,16 @@ impl RendererImpl {
             let upload_pass = encoder.create_upload_pass("upload", backend.get_default_renderable());
 
             // Update all clipping IDs + upload buckets.
-            // TODO(port): sourceRenderItems (sources).
+            for item in render_tree.get_source_render_items() {
+                item.upload(&*upload_pass);
+            }
             for item in layer_render_items.values() {
                 item.layer.borrow_mut().upload(&*upload_pass);
             }
             static_data.upload(&*upload_pass);
-            // TODO(port): lineAtlas.upload, patternAtlas.upload.
+            parameters.line_atlas.borrow_mut().upload(&*upload_pass);
+            parameters.pattern_atlas.borrow_mut().upload(&*upload_pass); // conformance
+            // TODO(port): patternAtlas.upload (patterns).
         }
 
         // - LAYER GROUP UPDATE --------------------------------------------
@@ -192,7 +198,10 @@ impl RendererImpl {
             orchestrator.visit_layer_groups(|layer_group| layer_group.upload(&*upload_pass));
 
             // Give the render targets a chance to upload
-            // TODO(port): visitRenderTargets upload.
+            // dem-heatmap
+            for render_target in orchestrator.render_targets() {
+                render_target.borrow().upload(&*upload_pass);
+            }
 
             // Upload the Debug layer group
             // TODO(port): visitDebugLayerGroups upload.
@@ -237,7 +246,10 @@ impl RendererImpl {
         }
 
         // drawableTargetsPass: draw render targets
-        // TODO(port): visitRenderTargets render.
+        // dem-heatmap
+        for render_target in orchestrator.render_targets() {
+            render_target.borrow().render(orchestrator, &mut parameters);
+        }
 
         // commonClearPass
         // - CLEAR ---------------------------------------------------------

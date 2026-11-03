@@ -1,34 +1,489 @@
-// Ports src/mln/renderer/image_manager.hpp and src/mln/renderer/image_manager.cpp
-// (the loaded state; images, requestors and the missing-image protocol
-// arrive with sprites and symbols).
+// Ports src/mln/renderer/image_manager.hpp, src/mln/renderer/image_manager.cpp
+// and src/mln/renderer/image_manager_observer.hpp.
+//
+// The ImageManager lives on the render thread (the orchestrator owns it,
+// tiles share it as `Rc`, C++ `std::shared_ptr`), so its state is in a
+// `RefCell` instead of behind the C++ recursive mutex. Requestors (geometry
+// tiles) are kept as `Weak` references keyed by their address, as the C++
+// maps key them by pointer. Requestors are notified after the state borrow
+// is released, so a requestor may call back into the manager.
 
+use crate::gfx::dynamic_texture_atlas::ImageVersionMap;
+use mln_actor::scheduler;
+use mln_style_types::image::{ImageDependencies, ImageMap, ImageType, Impl as ImageImpl};
+use mln_util::constants::DEFAULT_ON_DEMAND_IMAGES_CACHE_SIZE;
+use mln_util::immutable::Immutable;
+use mln_util::logging::{Event, Log};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+
+/// `ImageRequestPair = std::pair<ImageDependencies, uint64_t>`.
+pub type ImageRequestPair = (ImageDependencies, u64);
+
+/// `ImageManagerObserver`.
+pub trait ImageManagerObserver {
+    fn on_style_image_missing(&self, _id: &str, done: Box<dyn FnOnce()>) {
+        done();
+    }
+    fn on_remove_unused_style_images(&self, _ids: &[String]) {}
+}
+
+struct NullObserver;
+impl ImageManagerObserver for NullObserver {}
+
+/// The data members of the C++ `ImageRequestor` base class.
 #[derive(Default)]
-pub struct ImageManager {
+pub struct ImageRequestorBase {
+    /// Pending requests are image requests that are waiting to be
+    /// dispatched to the client.
+    pending_requests: RefCell<BTreeSet<String>>,
+}
+
+/// `ImageRequestor`. Implementors call `ImageManager::remove_requestor_key`
+/// when they go away (the C++ destructor).
+pub trait ImageRequestor {
+    fn requestor_base(&self) -> &ImageRequestorBase;
+
+    fn on_images_available(
+        &self,
+        icons: ImageMap,
+        patterns: ImageMap,
+        version_map: ImageVersionMap,
+        image_correlation_id: u64,
+    );
+
+    fn add_pending_request(&self, image_id: &str) {
+        self.requestor_base().pending_requests.borrow_mut().insert(image_id.to_owned());
+    }
+    fn has_pending_request(&self, image_id: &str) -> bool {
+        self.requestor_base().pending_requests.borrow().contains(image_id)
+    }
+    fn has_pending_requests(&self) -> bool {
+        !self.requestor_base().pending_requests.borrow().is_empty()
+    }
+    fn remove_pending_request(&self, image_id: &str) {
+        self.requestor_base().pending_requests.borrow_mut().remove(image_id);
+    }
+}
+
+/// A requestor's identity (`ImageRequestor*`).
+pub type RequestorKey = usize;
+
+pub fn requestor_key<T: ?Sized>(requestor: &Rc<T>) -> RequestorKey {
+    Rc::as_ptr(requestor) as *const () as usize
+}
+
+type RequestorEntry = (Weak<dyn ImageRequestor>, ImageRequestPair);
+
+struct State {
     loaded: bool,
+    requestors: BTreeMap<RequestorKey, RequestorEntry>,
+    missing_image_requestors: BTreeMap<RequestorKey, RequestorEntry>,
+    requested_images: BTreeMap<String, BTreeMap<RequestorKey, Weak<dyn ImageRequestor>>>,
+    requested_images_cache_size: usize,
+    images: ImageMap,
+    // Mirror of 'ImageMap images;' keys.
+    available_images: Immutable<BTreeSet<String>>,
+    updated_image_versions: ImageVersionMap,
+}
+
+/// A notification to deliver once the state borrow is released.
+type Notification = (Weak<dyn ImageRequestor>, ImageMap, ImageMap, ImageVersionMap, u64);
+
+/// `ImageManager`: tracks requests for icon images from tile workers and
+/// sends responses when the requests are fulfilled.
+pub struct ImageManager {
+    self_weak: Weak<ImageManager>,
+    state: RefCell<State>,
+    observer: RefCell<Rc<dyn ImageManagerObserver>>,
 }
 
 impl ImageManager {
-    pub fn new() -> Self {
-        ImageManager { loaded: false }
+    /// `ImageManager::create()`.
+    pub fn create() -> Rc<ImageManager> {
+        Rc::new_cyclic(|self_weak| ImageManager {
+            self_weak: self_weak.clone(),
+            state: RefCell::new(State {
+                loaded: false,
+                requestors: BTreeMap::new(),
+                missing_image_requestors: BTreeMap::new(),
+                requested_images: BTreeMap::new(),
+                requested_images_cache_size: 0,
+                images: ImageMap::new(),
+                available_images: Arc::new(BTreeSet::new()),
+                updated_image_versions: ImageVersionMap::new(),
+            }),
+            observer: RefCell::new(Rc::new(NullObserver)),
+        })
     }
 
-    pub fn set_loaded(&mut self, loaded: bool) {
-        if self.loaded == loaded {
-            return;
-        }
+    pub fn set_observer(&self, observer: Option<Rc<dyn ImageManagerObserver>>) {
+        *self.observer.borrow_mut() = observer.unwrap_or_else(|| Rc::new(NullObserver));
+    }
 
-        self.loaded = loaded;
+    pub fn set_loaded(&self, loaded: bool) {
+        let mut notifications = Vec::new();
+        let requestors = {
+            let mut state = self.state.borrow_mut();
+            if state.loaded == loaded {
+                return;
+            }
 
-        if self.loaded {
-            // TODO(port): notify the requestors (symbol layouts).
+            state.loaded = loaded;
+
+            if !state.loaded {
+                return;
+            }
+            std::mem::take(&mut state.requestors)
+        };
+        for (key, (requestor, pair)) in requestors {
+            self.check_missing_and_notify(key, &requestor, &pair, &mut notifications);
         }
+        Self::deliver(notifications);
     }
 
     pub fn is_loaded(&self) -> bool {
-        self.loaded
+        self.state.borrow().loaded
     }
 
-    // TODO(port): addImage, updateImage, removeImage, getImage,
-    // notifyIfMissingImageAdded, reduceMemoryUseIfCacheSizeExceedsLimit,
-    // clear.
+    pub fn dump_debug_logs(&self) {
+        Log::info(
+            Event::General,
+            format!("ImageManager::loaded: {}", if self.is_loaded() { "1" } else { "0" }),
+        );
+    }
+
+    /// `getImage(id)`.
+    pub fn get_image(&self, id: &str) -> Option<Immutable<ImageImpl>> {
+        self.get_shared_image(id)
+    }
+
+    /// `getSharedImage(id)`.
+    pub fn get_shared_image(&self, id: &str) -> Option<Immutable<ImageImpl>> {
+        self.state.borrow().images.get(id).cloned()
+    }
+
+    /// `addImage(Immutable<style::Image::Impl>)`.
+    pub fn add_image(&self, image: Immutable<ImageImpl>) {
+        let mut state = self.state.borrow_mut();
+        debug_assert!(!state.images.contains_key(&image.id));
+
+        // Increase cache size if requested image was provided.
+        if state.requested_images.contains_key(&image.id) {
+            state.requested_images_cache_size += image.image.bytes();
+        }
+
+        Arc::make_mut(&mut state.available_images).insert(image.id.clone());
+        state.images.entry(image.id.clone()).or_insert(image);
+    }
+
+    /// `updateImage(Immutable<style::Image::Impl>)`: true when tiles need a
+    /// relayout.
+    pub fn update_image(&self, image: Immutable<ImageImpl>) -> bool {
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+
+        let Some(old_image) = state.images.get(&image.id) else {
+            debug_assert!(false);
+            return false;
+        };
+
+        let size_changed = old_image.image.size != image.image.size;
+        // A changed SDF flag requires a relayout so buckets pick up the new
+        // pattern type. Same-size updates still bump the version so existing
+        // layouts patch their pixels; the atlas allocates per image
+        // revision, so the relayout gets a freshly uploaded bin.
+        let sdf_changed = old_image.sdf != image.sdf;
+
+        if size_changed {
+            // Update cache size if requested image size has changed.
+            if state.requested_images.contains_key(&image.id) {
+                let diff = image.image.bytes() as i64 - old_image.image.bytes() as i64;
+                state.requested_images_cache_size = (state.requested_images_cache_size as i64 + diff) as usize;
+            }
+            state.updated_image_versions.remove(&image.id);
+        } else {
+            *state.updated_image_versions.entry(image.id.clone()).or_insert(0) += 1;
+        }
+
+        state.images.insert(image.id.clone(), image);
+
+        size_changed || sdf_changed
+    }
+
+    /// `removeImage(id)`.
+    pub fn remove_image(&self, id: &str) {
+        let mut state = self.state.borrow_mut();
+        let state = &mut *state;
+        let Some(image) = state.images.get(id) else {
+            debug_assert!(false);
+            return;
+        };
+
+        // Reduce cache size for requested images.
+        if state.requested_images.contains_key(&image.id) {
+            state.requested_images_cache_size -= image.image.bytes();
+            state.requested_images.remove(id);
+        }
+
+        state.images.remove(id);
+        Arc::make_mut(&mut state.available_images).remove(id);
+        state.updated_image_versions.remove(id);
+    }
+
+    /// `getImages(ImageRequestor&, ImageRequestPair&&)`.
+    pub fn get_images(&self, requestor: &Rc<dyn ImageRequestor>, pair: ImageRequestPair) {
+        // remove previous requests from this tile
+        let key = requestor_key(requestor);
+        self.remove_requestor_key(key);
+
+        let weak = Rc::downgrade(requestor);
+        let mut notifications = Vec::new();
+
+        // If all the icon dependencies are already present ((i.e. if they've
+        // been addeded via runtime styling), then notify the requestor
+        // immediately. Otherwise, if the sprite has not loaded, then wait for
+        // it. When the sprite has loaded check if all icons are available. If
+        // any are missing, call `onStyleImageMissing` to give the user a
+        // chance to provide the icon. If they are not provided by the next
+        // frame we'll assume they are permanently missing.
+        if !self.is_loaded() {
+            let mut state = self.state.borrow_mut();
+            let has_all_dependencies = pair.0.keys().all(|id| state.images.contains_key(id));
+
+            if has_all_dependencies {
+                notifications.push(Self::notification(&state, &weak, &pair));
+            } else {
+                state.requestors.entry(key).or_insert((weak, pair));
+            }
+        } else {
+            self.check_missing_and_notify(key, &weak, &pair, &mut notifications);
+        }
+        Self::deliver(notifications);
+    }
+
+    /// `removeRequestor(ImageRequestor&)`, by the requestor's identity.
+    pub fn remove_requestor_key(&self, key: RequestorKey) {
+        let mut state = self.state.borrow_mut();
+
+        state.requestors.remove(&key);
+        state.missing_image_requestors.remove(&key);
+        for requested_image in state.requested_images.values_mut() {
+            requested_image.remove(&key);
+        }
+    }
+
+    /// `notifyIfMissingImageAdded()`.
+    pub fn notify_if_missing_image_added(&self) {
+        let mut notifications = Vec::new();
+        {
+            let mut state = self.state.borrow_mut();
+            let keys: Vec<RequestorKey> = state.missing_image_requestors.keys().copied().collect();
+            for key in keys {
+                let (weak, pair) = state.missing_image_requestors.get(&key).cloned().expect("requestor");
+                let has_pending = weak.upgrade().is_some_and(|r| r.has_pending_requests());
+                if !has_pending {
+                    notifications.push(Self::notification(&state, &weak, &pair));
+                    state.missing_image_requestors.remove(&key);
+                }
+            }
+        }
+        Self::deliver(notifications);
+    }
+
+    /// `reduceMemoryUse()`.
+    pub fn reduce_memory_use(&self) {
+        let unused_ids: Vec<String> = {
+            let state = self.state.borrow();
+            state
+                .requested_images
+                .iter()
+                .filter(|(id, requestors)| requestors.is_empty() && state.images.contains_key(*id))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        if !unused_ids.is_empty() {
+            let observer = self.observer.borrow().clone();
+            observer.on_remove_unused_style_images(&unused_ids);
+        }
+    }
+
+    /// `reduceMemoryUseIfCacheSizeExceedsLimit()`.
+    pub fn reduce_memory_use_if_cache_size_exceeds_limit(&self) {
+        if self.state.borrow().requested_images_cache_size > DEFAULT_ON_DEMAND_IMAGES_CACHE_SIZE {
+            self.reduce_memory_use();
+        }
+    }
+
+    /// `getAvailableImages()`.
+    pub fn get_available_images(&self) -> Immutable<BTreeSet<String>> {
+        self.state.borrow().available_images.clone()
+    }
+
+    /// `updatedImageVersions` (read by GeometryTileRenderData::prepare).
+    pub fn updated_image_versions(&self) -> ImageVersionMap {
+        self.state.borrow().updated_image_versions.clone()
+    }
+
+    /// `clear()`.
+    pub fn clear(&self) {
+        let mut state = self.state.borrow_mut();
+
+        debug_assert!(state.requestors.is_empty());
+        debug_assert!(state.missing_image_requestors.is_empty());
+
+        state.images.clear();
+        state.available_images = Arc::new(BTreeSet::new());
+        state.updated_image_versions.clear();
+        state.requested_images.clear();
+        state.loaded = false;
+    }
+
+    /// `checkMissingAndNotify(ImageRequestor&, const ImageRequestPair&)`.
+    fn check_missing_and_notify(
+        &self,
+        key: RequestorKey,
+        requestor: &Weak<dyn ImageRequestor>,
+        pair: &ImageRequestPair,
+        notifications: &mut Vec<Notification>,
+    ) {
+        let mut state = self.state.borrow_mut();
+        let missing_dependencies: Vec<String> =
+            pair.0.keys().filter(|id| !state.images.contains_key(*id)).cloned().collect();
+
+        if missing_dependencies.is_empty() {
+            // Associate requestor with an image that was provided by the client.
+            for id in pair.0.keys() {
+                if let Some(requestors) = state.requested_images.get_mut(id) {
+                    requestors.entry(key).or_insert(requestor.clone());
+                }
+            }
+            notifications.push(Self::notification(&state, requestor, pair));
+            return;
+        }
+
+        debug_assert!(!state.missing_image_requestors.contains_key(&key));
+        state.missing_image_requestors.entry(key).or_insert((requestor.clone(), pair.clone()));
+
+        let Some(requestor_rc) = requestor.upgrade() else {
+            return;
+        };
+        let mut missing_calls: Vec<String> = Vec::new();
+        for missing_image in &missing_dependencies {
+            if let Some(existing_requestors) = state.requested_images.get_mut(missing_image) {
+                // Already asked client about this image.
+                // existingRequestors is empty if all the previous requestors
+                // are deleted.
+                let first_pending = existing_requestors
+                    .values()
+                    .next()
+                    .and_then(|r| r.upgrade())
+                    .is_some_and(|r| r.has_pending_request(missing_image));
+                if first_pending {
+                    // Still waiting for the client response for this image.
+                    requestor_rc.add_pending_request(missing_image);
+                    existing_requestors.entry(key).or_insert(requestor.clone());
+                    continue;
+                }
+                // The request for this image has been already delivered to
+                // the client, so we do not treat it as pending.
+                existing_requestors.entry(key).or_insert(requestor.clone());
+                // TODO: we could `continue;` here, but we need to call
+                // `observer->onStyleImageMissing`, so that rendering is
+                // re-launched from the handler at Map::Impl.
+            } else {
+                state
+                    .requested_images
+                    .entry(missing_image.clone())
+                    .or_default()
+                    .insert(key, requestor.clone());
+                requestor_rc.add_pending_request(missing_image);
+            }
+            missing_calls.push(missing_image.clone());
+        }
+        drop(state);
+
+        let observer = self.observer.borrow().clone();
+        for missing_image in missing_calls {
+            let weak_self = self.self_weak.clone();
+            let image_id = missing_image.clone();
+            let remove_pending_requests = move || {
+                let Some(this) = weak_self.upgrade() else {
+                    return;
+                };
+                let state = this.state.borrow();
+                let Some(existing_request) = state.requested_images.get(&image_id) else {
+                    return;
+                };
+
+                for req in existing_request.values() {
+                    if let Some(req) = req.upgrade() {
+                        req.remove_pending_request(&image_id);
+                    }
+                }
+            };
+            observer.on_style_image_missing(&missing_image, bind_once_local(remove_pending_requests));
+        }
+    }
+
+    /// `notify(ImageRequestor&, const ImageRequestPair&)`: the maps for the
+    /// requestor, delivered by `deliver`.
+    fn notification(state: &State, requestor: &Weak<dyn ImageRequestor>, pair: &ImageRequestPair) -> Notification {
+        let mut icon_map = ImageMap::with_capacity(pair.0.len());
+        let mut pattern_map = ImageMap::with_capacity(pair.0.len());
+        let mut version_map = ImageVersionMap::with_capacity(pair.0.len());
+
+        for (id, type_) in &pair.0 {
+            if let Some(image) = state.images.get(id) {
+                if *type_ == ImageType::Pattern {
+                    pattern_map.entry(id.clone()).or_insert_with(|| image.clone());
+                } else {
+                    icon_map.entry(id.clone()).or_insert_with(|| image.clone());
+                }
+
+                if let Some(version) = state.updated_image_versions.get(id) {
+                    version_map.entry(id.clone()).or_insert(*version);
+                }
+            }
+        }
+
+        (requestor.clone(), icon_map, pattern_map, version_map, pair.1)
+    }
+
+    fn deliver(notifications: Vec<Notification>) {
+        for (requestor, icons, patterns, versions, correlation_id) in notifications {
+            if let Some(requestor) = requestor.upgrade() {
+                requestor.on_images_available(icons, patterns, versions, correlation_id);
+            }
+        }
+    }
+}
+
+/// `Scheduler::GetCurrent()->bindOnce(fn)`: a callable that runs `fn` on
+/// the current thread's scheduler (the render thread's run loop).
+fn bind_once_local(f: impl FnOnce() + 'static) -> Box<dyn FnOnce()> {
+    type Slot = RefCell<Option<Box<dyn FnOnce()>>>;
+    let slot: Rc<Slot> = Rc::new(RefCell::new(Some(Box::new(f))));
+    let run = |slot: &Rc<Slot>| {
+        let f = slot.borrow_mut().take();
+        if let Some(f) = f {
+            f();
+        }
+    };
+    match scheduler::try_get_current() {
+        Some(scheduler) => {
+            let object = mln_actor::LocalObject::from_rc(slot);
+            Box::new(move || {
+                scheduler.schedule(Box::new(move || {
+                    if let Some(slot) = object.get() {
+                        run(&slot);
+                    }
+                }))
+            })
+        }
+        None => Box::new(move || run(&slot)),
+    }
 }

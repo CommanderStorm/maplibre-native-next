@@ -9,26 +9,35 @@
 // `correlationID` for the tile's pending state, the worker's
 // `imageCorrelationID` for image replies.
 //
-// Deviation: C++ runs the worker synchronously on the render thread when the
-// source asks for it (`TileParameters::isUpdateSynchronous`, a GeoJSON
-// source with `synchronousUpdate`); the port always uses the thread pool.
-// TODO(port): the synchronous OptionalActor.
+// As in C++, the worker runs synchronously on the render thread when the
+// source asks for it (`TileParameters::isUpdateSynchronous`, e.g. a GeoJSON
+// source with `synchronousUpdate`): `OptionalActor` below.
 //
-// TODO(port): glyph and image requests (GlyphRequestor/ImageRequestor,
-// onGlyphsAvailable, onImagesAvailable, getGlyphs, getImages), image patches
-// in GeometryTileRenderData, queries, feature state.
+// symbols: the tile is the GlyphRequestor and ImageRequestor of its worker
+// (getGlyphs/getImages through the managers, onGlyphsAvailable/
+// onImagesAvailable forwarded to the worker), and LayoutResult carries the
+// glyph/image atlases of the shared DynamicTextureAtlas.
+//
+// TODO(port): image patches in GeometryTileRenderData (same-size runtime
+// image updates), queries, feature state, HarfBuzz shaping of font-face
+// glyphs in onGlyphsAvailable.
 
 use crate::bucket::BucketPtr;
+use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlasPtr, GlyphAtlas, ImageAtlas, ImageVersionMap};
+use crate::image_manager::{ImageManager, ImageRequestPair, ImageRequestor, ImageRequestorBase, requestor_key};
+use crate::text::glyph_manager::{GlyphManager, GlyphRequestor, HBShapeResults, glyph_requestor_key};
+use mln_storage::FileSource;
+use mln_text::glyph::{GlyphDependencies, GlyphMap, HBShapeRequests};
 use crate::geometry::feature_index::FeatureIndex;
 use crate::render_layer::LayerRenderData;
 use crate::render_source::SourcePrepareParameters;
-use crate::tile::geometry_tile_worker::{GeometryTileWorker, SharedTileData};
+use crate::tile::geometry_tile_worker::{GeometryTileWorker, ParentRef, SharedTileData};
 use crate::tile::tile::{Kind, Tile, TileBase, TileOperation};
 use crate::tile::tile_observer::TileObserver;
 use crate::tile_parameters::TileParameters;
 use crate::tile_render_data::{TileAtlasTextures, TileRenderData};
 use mln_actor::actor::{Actor, PoolActorRef};
-use mln_actor::{ActorRef, Mailbox, scheduler};
+use mln_actor::{ActorRef, LocalObject, Mailbox, scheduler};
 use mln_gfx::UploadPass;
 use mln_map_types::{MapDebugOptions, MapMode};
 use mln_style::expression::GlobalStateMap;
@@ -36,31 +45,64 @@ use mln_style::layer;
 use mln_style::layer::layer_type_info;
 use mln_style::layer_properties::LayerProperties;
 use mln_style_types::VisibilityType;
-use mln_style_types::image::ImagePosition;
+use mln_style_types::image::{ImageMap, ImagePosition};
 use mln_tile_id::OverscaledTileID;
 use mln_util::exception::ExceptionPtr;
 use mln_util::immutable::Immutable;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// The atlases of a `LayoutResult`; dropping the last reference releases
+/// their bins (C++ `~LayoutResult`). Shared, so that copies of a
+/// LayoutResult release them once.
+pub struct LayoutAtlases {
+    pub glyph_atlas: GlyphAtlas,
+    pub image_atlas: ImageAtlas,
+    pub dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
+}
+
+impl Drop for LayoutAtlases {
+    fn drop(&mut self) {
+        if let Some(atlas) = &self.dynamic_texture_atlas {
+            atlas.remove_textures(&self.glyph_atlas.texture_handles, &self.glyph_atlas.dynamic_texture);
+            atlas.remove_textures(&self.image_atlas.texture_handles, &self.image_atlas.dynamic_texture);
+        }
+    }
+}
+
 /// `GeometryTile::LayoutResult`.
-// TODO(port): glyphAtlas, imageAtlas, dynamicTextureAtlas (M5).
 #[derive(Clone)]
 pub struct LayoutResult {
     pub layer_render_data: HashMap<String, LayerRenderData>,
     pub feature_index: Arc<FeatureIndex>,
+    pub atlases: Arc<LayoutAtlases>,
 }
 
 impl LayoutResult {
-    pub fn new(layer_render_data: HashMap<String, LayerRenderData>, feature_index: Arc<FeatureIndex>) -> Self {
+    pub fn new(
+        layer_render_data: HashMap<String, LayerRenderData>,
+        feature_index: Arc<FeatureIndex>,
+        glyph_atlas: GlyphAtlas,
+        image_atlas: ImageAtlas,
+        dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
+    ) -> Self {
         LayoutResult {
             layer_render_data,
             feature_index,
+            atlases: Arc::new(LayoutAtlases { glyph_atlas, image_atlas, dynamic_texture_atlas }),
         }
+    }
+
+    pub fn glyph_atlas(&self) -> &GlyphAtlas {
+        &self.atlases.glyph_atlas
+    }
+
+    pub fn image_atlas(&self) -> &ImageAtlas {
+        &self.atlases.image_atlas
     }
 
     /// `getLayerRenderData(const style::Layer::Impl&)`.
@@ -89,9 +131,9 @@ impl TileRenderData for GeometryTileRenderData {
         self.atlas_textures.as_ref()
     }
 
-    fn get_pattern(&self, _pattern: &str) -> Option<ImagePosition> {
-        // TODO(port): layoutResult->imageAtlas.patternPositions (patterns).
-        None
+    fn get_pattern(&self, pattern: &str) -> Option<ImagePosition> {
+        let layout_result = self.layout_result.as_ref()?;
+        layout_result.image_atlas().pattern_positions.get(pattern).cloned()
     }
 
     fn get_layer_render_data(&self, layer_impl: &dyn layer::Impl) -> Option<&LayerRenderData> {
@@ -116,8 +158,21 @@ impl TileRenderData for GeometryTileRenderData {
         }
 
         debug_assert!(self.atlas_textures.is_some());
+        let Some(atlas_textures) = &self.atlas_textures else {
+            return;
+        };
 
-        // TODO(port): glyph/icon dynamic textures and image patches (M5).
+        let context = upload_pass.get_context();
+        if let Some(glyph_dynamic_texture) = &layout_result.glyph_atlas().dynamic_texture {
+            glyph_dynamic_texture.upload_deferred_images(context);
+            *atlas_textures.glyph.borrow_mut() = glyph_dynamic_texture.get_texture();
+        }
+        if let Some(image_dynamic_texture) = &layout_result.image_atlas().dynamic_texture {
+            image_dynamic_texture.upload_deferred_images(context);
+            *atlas_textures.icon.borrow_mut() = image_dynamic_texture.get_texture();
+        }
+
+        // TODO(port): imagePatches (same-size runtime image updates).
     }
 
     fn prepare(&mut self, _parameters: &SourcePrepareParameters<'_>) {
@@ -125,6 +180,44 @@ impl TileRenderData for GeometryTileRenderData {
             // return
         }
         // TODO(port): populateImagePatches (sprite image updates).
+    }
+}
+
+/// `OptionalActor<GeometryTileWorker>`: the worker on the thread pool, or
+/// (synchronous updates) on the render thread. Only owns the worker; the
+/// tile reaches it through its `WorkerRef`.
+#[allow(dead_code)]
+enum OptionalActor {
+    Actor(Actor<GeometryTileWorker>),
+    Sync(Rc<RefCell<GeometryTileWorker>>),
+}
+
+/// `OptionalActorRef<GeometryTileWorker>` (`worker.self()`).
+enum WorkerRef {
+    Actor(PoolActorRef<GeometryTileWorker>),
+    Sync(std::rc::Weak<RefCell<GeometryTileWorker>>),
+}
+
+impl WorkerRef {
+    /// `invoke(fn, args...)`: a direct call for the synchronous worker.
+    fn invoke(&self, f: impl FnOnce(&mut GeometryTileWorker) + Send + 'static) {
+        match self {
+            WorkerRef::Actor(actor_ref) => actor_ref.invoke(f),
+            WorkerRef::Sync(worker) => {
+                if let Some(worker) = worker.upgrade() {
+                    match worker.try_borrow_mut() {
+                        Ok(mut worker) => f(&mut worker),
+                        // C++ makes the nested call (e.g. onImagesAvailable
+                        // from inside parse); the port cannot re-enter the
+                        // worker. TODO(port): reentrant synchronous calls.
+                        Err(_) => mln_util::logging::Log::error(
+                            mln_util::logging::Event::General,
+                            "TODO(port): reentrant call into a synchronous GeometryTileWorker",
+                        ),
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -141,11 +234,18 @@ enum FadeState {
 pub struct GeometryTileInner {
     pub base: TileBase,
 
+    // symbols: the requestor side (C++ GlyphRequestor/ImageRequestor bases).
+    self_weak: Weak<GeometryTileInner>,
+    image_requestor_base: ImageRequestorBase,
+    file_source: Option<Arc<dyn FileSource>>,
+    glyph_manager: Rc<GlyphManager>,
+    image_manager: Rc<ImageManager>,
+
     /// Used to signal the worker that it should abandon parsing this tile as
     /// soon as possible.
     obsolete: Arc<AtomicBool>,
 
-    worker: PoolActorRef<GeometryTileWorker>,
+    worker: WorkerRef,
     mailbox: Arc<Mailbox>,
 
     correlation_id: Cell<u64>,
@@ -162,8 +262,12 @@ pub struct GeometryTileInner {
 
 impl GeometryTileInner {
     fn available_images(&self) -> Immutable<BTreeSet<String>> {
-        // TODO(port): imageManager->getAvailableImages() (images).
-        Arc::new(BTreeSet::new())
+        self.image_manager.get_available_images()
+    }
+
+    /// The `obsolete` flag.
+    pub fn is_obsolete(&self) -> bool {
+        self.obsolete.load(Ordering::SeqCst)
     }
 
     fn mark_obsolete(&self) {
@@ -251,6 +355,26 @@ impl GeometryTileInner {
         self.base.observer().on_tile_error(&self.base, err);
     }
 
+    /// `getImages(ImageRequestPair)`: `imageManager->getImages(*this, pair)`.
+    pub fn get_images(&self, pair: ImageRequestPair) {
+        let Some(this) = self.self_weak.upgrade() else {
+            return;
+        };
+        let requestor: Rc<dyn ImageRequestor> = this;
+        self.image_manager.get_images(&requestor, pair);
+    }
+
+    /// `getGlyphs(GlyphDependencies)`.
+    pub fn get_glyphs(&self, glyph_dependencies: GlyphDependencies) {
+        if let Some(file_source) = &self.file_source {
+            let Some(this) = self.self_weak.upgrade() else {
+                return;
+            };
+            let requestor: Rc<dyn GlyphRequestor> = this;
+            self.glyph_manager.get_glyphs(&requestor, glyph_dependencies, Some(file_source));
+        }
+    }
+
     /// `getFeatureIndex()`.
     pub fn get_feature_index(&self) -> Option<Arc<FeatureIndex>> {
         self.layout_result
@@ -260,12 +384,42 @@ impl GeometryTileInner {
     }
 }
 
+impl GlyphRequestor for GeometryTileInner {
+    /// `onGlyphsAvailable(GlyphMap, HBShapeRequests)`.
+    fn on_glyphs_available(&self, glyph_map: GlyphMap, _requests: HBShapeRequests) {
+        // TODO(port): HarfBuzz shaping of the requests (font faces).
+        let results = HBShapeResults::new();
+        self.worker.invoke(move |worker: &mut GeometryTileWorker| {
+            worker.on_glyphs_available(glyph_map, results)
+        });
+    }
+}
+
+impl ImageRequestor for GeometryTileInner {
+    fn requestor_base(&self) -> &ImageRequestorBase {
+        &self.image_requestor_base
+    }
+
+    /// `onImagesAvailable(images, patterns, versionMap, imageCorrelationID)`.
+    fn on_images_available(
+        &self,
+        images: ImageMap,
+        patterns: ImageMap,
+        version_map: ImageVersionMap,
+        image_correlation_id: u64,
+    ) {
+        self.worker.invoke(move |worker: &mut GeometryTileWorker| {
+            worker.on_images_available(images, patterns, version_map, image_correlation_id)
+        });
+    }
+}
+
 /// `GeometryTile`.
 pub struct GeometryTile {
     inner: Rc<GeometryTileInner>,
     /// `OptionalActor<GeometryTileWorker> worker`; dropped after the
     /// mailbox is closed.
-    _worker: Actor<GeometryTileWorker>,
+    _worker: OptionalActor,
 }
 
 impl GeometryTile {
@@ -280,14 +434,17 @@ impl GeometryTile {
         let obsolete = Arc::new(AtomicBool::new(false));
         let mailbox = Mailbox::new();
         let show_collision_boxes = parameters.debug_options.contains(MapDebugOptions::COLLISION);
-        let worker = {
-            let parent: ActorRef<GeometryTileInner> = ActorRef::new(&mailbox);
+        // OptionalActorRef<GeometryTile>(isUpdateSynchronous, *this, mailbox):
+        // the synchronous reference points at the tile once it exists.
+        let sync_parent: Rc<RefCell<Weak<GeometryTileInner>>> = Rc::new(RefCell::new(Weak::new()));
+        let make_worker = {
             let source_id = source_id.clone();
             let obsolete = obsolete.clone();
             let mode = parameters.mode;
             let pixel_ratio = parameters.pixel_ratio;
             let capture_rendered_features = parameters.capture_rendered_features;
-            Actor::new_tagged(&parameters.thread_pool, move |self_ref| {
+            let dynamic_texture_atlas = Some(parameters.dynamic_texture_atlas.clone());
+            move |self_ref, parent| {
                 GeometryTileWorker::new(
                     self_ref,
                     parent,
@@ -297,14 +454,33 @@ impl GeometryTile {
                     mode,
                     pixel_ratio,
                     show_collision_boxes,
+                    dynamic_texture_atlas,
                     capture_rendered_features,
                 )
-            })
+            }
         };
-        let inner = Rc::new(GeometryTileInner {
+        let (worker, worker_ref) = if parameters.is_update_synchronous {
+            let parent = ParentRef::Sync(LocalObject::from_rc(sync_parent.clone()));
+            let worker = Rc::new(RefCell::new(make_worker(None, parent)));
+            let worker_ref = WorkerRef::Sync(Rc::downgrade(&worker));
+            (OptionalActor::Sync(worker), worker_ref)
+        } else {
+            let parent: ActorRef<GeometryTileInner> = ActorRef::new(&mailbox);
+            let actor = Actor::new_tagged(&parameters.thread_pool, move |self_ref| {
+                make_worker(Some(self_ref), ParentRef::Actor(parent))
+            });
+            let worker_ref = WorkerRef::Actor(actor.self_ref());
+            (OptionalActor::Actor(actor), worker_ref)
+        };
+        let inner = Rc::new_cyclic(|self_weak| GeometryTileInner {
             base: TileBase::new(Kind::Geometry, id, source_id, observer),
+            self_weak: self_weak.clone(),
+            image_requestor_base: ImageRequestorBase::default(),
+            file_source: parameters.file_source.clone(),
+            glyph_manager: parameters.glyph_manager.clone(),
+            image_manager: parameters.image_manager.clone(),
             obsolete,
-            worker: worker.self_ref(),
+            worker: worker_ref,
             mailbox: mailbox.clone(),
             correlation_id: Cell::new(0),
             layout_result: RefCell::new(None),
@@ -313,6 +489,7 @@ impl GeometryTile {
             show_collision_boxes: Cell::new(show_collision_boxes),
             fade_state: Cell::new(FadeState::Loaded),
         });
+        *sync_parent.borrow_mut() = Rc::downgrade(&inner);
         // `mailbox(std::make_shared<Mailbox>(*Scheduler::GetCurrent()))`
         mailbox.open(&scheduler::get_current(), inner.clone() as Rc<dyn Any>);
         GeometryTile { inner, _worker: worker }
@@ -343,12 +520,24 @@ impl Drop for GeometryTile {
     fn drop(&mut self) {
         self.inner.mark_obsolete();
 
-        // TODO(port): glyphManager->removeRequestor, imageManager->removeRequestor.
+        self.inner.glyph_manager.remove_requestor_key(glyph_requestor_key(&self.inner));
+        self.inner.image_manager.remove_requestor_key(requestor_key(&self.inner));
 
         if self.inner.base.pending.get() {
             // This tile never finished loading or was abandoned, emit a
             // cancellation event
             self.inner.base.on_tile_action(TileOperation::Cancelled);
+        }
+
+        // C++ runs `dynamicTextureAtlas->removeUnusedDynamicTextures()` on
+        // the render thread once the layout result is gone.
+        let layout_result = self.inner.layout_result.borrow_mut().take();
+        if let Some(layout_result) = layout_result {
+            let atlas = layout_result.atlases.dynamic_texture_atlas.clone();
+            drop(layout_result);
+            if let Some(atlas) = atlas {
+                atlas.remove_unused_dynamic_textures();
+            }
         }
     }
 }
@@ -424,6 +613,42 @@ impl Tile for GeometryTile {
         self.inner.base.set_observer(observer);
         // TODO(port): worker.self().invoke(&GeometryTileWorker::setObserver,
         // observer) (symbol errors reported from the worker thread).
+    }
+
+    // layers: feature state
+    /// `setFeatureState(const LayerFeatureStates&)`.
+    fn set_feature_state(&self, states: &crate::bucket::LayerFeatureStates) {
+        let layout_result = self.inner.layout_result.borrow();
+        let Some(layout_result) = layout_result.as_ref() else {
+            return;
+        };
+        // getData(): latestFeatureIndex->getData()
+        let Some(layers) = layout_result.feature_index.get_data() else {
+            return;
+        };
+        if states.is_empty() {
+            return;
+        }
+
+        for (layer_id, render_data) in &layout_result.layer_render_data {
+            let source_layer_id = &render_data.layer_properties.base_impl.source_layer;
+            if let Some(source_layer) = layers.get_layer(source_layer_id) {
+                let Some(feature_states) = states.get(source_layer_id) else {
+                    continue;
+                };
+                if feature_states.is_empty() {
+                    continue;
+                }
+                if render_data.bucket.has_data() {
+                    render_data.bucket.update(
+                        feature_states,
+                        &*source_layer,
+                        layer_id,
+                        &layout_result.image_atlas().pattern_positions,
+                    );
+                }
+            }
+        }
     }
 
     fn layer_properties_updated(&self, layer_properties: &Immutable<dyn LayerProperties>) -> bool {

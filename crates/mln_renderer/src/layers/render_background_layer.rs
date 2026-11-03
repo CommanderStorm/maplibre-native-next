@@ -38,6 +38,15 @@ fn impl_cast(impl_: &Immutable<dyn layer::Impl>) -> &BackgroundLayerImpl {
 const BACKGROUND_PLAIN_SHADER_NAME: &str = "BackgroundShader";
 const BACKGROUND_PATTERN_SHADER_NAME: &str = "BackgroundPatternShader";
 
+/// `addPatternIfNeeded(id, params)` (conformance).
+fn add_pattern_if_needed(id: &str, params: &LayerPrepareParameters<'_>) {
+    if params.pattern_atlas.borrow().get_pattern(id).is_none() {
+        if let Some(image) = params.image_manager.get_image(id) {
+            params.pattern_atlas.borrow_mut().add_pattern(&image);
+        }
+    }
+}
+
 pub struct RenderBackgroundLayer {
     base: RenderLayerBase,
     unevaluated: BackgroundPaintProperties::Unevaluated,
@@ -129,13 +138,14 @@ impl RenderLayer for RenderBackgroundLayer {
         Some(*evaluated.get::<BackgroundColor>() * *evaluated.get::<BackgroundOpacity>())
     }
 
-    fn prepare(&mut self, _parameters: &mut LayerPrepareParameters<'_>) {
+    fn prepare(&mut self, parameters: &mut LayerPrepareParameters<'_>) {
         let evaluated = background_layer_properties(&self.base.evaluated_properties);
         if !evaluated.get::<BackgroundPattern>().to.empty() {
             // Ensures that the pattern bitmap gets copied to atlas bitmap.
             // Atlas bitmap is uploaded to atlas texture in upload.
-            // TODO(port): addPatternIfNeeded(from), addPatternIfNeeded(to)
-            // with the ImageManager and PatternAtlas (M3).
+            // (conformance)
+            add_pattern_if_needed(evaluated.get::<BackgroundPattern>().from.id(), parameters);
+            add_pattern_if_needed(evaluated.get::<BackgroundPattern>().to.id(), parameters);
         }
     }
 

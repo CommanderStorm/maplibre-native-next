@@ -3,6 +3,7 @@
 mod database_file_source;
 mod main_resource_loader;
 mod offline_database;
+mod online_file_source;
 
 use mln_util::logging::{Event, EventSeverity, Log, Observer};
 use std::path::PathBuf;

@@ -256,16 +256,12 @@ fn background_opacity_color() {
 
 #[test]
 fn background_opacity_overlay() {
-    // The raster source is not ported yet (M4): its conversion fails, so it
-    // is logged and skipped, as C++ does for an invalid source. The raster
-    // layer type is registered (generated layers), so both layers parse.
+    // The raster source converts (sources, M3/M4) and the raster layer type
+    // is registered (generated layers), so both layers and the source parse.
     let log = FixtureLog::new();
     let style = load("background-opacity/overlay");
     assert_eq!(2, style.get_layer_impls().len());
-    assert_eq!(
-        1,
-        log.count(EventSeverity::Warning, Event::ParseStyle, "source type 'raster' is not ported yet")
-    );
+    assert_eq!(1, style.get_source_impls().len());
     assert_eq!(
         0,
         log.count(

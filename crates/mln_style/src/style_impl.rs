@@ -21,8 +21,11 @@
 //   source. `sources.update(source)` happens when the impls are read
 //   (`get_source_impls`), which picks up every source whose impl changed.
 //
-// TODO(port): loadURL through the file source (the response would parse
-// into this Impl).
+// - `loadURL` (added by glfw): the response callback can't reach the
+//   `&mut Impl` its owner holds, so it queues the response in
+//   `style_responses` and calls `Observer::on_style_response`; the owner
+//   (the Map) then calls `process_style_responses`, which is the body of the
+//   C++ lambda.
 
 use crate::collection::{Collection, CollectionWithPersistentOrder, ImmutableVector};
 use crate::expression::GlobalStateMap;
@@ -37,7 +40,8 @@ use crate::transition_options::TransitionOptions;
 use maplibre_native_base::Value;
 use mln_actor::{TaggedScheduler, scheduler};
 use mln_sprite::{SpriteLoader, SpriteLoaderObserver};
-use mln_storage::FileSource;
+use mln_storage::{AsyncRequest, FileSource, Resource, Response};
+use std::collections::VecDeque;
 use mln_util::identity::SimpleIdentity;
 use std::cell::RefCell;
 use crate::map::camera::CameraOptions;
@@ -211,6 +215,10 @@ pub struct Impl {
     // so the sprite loader (and its requests) goes before the file source;
     // Rust drops fields in declaration order.
     sprite_loader: SpriteLoader,
+    /// `styleRequest`
+    style_request: Option<Box<dyn AsyncRequest>>,
+    /// Responses to `style_request` waiting for `process_style_responses`.
+    style_responses: Rc<RefCell<VecDeque<Response>>>,
     file_source: Option<Arc<dyn FileSource>>,
 
     url: String,
@@ -288,6 +296,8 @@ impl Impl {
         });
         Impl {
             sprite_loader,
+            style_request: None,
+            style_responses: Rc::new(RefCell::new(VecDeque::new())),
             file_source,
             url: String::new(),
             json: String::new(),
@@ -315,7 +325,8 @@ impl Impl {
 
     /// Cancels any pending style request.
     pub fn cancel_pending_request(&mut self) {
-        // TODO(port): styleRequest.reset() with storage.
+        self.style_request = None;
+        self.style_responses.borrow_mut().clear();
     }
 
     pub fn load_json(&mut self, json: &str) {
@@ -327,19 +338,61 @@ impl Impl {
         self.parse(json);
     }
 
-    pub fn load_url(&mut self, _url: &str) {
-        if self.file_source.is_none() {
+    pub fn load_url(&mut self, url: &str) {
+        let Some(file_source) = self.file_source.clone() else {
             self.observer().on_style_error(StyleLoadException::ptr(
                 "Unable to find resource provider for style url.",
             ));
             return;
-        }
-        // TODO(port): lastError = nullptr; onStyleLoading(); loaded = false;
-        // url = url_; styleRequest = fileSource->request(Resource::style(url),
-        // ...) parsing the response into this Impl (see the file comment).
-        self.observer().on_style_error(StyleLoadException::ptr(
-            "TODO(port): Style::loadURL through the file source",
+        };
+
+        self.shared.borrow_mut().last_error = None;
+        self.observer().on_style_loading();
+
+        self.loaded = false;
+        self.url = url.to_owned();
+
+        self.style_responses.borrow_mut().clear();
+        let responses = Rc::downgrade(&self.style_responses);
+        let shared = Rc::downgrade(&self.shared);
+        self.style_request = Some(file_source.request(
+            &Resource::style(url),
+            Box::new(move |res: Response| {
+                let (Some(responses), Some(shared)) = (responses.upgrade(), shared.upgrade()) else {
+                    return;
+                };
+                responses.borrow_mut().push_back(res);
+                shared_observer(&shared).on_style_response();
+            }),
         ));
+    }
+
+    /// The body of the `loadURL` response lambda, for each response queued
+    /// since the last call (see the file comment).
+    pub fn process_style_responses(&mut self) {
+        loop {
+            let Some(res) = self.style_responses.borrow_mut().pop_front() else {
+                return;
+            };
+
+            // Don't allow a loaded, mutated style to be overwritten with a new version.
+            if self.mutated && self.loaded {
+                continue;
+            }
+
+            if let Some(error) = &res.error {
+                let message = format!("loading style failed: {}", error.message);
+                Log::error(Event::Setup, &message);
+                let observer = self.observer();
+                observer.on_style_error(StyleLoadException::ptr(message));
+                observer.on_resource_error(RuntimeError::ptr(error.message.clone()));
+            } else if res.not_modified || res.no_content {
+                continue;
+            } else if let Some(data) = &res.data {
+                let json = String::from_utf8_lossy(data).into_owned();
+                self.parse(&json);
+            }
+        }
     }
 
     fn parse(&mut self, json: &str) {

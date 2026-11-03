@@ -183,10 +183,63 @@ impl TestRunnerImpl for Impl {
         Ok(style_ops::remove_layer(&mut self.map.get_style_mut(), id))
     }
 
-    // TODO(port): set_layer_filter (no convert<Filter> in mln_style yet),
-    // add_source/remove_source, add_image/remove_image (file source),
-    // set_global_state_property, sleep, setTileLod*: the trait's NotPorted
-    // defaults until the APIs exist.
+    fn set_layer_filter(&mut self, layer: &str, filter: &serde_json::Value) -> Result<(), MapError> {
+        style_ops::set_layer_filter(&mut self.map.get_style_mut(), layer, filter)
+    }
+
+    fn set_global_state_property(&mut self, name: &str, value: &maplibre_native_base::Value) -> Result<(), MapError> {
+        style_ops::set_global_state_property(&mut self.map.get_style_mut(), name, value)
+    }
+
+    fn set_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer: Option<&str>,
+        feature_id: &str,
+        state: &maplibre_native_base::PropertyMap,
+    ) -> Result<bool, MapError> {
+        if self.frontend.render(&mut self.map).is_err() {
+            return Ok(false);
+        }
+        self.frontend
+            .with_renderer(|renderer| renderer.set_feature_state(source_id, source_layer, feature_id, state));
+        Ok(true)
+    }
+
+    fn get_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer: Option<&str>,
+        feature_id: &str,
+    ) -> Result<bool, MapError> {
+        if self.frontend.render(&mut self.map).is_err() {
+            return Ok(false);
+        }
+        self.frontend.with_renderer(|renderer| {
+            let _ = renderer.get_feature_state(source_id, source_layer, feature_id);
+        });
+        Ok(true)
+    }
+
+    fn remove_feature_state(
+        &mut self,
+        source_id: &str,
+        source_layer: Option<&str>,
+        feature_id: Option<&str>,
+        state_key: Option<&str>,
+    ) -> Result<bool, MapError> {
+        if self.frontend.render(&mut self.map).is_err() {
+            return Ok(false);
+        }
+        self.frontend.with_renderer(|renderer| {
+            renderer.remove_feature_state(source_id, source_layer, feature_id, state_key)
+        });
+        Ok(true)
+    }
+
+    // TODO(port): add_source/remove_source, add_image/remove_image (file
+    // source), sleep, setTileLod*: the trait's NotPorted defaults until the
+    // APIs exist.
 }
 
 /// The factory `TestRunner::run` uses for `maps[key]`. Creates the thread's

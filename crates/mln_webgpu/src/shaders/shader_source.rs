@@ -99,7 +99,7 @@ const fn tex(index: usize, id: usize) -> TextureInfo {
     TextureInfo { index, id }
 }
 
-use AttributeDataType::{Float2, Float4, Short2, UByte4, UShort4};
+use AttributeDataType::{Float2, Float4, Short2, UByte4, UShort2, UShort4};
 
 // src/mln/shaders/webgpu/circle.cpp
 const CIRCLE_ATTRIBUTES: &[AttributeInfo] = &[
@@ -254,6 +254,161 @@ shader_source!(
     LINE_GRADIENT_SDF_TEXTURES
 );
 
+// src/mln/shaders/webgpu/raster.cpp (conformance)
+const RASTER_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(0, Short2, ID_RASTER_POS_VERTEX_ATTRIBUTE),
+    attr(1, Short2, ID_RASTER_TEXTURE_POS_VERTEX_ATTRIBUTE),
+];
+const RASTER_TEXTURES: &[TextureInfo] = &[tex(0, ID_RASTER_IMAGE0_TEXTURE), tex(1, ID_RASTER_IMAGE1_TEXTURE)];
+shader_source!(RASTER_SHADER, RASTER_SHADER, "RasterShader", RASTER_ATTRIBUTES, RASTER_TEXTURES);
+
+// dem-heatmap: src/mln/shaders/webgpu/heatmap.cpp
+const HEATMAP_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(0, Short2, ID_HEATMAP_POS_VERTEX_ATTRIBUTE),
+    attr(1, Float2, ID_HEATMAP_WEIGHT_VERTEX_ATTRIBUTE),
+    attr(2, Float2, ID_HEATMAP_RADIUS_VERTEX_ATTRIBUTE),
+];
+shader_source!(HEATMAP_SHADER, HEATMAP_SHADER, "HeatmapShader", HEATMAP_ATTRIBUTES, &[]);
+// src/mln/shaders/webgpu/heatmap_texture.cpp
+const HEATMAP_TEXTURE_ATTRIBUTES: &[AttributeInfo] = &[attr(5, Short2, ID_HEATMAP_POS_VERTEX_ATTRIBUTE)];
+const HEATMAP_TEXTURE_TEXTURES: &[TextureInfo] =
+    &[tex(0, ID_HEATMAP_IMAGE_TEXTURE), tex(1, ID_HEATMAP_COLOR_RAMP_TEXTURE)];
+shader_source!(
+    HEATMAP_TEXTURE_SHADER,
+    HEATMAP_TEXTURE_SHADER,
+    "HeatmapTextureShader",
+    HEATMAP_TEXTURE_ATTRIBUTES,
+    HEATMAP_TEXTURE_TEXTURES
+);
+// src/mln/shaders/webgpu/hillshade.cpp, hillshade_prepare.cpp
+const HILLSHADE_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(5, Short2, ID_HILLSHADE_POS_VERTEX_ATTRIBUTE),
+    attr(6, Short2, ID_HILLSHADE_TEXTURE_POS_VERTEX_ATTRIBUTE),
+];
+const HILLSHADE_TEXTURES: &[TextureInfo] = &[tex(0, ID_HILLSHADE_IMAGE_TEXTURE)];
+shader_source!(HILLSHADE_SHADER, HILLSHADE_SHADER, "HillshadeShader", HILLSHADE_ATTRIBUTES, HILLSHADE_TEXTURES);
+shader_source!(
+    HILLSHADE_PREPARE_SHADER,
+    HILLSHADE_PREPARE_SHADER,
+    "HillshadePrepareShader",
+    HILLSHADE_ATTRIBUTES,
+    HILLSHADE_TEXTURES
+);
+// src/mln/shaders/webgpu/color_relief.cpp
+const COLOR_RELIEF_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(5, Short2, ID_COLOR_RELIEF_POS_VERTEX_ATTRIBUTE),
+    attr(6, Short2, ID_COLOR_RELIEF_TEXTURE_POS_VERTEX_ATTRIBUTE),
+];
+const COLOR_RELIEF_TEXTURES: &[TextureInfo] = &[
+    tex(0, ID_COLOR_RELIEF_IMAGE_TEXTURE),
+    tex(1, ID_COLOR_RELIEF_ELEVATION_STOPS_TEXTURE),
+    tex(2, ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
+];
+shader_source!(
+    COLOR_RELIEF_SHADER,
+    COLOR_RELIEF_SHADER,
+    "ColorReliefShader",
+    COLOR_RELIEF_ATTRIBUTES,
+    COLOR_RELIEF_TEXTURES
+);
+
+// src/mln/shaders/webgpu/fill_extrusion.cpp (conformance)
+const FILL_EXTRUSION_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, Short2, ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE),
+    attr(4, UShort2, ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE),
+    attr(5, Short2, ID_FILL_EXTRUSION_NORMAL_2D_VERTEX_ATTRIBUTE),
+    attr(6, Float4, ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE),
+    attr(7, Float2, ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE),
+    attr(8, Float2, ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE),
+];
+const FILL_EXTRUSION_PATTERN_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, Short2, ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE),
+    attr(4, UShort2, ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE),
+    attr(5, Short2, ID_FILL_EXTRUSION_NORMAL_2D_VERTEX_ATTRIBUTE),
+    attr(6, Float2, ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE),
+    attr(7, Float2, ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE),
+    attr(8, UShort4, ID_FILL_EXTRUSION_PATTERN_FROM_VERTEX_ATTRIBUTE),
+    attr(9, UShort4, ID_FILL_EXTRUSION_PATTERN_TO_VERTEX_ATTRIBUTE),
+];
+const FILL_EXTRUSION_PATTERN_TEXTURES: &[TextureInfo] = &[tex(0, ID_FILL_EXTRUSION_IMAGE_TEXTURE)];
+shader_source!(FILL_EXTRUSION_SHADER, FILL_EXTRUSION_SHADER, "FillExtrusionShader", FILL_EXTRUSION_ATTRIBUTES, &[]);
+shader_source!(
+    FILL_EXTRUSION_PATTERN_SHADER,
+    FILL_EXTRUSION_PATTERN_SHADER,
+    "FillExtrusionPatternShader",
+    FILL_EXTRUSION_PATTERN_ATTRIBUTES,
+    FILL_EXTRUSION_PATTERN_TEXTURES
+);
+
+// src/mln/shaders/webgpu/symbol.cpp (symbols)
+const SYMBOL_ICON_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, AttributeDataType::Short4, ID_SYMBOL_POS_OFFSET_ATTRIBUTE),
+    attr(4, UShort4, ID_SYMBOL_DATA_ATTRIBUTE),
+    attr(5, AttributeDataType::Short4, ID_SYMBOL_PIXEL_OFFSET_ATTRIBUTE),
+    attr(6, AttributeDataType::Float3, ID_SYMBOL_PROJECTED_POS_ATTRIBUTE),
+    attr(7, AttributeDataType::Float, ID_SYMBOL_FADE_OPACITY_ATTRIBUTE),
+    attr(8, AttributeDataType::Float, ID_SYMBOL_OPACITY_ATTRIBUTE),
+];
+const SYMBOL_ICON_TEXTURES: &[TextureInfo] = &[tex(0, ID_SYMBOL_IMAGE_TEXTURE)];
+const SYMBOL_SDF_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, AttributeDataType::Short4, ID_SYMBOL_POS_OFFSET_ATTRIBUTE),
+    attr(4, UShort4, ID_SYMBOL_DATA_ATTRIBUTE),
+    attr(5, AttributeDataType::Short4, ID_SYMBOL_PIXEL_OFFSET_ATTRIBUTE),
+    attr(6, AttributeDataType::Float3, ID_SYMBOL_PROJECTED_POS_ATTRIBUTE),
+    attr(7, AttributeDataType::Float, ID_SYMBOL_FADE_OPACITY_ATTRIBUTE),
+    attr(8, Float4, ID_SYMBOL_COLOR_ATTRIBUTE),
+    attr(9, Float4, ID_SYMBOL_HALO_COLOR_ATTRIBUTE),
+    attr(10, AttributeDataType::Float, ID_SYMBOL_OPACITY_ATTRIBUTE),
+    attr(11, AttributeDataType::Float, ID_SYMBOL_HALO_WIDTH_ATTRIBUTE),
+    attr(12, AttributeDataType::Float, ID_SYMBOL_HALO_BLUR_ATTRIBUTE),
+];
+const SYMBOL_SDF_TEXTURES: &[TextureInfo] = &[tex(0, ID_SYMBOL_IMAGE_TEXTURE)];
+const SYMBOL_TEXT_AND_ICON_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, AttributeDataType::Short4, ID_SYMBOL_POS_OFFSET_ATTRIBUTE),
+    attr(4, UShort4, ID_SYMBOL_DATA_ATTRIBUTE),
+    attr(5, AttributeDataType::Float3, ID_SYMBOL_PROJECTED_POS_ATTRIBUTE),
+    attr(6, AttributeDataType::Float, ID_SYMBOL_FADE_OPACITY_ATTRIBUTE),
+    attr(7, Float4, ID_SYMBOL_COLOR_ATTRIBUTE),
+    attr(8, Float4, ID_SYMBOL_HALO_COLOR_ATTRIBUTE),
+    attr(9, AttributeDataType::Float, ID_SYMBOL_OPACITY_ATTRIBUTE),
+    attr(10, AttributeDataType::Float, ID_SYMBOL_HALO_WIDTH_ATTRIBUTE),
+    attr(11, AttributeDataType::Float, ID_SYMBOL_HALO_BLUR_ATTRIBUTE),
+];
+const SYMBOL_TEXT_AND_ICON_TEXTURES: &[TextureInfo] =
+    &[tex(0, ID_SYMBOL_IMAGE_TEXTURE), tex(2, ID_SYMBOL_IMAGE_ICON_TEXTURE)];
+shader_source!(SYMBOL_ICON_SHADER, SYMBOL_ICON_SHADER, "SymbolIconShader", SYMBOL_ICON_ATTRIBUTES, SYMBOL_ICON_TEXTURES);
+shader_source!(SYMBOL_SDF_SHADER, SYMBOL_SDF_SHADER, "SymbolSDFShader", SYMBOL_SDF_ATTRIBUTES, SYMBOL_SDF_TEXTURES);
+shader_source!(
+    SYMBOL_TEXT_AND_ICON_SHADER,
+    SYMBOL_TEXT_AND_ICON_SHADER,
+    "SymbolTextAndIconShader",
+    SYMBOL_TEXT_AND_ICON_ATTRIBUTES,
+    SYMBOL_TEXT_AND_ICON_TEXTURES
+);
+
+// src/mln/shaders/webgpu/collision.cpp (symbols)
+const COLLISION_BOX_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, Short2, ID_COLLISION_POS_VERTEX_ATTRIBUTE),
+    attr(4, Short2, ID_COLLISION_ANCHOR_POS_VERTEX_ATTRIBUTE),
+    attr(5, Short2, ID_COLLISION_EXTRUDE_VERTEX_ATTRIBUTE),
+    attr(6, UShort2, ID_COLLISION_PLACED_VERTEX_ATTRIBUTE),
+    attr(7, Float2, ID_COLLISION_SHIFT_VERTEX_ATTRIBUTE),
+];
+const COLLISION_CIRCLE_ATTRIBUTES: &[AttributeInfo] = &[
+    attr(3, Short2, ID_COLLISION_POS_VERTEX_ATTRIBUTE),
+    attr(4, Short2, ID_COLLISION_ANCHOR_POS_VERTEX_ATTRIBUTE),
+    attr(5, Short2, ID_COLLISION_EXTRUDE_VERTEX_ATTRIBUTE),
+    attr(6, UShort2, ID_COLLISION_PLACED_VERTEX_ATTRIBUTE),
+];
+shader_source!(COLLISION_BOX_SHADER, COLLISION_BOX_SHADER, "CollisionBoxShader", COLLISION_BOX_ATTRIBUTES, &[]);
+shader_source!(
+    COLLISION_CIRCLE_SHADER,
+    COLLISION_CIRCLE_SHADER,
+    "CollisionCircleShader",
+    COLLISION_CIRCLE_ATTRIBUTES,
+    &[]
+);
+
 /// `ShaderSource<shader_id, WebGPU>`, or `None` for types not ported yet.
 pub fn shader_source(shader_id: BuiltIn) -> Option<&'static ShaderSource> {
     match shader_id {
@@ -271,6 +426,21 @@ pub fn shader_source(shader_id: BuiltIn) -> Option<&'static ShaderSource> {
         BuiltIn::LinePatternShader => Some(&LINE_PATTERN_SHADER),
         BuiltIn::LineSDFShader => Some(&LINE_SDF_SHADER),
         BuiltIn::LineGradientSDFShader => Some(&LINE_GRADIENT_SDF_SHADER),
+        BuiltIn::RasterShader => Some(&RASTER_SHADER),
+        BuiltIn::FillExtrusionShader => Some(&FILL_EXTRUSION_SHADER),
+        BuiltIn::FillExtrusionPatternShader => Some(&FILL_EXTRUSION_PATTERN_SHADER),
+        // dem-heatmap
+        BuiltIn::HeatmapShader => Some(&HEATMAP_SHADER),
+        BuiltIn::HeatmapTextureShader => Some(&HEATMAP_TEXTURE_SHADER),
+        BuiltIn::HillshadeShader => Some(&HILLSHADE_SHADER),
+        BuiltIn::HillshadePrepareShader => Some(&HILLSHADE_PREPARE_SHADER),
+        BuiltIn::ColorReliefShader => Some(&COLOR_RELIEF_SHADER),
+        // symbols
+        BuiltIn::SymbolIconShader => Some(&SYMBOL_ICON_SHADER),
+        BuiltIn::SymbolSDFShader => Some(&SYMBOL_SDF_SHADER),
+        BuiltIn::SymbolTextAndIconShader => Some(&SYMBOL_TEXT_AND_ICON_SHADER),
+        BuiltIn::CollisionBoxShader => Some(&COLLISION_BOX_SHADER),
+        BuiltIn::CollisionCircleShader => Some(&COLLISION_CIRCLE_SHADER),
         _ => None,
     }
 }

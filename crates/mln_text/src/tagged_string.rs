@@ -1,14 +1,11 @@
 // Ports src/mln/text/tagged_string.hpp and src/mln/text/tagged_string.cpp
 // (and `StyledText` from src/mln/text/bidi.hpp).
-//
-// TODO(port): `verticalizePunctuation` and `allowsVerticalWritingMode` need
-// util::i18n (`verticalizePunctuation`, `hasUprightVerticalOrientation`),
-// which arrives with shaping.cpp.
 
 use std::sync::Arc;
 
 use mln_util::Color;
 use mln_util::font_stack::FontStack;
+use mln_util::i18n;
 use mln_util::logging::{Event, Log};
 
 use crate::glyph::GlyphIDType;
@@ -325,6 +322,34 @@ impl TaggedString {
                 self.styled_text.1 = self.styled_text.1[beginning_whitespace..end].to_vec();
             }
         }
+    }
+
+    /// `verticalizePunctuation`. Relies on verticalization changing
+    /// characters in place so that style indices don't need updating.
+    pub fn verticalize_punctuation(&mut self) {
+        let mut replaced = i18n::verticalize_punctuation_str(&self.styled_text.0);
+        for i in 0..replaced.len() {
+            if self.get_section(i).type_ != GlyphIDType::FontPBF {
+                replaced[i] = self.styled_text.0[i];
+            }
+        }
+        self.styled_text.0 = replaced;
+    }
+
+    /// `allowsVerticalWritingMode` (cached until the next addTextSection).
+    pub fn allows_vertical_writing_mode(&mut self) -> bool {
+        if self.supports_vertical_writing_mode.is_none() {
+            let mut allows = false;
+            for i in 0..self.styled_text.0.len() {
+                let chr = self.styled_text.0[i];
+                if self.get_section(i).type_ == GlyphIDType::FontPBF && i18n::has_upright_vertical_orientation(chr) {
+                    allows = true;
+                    break;
+                }
+            }
+            self.supports_vertical_writing_mode = Some(allows);
+        }
+        self.supports_vertical_writing_mode.unwrap()
     }
 
     pub fn hb_shaped(&self) -> bool {

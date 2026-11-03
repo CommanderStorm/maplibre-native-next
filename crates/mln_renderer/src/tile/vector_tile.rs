@@ -1,0 +1,125 @@
+// Ports src/mln/tile/vector_tile.hpp, src/mln/tile/vector_tile.cpp,
+// src/mln/tile/vector_mvt_tile.hpp and src/mln/tile/vector_mvt_tile.cpp
+// and src/mln/tile/vector_mlt_tile.{hpp,cpp}: `VectorTile` with the
+// encoding of its subclass (VectorMVTTile or VectorMLTTile).
+
+use crate::tile::geometry_tile::GeometryTile;
+use crate::tile::tile::{Tile, TileBase, TileNecessity, TileUpdateParameters};
+use crate::tile::tile_loader::{TileLoader, VectorTileEncoding};
+use crate::tile::tile_observer::TileObserver;
+use crate::tile_parameters::TileParameters;
+use crate::tile_render_data::TileRenderData;
+use mln_style::expression::GlobalStateMap;
+use mln_style::layer_properties::LayerProperties;
+use mln_tile_id::OverscaledTileID;
+use mln_util::immutable::Immutable;
+use mln_util::tileset::Tileset;
+use std::any::Any;
+use std::rc::Rc;
+use std::sync::Arc;
+
+/// `VectorMVTTile` / `VectorMLTTile` (a `VectorTile`).
+pub struct VectorTile {
+    tile: GeometryTile,
+    loader: Option<TileLoader>,
+}
+
+impl VectorTile {
+    /// `VectorMVTTile(id, sourceID, parameters, tileset, observer)` /
+    /// `VectorMLTTile(..., fastPFOREnabled)`.
+    pub fn new(
+        id: OverscaledTileID,
+        source_id: String,
+        parameters: &TileParameters<'_>,
+        tileset: &Tileset,
+        observer: Option<Rc<dyn TileObserver>>,
+        encoding: VectorTileEncoding,
+    ) -> Self {
+        let tile = GeometryTile::new(id, source_id, parameters, observer);
+        let weak: std::rc::Weak<crate::tile::geometry_tile::GeometryTileInner> = Rc::downgrade(tile.inner());
+        let loader = TileLoader::new(weak, encoding, &id, parameters, tileset);
+        VectorTile {
+            tile,
+            loader: Some(loader),
+        }
+    }
+
+    pub fn geometry_tile(&self) -> &GeometryTile {
+        &self.tile
+    }
+}
+
+impl Drop for VectorTile {
+    /// `~VectorMVTTile()`: the loader goes first, then the tile cancels.
+    fn drop(&mut self) {
+        self.loader = None;
+        self.tile.cancel();
+    }
+}
+
+impl Tile for VectorTile {
+    fn base(&self) -> &TileBase {
+        self.tile.base()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn create_render_data(&self) -> Box<dyn TileRenderData> {
+        self.tile.create_render_data()
+    }
+
+    fn set_observer(&self, observer: Rc<dyn TileObserver>) {
+        self.tile.set_observer(observer);
+    }
+
+    fn set_necessity(&self, necessity: TileNecessity) {
+        if let Some(loader) = &self.loader {
+            loader.set_necessity(necessity);
+        }
+    }
+
+    fn set_update_parameters(&self, parameters: &TileUpdateParameters) {
+        if let Some(loader) = &self.loader {
+            loader.set_update_parameters(parameters);
+        }
+    }
+
+    fn cancel(&self) {
+        self.tile.cancel();
+    }
+
+    fn layer_properties_updated(&self, layer_properties: &Immutable<dyn LayerProperties>) -> bool {
+        self.tile.layer_properties_updated(layer_properties)
+    }
+
+    fn set_show_collision_boxes(&self, show: bool) {
+        self.tile.set_show_collision_boxes(show);
+    }
+
+    // layers: feature state
+    fn set_feature_state(&self, states: &crate::bucket::LayerFeatureStates) {
+        self.tile.set_feature_state(states);
+    }
+
+    fn set_layers(&self, layers: &[Immutable<dyn LayerProperties>], global_state: Option<Arc<GlobalStateMap>>) {
+        self.tile.set_layers(layers, global_state);
+    }
+
+    fn hold_for_fade(&self) -> bool {
+        self.tile.hold_for_fade()
+    }
+
+    fn mark_rendered_ideal(&self) {
+        self.tile.mark_rendered_ideal();
+    }
+
+    fn mark_rendered_previously(&self) {
+        self.tile.mark_rendered_previously();
+    }
+
+    fn performed_fade_placement(&self) {
+        self.tile.performed_fade_placement();
+    }
+}

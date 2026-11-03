@@ -47,9 +47,37 @@ crate.spec(
     package = "bytemuck",
     version = "1",
 )
+# Evaluated as a replacement for //vendor/earcut and rejected: on polygons
+# with holes it differs from the C++ earcut.hpp (25% identical, 1.1% cover a
+# different area; see //difftest/earcut_crate). Only that comparison uses it,
+# so a newer release can be re-checked (crate_universe resolves 0.4.5 here).
+crate.spec(
+    package = "earcut",
+    version = "0.4",
+)
 crate.spec(
     package = "flate2",
     version = "1",
+)
+# platform/glfw: links the GLFW from the dev shell (dynamic-link) instead of
+# downloading prebuilt libraries in a build script; raw window handles give
+# wgpu its surface.
+crate.spec(
+    default_features = False,
+    features = [
+        "dynamic-link",
+        "raw-window-handle-v0-6",
+        "wayland",
+        "x11",
+    ],
+    package = "glfw",
+    version = "0.63",
+)
+crate.annotation(
+    crate = "glfw-sys",
+    deps = ["@@//third_party/glfw:system"],
+    gen_build_script = "off",
+    repositories = ["next_crates"],
 )
 crate.spec(
     package = "harfrust",
@@ -125,6 +153,12 @@ crate.spec(
 crate.spec(
     package = "unicode-bidi",
     version = "0.3",
+)
+
+# HTTP for the online file source (the C++ default platform uses curl).
+crate.spec(
+    package = "ureq",
+    version = "3",
 )
 
 # Ports the C++ WebGPU backend (src/mln/webgpu, which runs on Dawn or

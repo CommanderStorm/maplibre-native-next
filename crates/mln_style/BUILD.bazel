@@ -12,6 +12,7 @@ rust_library(
         "//crates/mln_conversion",
         "//crates/mln_expression",
         "//crates/mln_map_types",
+        "//crates/mln_platform_default_image",
         "//crates/mln_sprite",
         "//crates/mln_storage",
         "//crates/mln_style_types",

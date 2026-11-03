@@ -22,7 +22,10 @@ rust_library(
     testonly = True,
     srcs = ["tests/fixtures_parser.rs"],
     data = ["@maplibre//vendor:earcut_fixtures"],
-    visibility = ["//difftest/geometry:__pkg__"],
+    visibility = [
+        "//difftest/earcut_crate:__pkg__",
+        "//difftest/geometry:__pkg__",
+    ],
 )
 
 # Port of earcut.hpp/test/test.cpp over its fixtures, read in place.

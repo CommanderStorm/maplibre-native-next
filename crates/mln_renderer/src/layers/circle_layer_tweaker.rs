@@ -2,7 +2,7 @@
 // src/mln/renderer/layers/circle_layer_tweaker.cpp (MLN_UBO_CONSOLIDATION
 // branches: the port's backend is WebGPU).
 
-use super::{cast_matrix, check_tweak_drawable_ptr, get_drawable_bucket};
+use super::{cast_matrix, check_tweak_drawable_ptr, get_drawable_binders, slot_bucket};
 use crate::buckets::circle_bucket::CircleBucket;
 use crate::layer_tweaker::{get_tile_matrix, LayerTweaker, LayerTweakerBase};
 use crate::paint_parameters::PaintParameters;
@@ -38,7 +38,6 @@ macro_rules! const_or_default {
         $evaluated.get::<$p>().constant_or(&<$p>::default_value())
     };
 }
-pub(crate) use const_or_default;
 
 impl LayerTweaker for CircleLayerTweaker {
     fn base(&self) -> &LayerTweakerBase {
@@ -97,14 +96,20 @@ impl LayerTweaker for CircleLayerTweaker {
             }
             let tile_id = tile_id.to_unwrapped();
 
-            let Some((bucket, layer_id)) = get_drawable_bucket::<CircleBucket>(drawable) else {
+            let Some(binders_slot) = get_drawable_binders(drawable) else {
                 debug_assert!(false);
                 return;
             };
-            let Some(binders) = bucket.paint_property_binders.get(layer_id) else {
+            let Some((bucket, layer_id)) = slot_bucket::<CircleBucket>(&binders_slot) else {
                 debug_assert!(false);
                 return;
             };
+            let Some(binders_lock) = bucket.paint_property_binders.get(layer_id) else {
+                debug_assert!(false);
+                return;
+            };
+            let binders_guard = binders_lock.read().unwrap();
+            let binders = &*binders_guard;
 
             let translation = evaluated.get::<CircleTranslate>();
             let anchor = *evaluated.get::<CircleTranslateAnchor>();

@@ -1,6 +1,5 @@
 // Ports src/mln/renderer/render_layer.hpp and src/mln/renderer/render_layer.cpp
-// (the parts layers without a source use; render tiles, buckets, placement
-// data and feature queries arrive with sources, M3).
+// (placement data and feature queries arrive with symbols and queries).
 //
 // C++ `RenderLayer` is an abstract class with data members; the data is
 // `RenderLayerBase` and the virtual interface is the `RenderLayer` trait.
@@ -8,7 +7,11 @@
 // the render tree's items (C++: `unique_ptr` + `reference_wrapper`s), so
 // they are `Rc<RefCell<dyn RenderLayer>>`.
 
+use crate::bucket::BucketPtr;
 use crate::change_request::{ChangeRequest, UniqueChangeRequestVec};
+use crate::line_atlas::LineAtlas;
+use crate::render_source::{RenderSource, RenderTiles};
+use crate::render_tile::RenderTile;
 use crate::layer_tweaker::LayerTweakerPtr;
 use crate::paint_parameters::PaintParameters;
 use crate::pattern_atlas::PatternAtlas;
@@ -24,18 +27,31 @@ use mln_style::layer_properties::LayerProperties;
 use mln_style::{PropertyEvaluationParameters, TransitionParameters};
 use mln_style_types::VisibilityType;
 use mln_util::immutable::Immutable;
+use mln_tile_id::OverscaledTileID;
 use mln_util::Color;
+use mln_util::identity::SimpleIdentity;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 pub type RenderLayerPtr = Rc<RefCell<dyn RenderLayer>>;
 pub type RenderLayerReferences = Vec<RenderLayerPtr>;
 
+/// `LayerRenderData`.
+#[derive(Clone)]
+pub struct LayerRenderData {
+    pub bucket: BucketPtr,
+    pub layer_properties: Immutable<dyn LayerProperties>,
+}
+
 /// `LayerPrepareParameters`.
 pub struct LayerPrepareParameters<'a> {
-    // TODO(port): RenderSource* source, ImageManager&, LineAtlas&.
+    pub source: Option<&'a dyn RenderSource>,
+    /// conformance: `ImageManager& imageManager` (background-pattern).
+    pub image_manager: &'a crate::image_manager::ImageManager,
     pub pattern_atlas: &'a RefCell<PatternAtlas>,
+    pub line_atlas: &'a RefCell<LineAtlas>,
     pub state: &'a TransformState,
 }
 
@@ -60,8 +76,17 @@ pub struct RenderLayerBase {
     pub is_renderable: bool,
 
     pub stats: Stats,
-    // TODO(port): renderTiles, renderTilesOwner, placementData,
-    // renderTileIDs, sourceForState, hasRenderFailures.
+
+    /// Stores current set of tiles to be rendered for this layer.
+    pub render_tiles: Option<RenderTiles>,
+    /// Retains ownership of tiles
+    pub render_tiles_owner: Rc<Vec<RenderTile>>,
+    /// The tile IDs in `render_tiles`, along with the identity of the
+    /// bucket from which they were built (C++ `TinyUnorderedMap`; only
+    /// looked up).
+    pub render_tile_ids: HashMap<OverscaledTileID, SimpleIdentity>,
+    // TODO(port): placementData (symbols, M5), sourceForState (feature
+    // state), hasRenderFailures.
 }
 
 impl RenderLayerBase {
@@ -78,6 +103,9 @@ impl RenderLayerBase {
             style_dependencies: Dependency::NONE,
             is_renderable: false,
             stats: Stats::default(),
+            render_tiles: None,
+            render_tiles_owner: Rc::new(Vec::new()),
+            render_tile_ids: HashMap::new(),
         }
     }
 }
@@ -111,11 +139,11 @@ pub trait RenderLayer {
 
     fn render(&mut self, _parameters: &mut PaintParameters<'_>) {}
 
-    /// `prepare(const LayerPrepareParameters&)`. The C++ default reads the
-    /// source's render tiles.
-    // TODO(port): the default body (sources, M3). Every layer that runs in
-    // M1 (background) overrides it.
-    fn prepare(&mut self, _parameters: &mut LayerPrepareParameters<'_>) {}
+    /// `prepare(const LayerPrepareParameters&)`: reads the source's render
+    /// tiles (`prepare_base`).
+    fn prepare(&mut self, parameters: &mut LayerPrepareParameters<'_>) {
+        prepare_base(self, parameters);
+    }
 
     fn mark_context_destroyed(&mut self) {
         // no-op
@@ -200,6 +228,76 @@ pub trait RenderLayer {
 
     // Non-virtual members of the C++ class.
 
+    /// `addRenderPassesFromTiles()`.
+    fn add_render_passes_from_tiles(&mut self) {
+        let base = self.base_mut();
+        let render_tiles = base.render_tiles.clone().expect("renderTiles");
+        for tile in render_tiles.iter() {
+            if let Some(render_data) = tile.get_layer_render_data(&*base.base_impl) {
+                base.passes |= RenderPass(render_data.layer_properties.render_passes);
+            }
+        }
+    }
+
+    /// `getRenderDataForPass(tile, pass)`.
+    fn get_render_data_for_pass<'t>(&self, tile: &'t RenderTile, pass: RenderPass) -> Option<&'t LayerRenderData> {
+        let render_data = tile.get_layer_render_data(&*self.base().base_impl)?;
+        if (RenderPass(render_data.layer_properties.render_passes) & pass) != RenderPass::None {
+            Some(render_data)
+        } else {
+            None
+        }
+    }
+
+    /// Update `renderTileIDs` from `renderTiles`.
+    fn update_render_tile_ids(&mut self) {
+        let base = self.base_mut();
+        let Some(render_tiles) = base.render_tiles.clone().filter(|tiles| !tiles.is_empty()) else {
+            base.render_tile_ids.clear();
+            return;
+        };
+
+        let new_render_tile_ids: HashMap<OverscaledTileID, SimpleIdentity> = render_tiles
+            .iter()
+            .map(|tile| {
+                let tile_id = *tile.get_overscaled_tile_id();
+                (tile_id, get_render_tile_bucket_id(base, &tile_id))
+            })
+            .collect();
+
+        base.render_tile_ids = new_render_tile_ids;
+    }
+
+    /// Whether a given tile ID is present in the current cover set
+    /// (`renderTiles`)
+    fn has_render_tile(&self, tile_id: &OverscaledTileID) -> bool {
+        self.base().render_tile_ids.contains_key(tile_id)
+    }
+
+    /// Get the bucket ID from which a given tile was built.
+    ///
+    /// When a new style is loaded and contains a layer with the same ID,
+    /// `layerChanged` will be called during style parsing, but the `Bucket`
+    /// in a tile's `RenderData` will only be replaced when the asynchronous
+    /// load for the tile is complete, at which point the drawable for the
+    /// tile may need to be updated or replaced.
+    fn get_render_tile_bucket_id(&self, tile_id: &OverscaledTileID) -> SimpleIdentity {
+        get_render_tile_bucket_id(self.base(), tile_id)
+    }
+
+    /// Set the bucket ID from which a given tile was built. Returns true if
+    /// updated, false if the tile ID is not present in the set of tiles to
+    /// be rendered or the ID is unchanged.
+    fn set_render_tile_bucket_id(&mut self, tile_id: &OverscaledTileID, bucket_id: SimpleIdentity) -> bool {
+        match self.base_mut().render_tile_ids.get_mut(tile_id) {
+            Some(id) if *id != bucket_id => {
+                *id = bucket_id;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn get_id(&self) -> &str {
         &self.base().base_impl.id
     }
@@ -261,6 +359,38 @@ pub trait RenderLayer {
         let renderable = self.base().is_renderable;
         activate_layer_group(&group, renderable, changes);
     }
+}
+
+/// The default `RenderLayer::prepare(params)`, callable from overrides (C++
+/// `RenderLayer::prepare(params)`). C++ asserts a source; without one (a
+/// source type the port has no render source for) the layer gets no tiles.
+pub fn prepare_base<L: RenderLayer + ?Sized>(layer: &mut L, parameters: &mut LayerPrepareParameters<'_>) {
+    let Some(source) = parameters.source else {
+        let base = layer.base_mut();
+        base.render_tiles = None;
+        base.render_tile_ids.clear();
+        return;
+    };
+    debug_assert!(source.is_enabled());
+
+    // TODO(port): sourceForState = params.source (feature state).
+    let render_tiles = source.get_render_tiles();
+    let render_tiles_owner = source.get_raw_render_tiles();
+    let base = layer.base_mut();
+    base.render_tiles = render_tiles;
+    base.render_tiles_owner = render_tiles_owner;
+
+    layer.add_render_passes_from_tiles();
+
+    layer.update_render_tile_ids();
+}
+
+/// `getRenderTileBucketID(tileID)` on the data members.
+fn get_render_tile_bucket_id(base: &RenderLayerBase, tile_id: &OverscaledTileID) -> SimpleIdentity {
+    base.render_tile_ids
+        .get(tile_id)
+        .copied()
+        .unwrap_or(SimpleIdentity::EMPTY)
 }
 
 /// (Un-)Register the layer group with the orchestrator.

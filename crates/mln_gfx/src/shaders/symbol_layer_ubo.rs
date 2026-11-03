@@ -1,0 +1,88 @@
+// Ports include/mln/shaders/symbol_layer_ubo.hpp and
+// include/mln/shaders/collision_layer_ubo.hpp.
+
+use bytemuck::{Pod, Zeroable};
+
+/// `struct alignas(16) SymbolDrawableUBO` (272 bytes; the C++ tail padding
+/// is spelled out as `pad1..3`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct SymbolDrawableUBO {
+    /*   0 */ pub matrix: [f32; 4 * 4],
+    /*  64 */ pub label_plane_matrix: [f32; 4 * 4],
+    /* 128 */ pub coord_matrix: [f32; 4 * 4],
+    /* 192 */ pub texsize: [f32; 2],
+    /* 200 */ pub texsize_icon: [f32; 2],
+    /* 208 */ pub is_text_prop: i32,
+    /* 212 */ pub rotate_symbol: i32,
+    /* 216 */ pub pitch_with_map: i32,
+    /* 220 */ pub is_size_zoom_constant: i32,
+    /* 224 */ pub is_size_feature_constant: i32,
+    /* 228 */ pub is_offset: i32,
+    /* 232 */ pub size_t: f32,
+    /* 236 */ pub size: f32,
+    // Interpolations
+    /* 240 */ pub fill_color_t: f32,
+    /* 244 */ pub halo_color_t: f32,
+    /* 248 */ pub opacity_t: f32,
+    /* 252 */ pub halo_width_t: f32,
+    /* 256 */ pub halo_blur_t: f32,
+    /* 260 */ pub pad1: f32,
+    /* 264 */ pub pad2: f32,
+    /* 268 */ pub pad3: f32,
+    /* 272 */
+}
+const _: () = assert!(std::mem::size_of::<SymbolDrawableUBO>() == 17 * 16);
+
+/// `struct alignas(16) SymbolTilePropsUBO`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct SymbolTilePropsUBO {
+    /*  0 */ pub is_text: i32,
+    /*  4 */ pub is_halo: i32,
+    /*  8 */ pub gamma_scale: f32,
+    /* 12 */ pub pad1: f32,
+    /* 16 */
+}
+const _: () = assert!(std::mem::size_of::<SymbolTilePropsUBO>() == 16);
+
+/// `struct alignas(16) SymbolEvaluatedPropsUBO`. The colors are the
+/// premultiplied `mln::Color` as r, g, b, a floats.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct SymbolEvaluatedPropsUBO {
+    /*  0 */ pub text_fill_color: [f32; 4],
+    /* 16 */ pub text_halo_color: [f32; 4],
+    /* 32 */ pub text_opacity: f32,
+    /* 36 */ pub text_halo_width: f32,
+    /* 40 */ pub text_halo_blur: f32,
+    /* 44 */ pub pad1: f32,
+    /* 48 */ pub icon_fill_color: [f32; 4],
+    /* 64 */ pub icon_halo_color: [f32; 4],
+    /* 80 */ pub icon_opacity: f32,
+    /* 84 */ pub icon_halo_width: f32,
+    /* 88 */ pub icon_halo_blur: f32,
+    /* 92 */ pub pad2: f32,
+    /* 96 */
+}
+const _: () = assert!(std::mem::size_of::<SymbolEvaluatedPropsUBO>() == 6 * 16);
+
+/// `struct alignas(16) CollisionDrawableUBO`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct CollisionDrawableUBO {
+    /*  0 */ pub matrix: [f32; 4 * 4],
+    /* 64 */
+}
+const _: () = assert!(std::mem::size_of::<CollisionDrawableUBO>() == 4 * 16);
+
+/// `struct alignas(16) CollisionTilePropsUBO`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct CollisionTilePropsUBO {
+    /*  0 */ pub extrude_scale: [f32; 2],
+    /*  8 */ pub overscale_factor: f32,
+    /* 12 */ pub pad1: f32,
+    /* 16 */
+}
+const _: () = assert!(std::mem::size_of::<CollisionTilePropsUBO>() == 16);

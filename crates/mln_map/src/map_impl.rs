@@ -69,6 +69,9 @@ enum StyleEvent {
     SpriteLoaded,
     SpriteError,
     SpriteRequested,
+    /// Port-only: a `Style::loadURL` response is waiting (see
+    /// `Observer::on_style_response`).
+    StyleResponse,
 }
 
 /// The style::Observer half of `Map::Impl`.
@@ -114,6 +117,9 @@ impl StyleObserver for MapStyleObserver {
     }
     fn on_sprite_requested(&self, _sprite: Option<&Sprite>) {
         self.dispatch(StyleEvent::SpriteRequested);
+    }
+    fn on_style_response(&self) {
+        self.dispatch(StyleEvent::StyleResponse);
     }
 }
 
@@ -255,6 +261,13 @@ impl MapImpl {
             // TODO(port): MapObserver::onSpriteLoaded / onSpriteError /
             // onSpriteRequested (and the action journal).
             StyleEvent::SpriteLoaded | StyleEvent::SpriteError | StyleEvent::SpriteRequested => {}
+            // C++ parses inside the file source callback (the lambda in
+            // Style::Impl::loadURL); the observer calls the parse makes are
+            // queued while the style is borrowed and replayed here.
+            StyleEvent::StyleResponse => {
+                self.style.borrow_mut().impl_.process_style_responses();
+                self.process_pending_style_events();
+            }
         }
     }
 
@@ -296,6 +309,7 @@ impl MapImpl {
                 sources: style_impl.get_source_impls(),
                 layers: style_impl.get_layer_impls(),
                 global_state: Some(style_impl.get_global_state_shared()),
+                file_source: self.file_source.clone(),
                 prefetch_zoom_delta: self.prefetch_zoom_delta.get(),
                 still_image_request: self.still_image_request.borrow().is_some(),
                 cross_source_collisions: self.cross_source_collisions,

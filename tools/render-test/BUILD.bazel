@@ -67,6 +67,7 @@ rust_library(
         "//crates/mln_conversion",
         "//crates/mln_map_types",
         "//crates/mln_style",
+        "//vendor/maplibre-native-base:maplibre_native_base",
         "@next_crates//:serde_json",
     ],
 )
@@ -95,6 +96,7 @@ rust_library(
         "//crates/mln_platform_default",
         "//crates/mln_storage",
         "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
         "@next_crates//:serde_json",
     ],
 )

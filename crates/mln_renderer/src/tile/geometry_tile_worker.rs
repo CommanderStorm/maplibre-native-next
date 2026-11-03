@@ -3,26 +3,37 @@
 //
 // The worker is a pool actor (mln_actor::actor::Actor) on the map's thread
 // pool, as in C++. Its parent GeometryTile lives on the render thread and
-// is reached through a mailbox (`ActorRef<GeometryTileInner>`).
+// is reached through a mailbox (`ActorRef<GeometryTileInner>`). When the
+// source asks for synchronous updates, C++ uses an `OptionalActor` that
+// calls the worker and the tile directly; `OptionalActorRef` below is that
+// choice for the worker's references.
 //
 // C++ wraps each message handler in `try { ... } catch (...)` and reports
 // the exception to the tile (`GeometryTile::onError`). Rust code that would
 // throw panics (e.g. malformed MVT data in mln_tile, a failing wagyu
 // fixup), so the handlers catch the panic and report its message.
 //
-// TODO(port): glyph and image dependencies of symbol layouts
-// (onGlyphsAvailable, requestNewGlyphs, the glyph/image atlases in
-// finalizeLayout; M5), the ErrorScope for symbol errors, `setObserver`.
+// TODO(port): the ErrorScope for symbol errors, `setObserver`, font faces
+// (HarfBuzz shaping results for complex scripts).
 
 use crate::bucket_parameters::BucketParameters;
+use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlasPtr, GlyphAtlas, ImageAtlas};
+use crate::text::glyph_manager::HBShapeResults;
+use mln_text::glyph::{GlyphDependencies, GlyphIDType, GlyphMap};
+use mln_text::tagged_string::font_stack_hash;
 use crate::geometry::feature_index::FeatureIndex;
 use crate::group_by_layout::group_layers;
 use crate::layermanager;
-use crate::layout::layout::{Layout, LayoutParameters};
+use crate::layout::layout::{Layout, LayoutParameters, SourceLayer};
+use crate::bucket::BucketPtr;
+use crate::layout::pattern_layout::PatternLayerMap;
 use crate::render_layer::LayerRenderData;
+use mln_style::expression::EvaluationContext;
 use crate::tile::geometry_tile::{GeometryTileInner, LayoutResult};
-use mln_actor::ActorRef;
+use mln_actor::{ActorRef, LocalObject};
 use mln_actor::actor::PoolActorRef;
+use std::cell::RefCell;
+use std::rc::Weak;
 use mln_map_types::MapMode;
 use mln_style::expression::GlobalStateMap;
 use mln_style::layer::layer_type_info;
@@ -32,7 +43,6 @@ use mln_tile_id::OverscaledTileID;
 use mln_tile_id::geometry_tile_data::GeometryTileData;
 use mln_util::exception::{ExceptionPtr, RuntimeError};
 use mln_util::immutable::Immutable;
-use mln_util::logging::{Event, Log};
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -44,7 +54,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub type SharedTileData = Arc<dyn GeometryTileData + Send + Sync>;
 
 /// `ImageVersionMap`.
-pub type ImageVersionMap = HashMap<String, u32>;
+pub use crate::gfx::dynamic_texture_atlas::ImageVersionMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -66,10 +76,36 @@ fn panic_to_exception(payload: Box<dyn std::any::Any + Send>) -> ExceptionPtr {
     RuntimeError::ptr(message)
 }
 
+/// `OptionalActorRef<GeometryTile>`: the tile's mailbox, or (synchronous
+/// updates) the tile itself on the render thread.
+pub enum ParentRef {
+    Actor(ActorRef<GeometryTileInner>),
+    Sync(LocalObject<RefCell<Weak<GeometryTileInner>>>),
+}
+
+impl ParentRef {
+    /// `invoke(fn, args...)`: a direct call for the synchronous reference.
+    pub fn invoke(&self, f: impl FnOnce(&GeometryTileInner) + Send + 'static) {
+        match self {
+            ParentRef::Actor(actor_ref) => actor_ref.invoke(f),
+            ParentRef::Sync(object) => {
+                let tile = object.get().and_then(|weak| weak.borrow().upgrade());
+                if let Some(tile) = tile {
+                    f(&tile);
+                }
+            }
+        }
+    }
+}
+
+/// `OptionalActorRef<GeometryTileWorker>` (the worker's `self`): `None` for
+/// the synchronous worker, whose self-sent messages are direct calls.
+pub type SelfRef = Option<PoolActorRef<GeometryTileWorker>>;
+
 /// `GeometryTileWorker`.
 pub struct GeometryTileWorker {
-    self_ref: PoolActorRef<GeometryTileWorker>,
-    parent: ActorRef<GeometryTileInner>,
+    self_ref: SelfRef,
+    parent: ParentRef,
 
     id: OverscaledTileID,
     source_id: String,
@@ -93,11 +129,12 @@ pub struct GeometryTileWorker {
     // layout.
     global_state: Option<Arc<GlobalStateMap>>,
 
-    // TODO(port): `std::vector<std::unique_ptr<Layout>> layouts`: layouts
-    // with pending image/glyph dependencies (patterns, symbols), kept until
-    // the dependencies arrive. The layouts borrow the tile data
-    // (COORDINATION.md), so none are kept yet.
-    layouts_pending: bool,
+    layouts: Vec<Box<dyn Layout>>,
+
+    // symbols:
+    pending_glyph_dependencies: GlyphDependencies,
+    glyph_map: GlyphMap,
+    dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
 
     pending_image_dependencies: ImageDependencies,
     icon_map: ImageMap,
@@ -115,14 +152,15 @@ impl GeometryTileWorker {
     /// captureRenderedFeatures, observer)`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        self_ref: PoolActorRef<GeometryTileWorker>,
-        parent: ActorRef<GeometryTileInner>,
+        self_ref: SelfRef,
+        parent: ParentRef,
         id: OverscaledTileID,
         source_id: String,
         obsolete: Arc<AtomicBool>,
         mode: MapMode,
         pixel_ratio: f32,
         show_collision_boxes: bool,
+        dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
         capture_rendered_features: bool,
     ) -> Self {
         GeometryTileWorker {
@@ -142,7 +180,10 @@ impl GeometryTileWorker {
             layers: None,
             data: None,
             global_state: None,
-            layouts_pending: false,
+            layouts: Vec::new(),
+            pending_glyph_dependencies: GlyphDependencies::default(),
+            glyph_map: GlyphMap::new(),
+            dynamic_texture_atlas,
             pending_image_dependencies: ImageDependencies::new(),
             icon_map: ImageMap::new(),
             pattern_map: ImageMap::new(),
@@ -158,14 +199,18 @@ impl GeometryTileWorker {
     }
 
     /// Runs `f` as the C++ `try { f } catch (...) { parent.invoke(
-    /// &GeometryTile::onError, std::current_exception(), correlationID); }`.
-    fn guarded(&mut self, f: impl FnOnce(&mut Self)) {
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| f(self))) {
-            let error = panic_to_exception(payload);
-            let correlation_id = self.correlation_id;
-            self.parent
-                .invoke(move |tile: &GeometryTileInner| tile.on_error(error, correlation_id));
-        }
+    /// &GeometryTile::onError, std::current_exception(), correlationID); }`:
+    /// both an `Err` (an exception the port returns) and a panic (one it
+    /// does not) are reported.
+    fn guarded(&mut self, f: impl FnOnce(&mut Self) -> Result<(), ExceptionPtr>) {
+        let error = match catch_unwind(AssertUnwindSafe(|| f(self))) {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error,
+            Err(payload) => panic_to_exception(payload),
+        };
+        let correlation_id = self.correlation_id;
+        self.parent
+            .invoke(move |tile: &GeometryTileInner| tile.on_error(error, correlation_id));
     }
 
     /*
@@ -212,13 +257,14 @@ impl GeometryTileWorker {
 
             match this.state {
                 State::Idle => {
-                    this.parse();
-                    this.coalesce();
+                    this.parse()?;
+                    this.coalesce()?;
                 }
                 State::Coalescing | State::NeedsParse | State::NeedsSymbolLayout => {
                     this.state = State::NeedsParse;
                 }
             }
+            Ok(())
         });
     }
 
@@ -238,14 +284,15 @@ impl GeometryTileWorker {
 
             match this.state {
                 State::Idle => {
-                    this.parse();
-                    this.coalesce();
+                    this.parse()?;
+                    this.coalesce()?;
                 }
                 State::Coalescing | State::NeedsSymbolLayout => {
                     this.state = State::NeedsParse;
                 }
                 State::NeedsParse => {}
             }
+            Ok(())
         });
     }
 
@@ -274,8 +321,8 @@ impl GeometryTileWorker {
                     if !this.has_pending_parse_result() {
                         // Trigger parse if nothing is in flight, otherwise
                         // symbol layout will automatically pick up the change
-                        this.parse();
-                        this.coalesce();
+                        this.parse()?;
+                        this.coalesce()?;
                     }
                 }
                 State::Coalescing => {
@@ -283,62 +330,146 @@ impl GeometryTileWorker {
                 }
                 State::NeedsSymbolLayout | State::NeedsParse => {}
             }
+            Ok(())
         });
     }
 
     /// `symbolDependenciesChanged()`.
     fn symbol_dependencies_changed(&mut self) {
-        self.guarded(|this| match this.state {
-            State::Idle => {
-                if this.layouts_pending {
-                    // Layouts are created only by parsing and the parse
-                    // result can only be cleared by performLayout, which
-                    // also clears the layouts.
-                    debug_assert!(this.has_pending_parse_result());
-                    this.finalize_layout();
-                    this.coalesce();
+        self.guarded(|this| {
+            match this.state {
+                State::Idle => {
+                    if !this.layouts.is_empty() {
+                        // Layouts are created only by parsing and the parse
+                        // result can only be cleared by performLayout, which
+                        // also clears the layouts.
+                        debug_assert!(this.has_pending_parse_result());
+                        this.finalize_layout()?;
+                        this.coalesce()?;
+                    }
                 }
-            }
-            State::Coalescing => {
-                if this.layouts_pending {
-                    this.state = State::NeedsSymbolLayout;
+                State::Coalescing => {
+                    if !this.layouts.is_empty() {
+                        this.state = State::NeedsSymbolLayout;
+                    }
                 }
+                State::NeedsSymbolLayout | State::NeedsParse => {}
             }
-            State::NeedsSymbolLayout | State::NeedsParse => {}
+            Ok(())
         });
     }
 
     /// `coalesced()`.
     fn coalesced(&mut self) {
-        self.guarded(|this| match this.state {
-            State::Idle => {
-                debug_assert!(false);
-            }
-            State::Coalescing => {
-                this.state = State::Idle;
-            }
-            State::NeedsParse => {
-                this.parse();
-                this.coalesce();
-            }
-            State::NeedsSymbolLayout => {
-                // We may have entered NeedsSymbolLayout while coalescing
-                // after a performLayout. In that case, we need to start over
-                // with parsing in order to do another layout.
-                if this.has_pending_parse_result() {
-                    this.finalize_layout();
-                } else {
-                    this.parse();
+        self.guarded(|this| {
+            match this.state {
+                State::Idle => {
+                    debug_assert!(false);
                 }
-                this.coalesce();
+                State::Coalescing => {
+                    this.state = State::Idle;
+                }
+                State::NeedsParse => {
+                    this.parse()?;
+                    this.coalesce()?;
+                }
+                State::NeedsSymbolLayout => {
+                    // We may have entered NeedsSymbolLayout while coalescing
+                    // after a performLayout. In that case, we need to start
+                    // over with parsing in order to do another layout.
+                    if this.has_pending_parse_result() {
+                        this.finalize_layout()?;
+                    } else {
+                        this.parse()?;
+                    }
+                    this.coalesce()?;
+                }
             }
+            Ok(())
         });
     }
 
-    /// `coalesce()`.
-    fn coalesce(&mut self) {
+    /// `coalesce()`. The synchronous worker's self-sent `coalesced` is a
+    /// direct call (an exception from it propagates to the caller's
+    /// handler, as in C++).
+    fn coalesce(&mut self) -> Result<(), ExceptionPtr> {
         self.state = State::Coalescing;
-        self.self_ref.invoke(|worker: &mut GeometryTileWorker| worker.coalesced());
+        match &self.self_ref {
+            Some(self_ref) => self_ref.invoke(|worker: &mut GeometryTileWorker| worker.coalesced()),
+            // OptionalActorRef with an object: a direct call.
+            None => self.coalesced(),
+        }
+        Ok(())
+    }
+
+    /// `onGlyphsAvailable(newGlyphMap, results)`.
+    pub fn on_glyphs_available(&mut self, new_glyph_map: GlyphMap, mut results: HBShapeResults) {
+        for (font_stack, new_glyphs) in new_glyph_map {
+            let glyphs = self.glyph_map.entry(font_stack).or_default();
+            for (pending_font_stack, pending_glyph_ids) in self.pending_glyph_dependencies.glyphs.iter_mut() {
+                // Linear lookup here to handle reverse of FontStackHash ->
+                // FontStack, since dependencies need the full font stack
+                // name to make a request. There should not be many
+                // fontstacks to look through
+                if font_stack_hash(pending_font_stack) == font_stack {
+                    for (glyph_id, glyph) in &new_glyphs {
+                        if pending_glyph_ids.remove(glyph_id)
+                            && (glyph_id.code != 0 || glyph_id.type_ == GlyphIDType::FontPBF)
+                        {
+                            glyphs.entry(*glyph_id).or_insert_with(|| glyph.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if !results.is_empty() {
+            // TODO(port): font faces: the shaped glyphs of `results` join
+            // the glyph map (C++ newGlyphMap loop over complex glyphs).
+            self.pending_glyph_dependencies.shapes.clear();
+
+            for layout in self.layouts.iter_mut() {
+                if layout.need_finalize_symbols() {
+                    layout.finalize_symbols(&mut results);
+                }
+            }
+        }
+
+        self.symbol_dependencies_changed();
+    }
+
+    /// `requestNewGlyphs(glyphDependencies)`.
+    fn request_new_glyphs(&mut self, glyph_dependencies: &GlyphDependencies) {
+        for (font_stack, glyph_ids) in &glyph_dependencies.glyphs {
+            let font_glyphs = self.glyph_map.get(&font_stack_hash(font_stack));
+            for glyph_id in glyph_ids {
+                if font_glyphs.is_none_or(|glyphs| !glyphs.contains_key(glyph_id)) {
+                    self.pending_glyph_dependencies
+                        .glyphs
+                        .entry(font_stack.clone())
+                        .or_default()
+                        .insert(*glyph_id);
+                }
+            }
+        }
+        for (font_stack, type_dependencies) in &glyph_dependencies.shapes {
+            for (type_, strs) in type_dependencies {
+                for str_ in strs {
+                    self.pending_glyph_dependencies
+                        .shapes
+                        .entry(font_stack.clone())
+                        .or_default()
+                        .entry(*type_)
+                        .or_default()
+                        .insert(str_.clone());
+                }
+            }
+        }
+        if !self.pending_glyph_dependencies.glyphs.is_empty() {
+            let dependencies = self.pending_glyph_dependencies.clone();
+            self.parent
+                .invoke(move |tile: &GeometryTileInner| tile.get_glyphs(dependencies));
+        }
     }
 
     /// `onImagesAvailable(iconMap, patternMap, versionMap, imageCorrelationID)`.
@@ -365,26 +496,22 @@ impl GeometryTileWorker {
 
         if !self.pending_image_dependencies.is_empty() {
             self.image_correlation_id += 1;
-            // TODO(port): parent.invoke(&GeometryTile::getImages, {pending,
-            // imageCorrelationID}) once the ImageManager hands out images
-            // (patterns).
-            Log::error(
-                Event::General,
-                "TODO(port): GeometryTile::getImages (image dependencies of patterns)",
-            );
+            let pair = (self.pending_image_dependencies.clone(), self.image_correlation_id);
+            self.parent
+                .invoke(move |tile: &GeometryTileInner| tile.get_images(pair));
         }
     }
 
     /// `parse()`.
-    fn parse(&mut self) {
+    fn parse(&mut self) -> Result<(), ExceptionPtr> {
         let (Some(data), Some(layers)) = (&self.data, &self.layers) else {
-            return;
+            return Ok(());
         };
         let data = data.clone();
         let layers = layers.clone();
 
         self.render_data.clear();
-        self.layouts_pending = false;
+        self.layouts.clear();
 
         let mut feature_index = Box::new(FeatureIndex::new(data.clone()));
 
@@ -394,7 +521,7 @@ impl GeometryTileWorker {
         feature_index.reserve(ESTIMATED_ELEMENTS_PER_CELL);
         self.feature_index = Some(feature_index);
 
-        // TODO(port): GlyphDependencies glyphDependencies (symbols, M5).
+        let mut glyph_dependencies = GlyphDependencies::default();
         let mut image_dependencies = ImageDependencies::new();
 
         // Create render layers and group by layout
@@ -402,7 +529,7 @@ impl GeometryTileWorker {
 
         for (_, group) in &group_map {
             if self.obsolete() {
-                return;
+                return Ok(());
             }
 
             let Some(data) = &data else {
@@ -422,6 +549,7 @@ impl GeometryTileWorker {
             let Some(geometry_layer) = data.get_layer(&leader_impl.source_layer) else {
                 continue;
             };
+            drop(geometry_layer);
 
             let layer_ids: Vec<String> = group.iter().map(|layer| layer.base_impl.id.clone()).collect();
 
@@ -437,28 +565,20 @@ impl GeometryTileWorker {
             // add the features to the buckets.
             if leader_impl.get_type_info().layout == layer_type_info::Layout::Required {
                 let layout = layermanager::create_layout(
-                    LayoutParameters {
+                    &mut LayoutParameters {
                         bucket_parameters: &parameters,
+                        glyph_dependencies: &mut glyph_dependencies,
                         image_dependencies: &mut image_dependencies,
                         available_images: &self.available_images,
                     },
-                    geometry_layer,
+                    SourceLayer::new(data.clone(), leader_impl.source_layer.clone()),
                     group,
                 );
                 let Some(mut layout) = layout else {
                     continue;
                 };
                 if layout.has_dependencies() {
-                    // TODO(port): layouts.push_back(std::move(layout)) (see
-                    // the `layouts_pending` member).
-                    self.layouts_pending = true;
-                    Log::error(
-                        Event::General,
-                        format!(
-                            "TODO(port): deferred layout for layer '{}' (image/glyph dependencies)",
-                            leader_impl.id
-                        ),
-                    );
+                    self.layouts.push(layout);
                 } else {
                     layout.create_bucket(
                         &ImagePositions::new(),
@@ -467,29 +587,75 @@ impl GeometryTileWorker {
                         self.first_load,
                         self.show_collision_boxes,
                         &self.id.canonical,
-                    );
+                    )?;
                 }
             } else {
-                // TODO(port): the createBucket path for layout-free layer
-                // types (heatmap; none in M3): filter each feature, then
-                // bucket->addFeature and featureIndex->insert.
-                Log::error(
-                    Event::General,
-                    format!(
-                        "TODO(port): bucket for layer type '{}'",
-                        leader_impl.get_type_info().type_
-                    ),
-                );
+                let filter = &leader_impl.filter;
+                let source_layer_id = &leader_impl.source_layer;
+                let Some(mut bucket) = layermanager::create_bucket(&parameters, group) else {
+                    continue;
+                };
+                let geometry_layer = data.get_layer(source_layer_id).expect("layer");
+
+                bucket.set_retain_features_by_id(self.capture_rendered_features);
+                bucket.reserve_features(geometry_layer.feature_count());
+
+                let mut i = 0;
+                while !self.obsolete.load(Ordering::SeqCst) && i < geometry_layer.feature_count() {
+                    let feature = geometry_layer.get_feature(i);
+
+                    let effective_z = f32::from(self.id.overscaled_z);
+                    if !filter.evaluate(
+                        &EvaluationContext::with_zoom_feature(effective_z, Some(&*feature))
+                            .with_canonical_tile_id(Some(&self.id.canonical))
+                            .with_global_state(self.global_state.as_deref()),
+                    ) {
+                        i += 1;
+                        continue;
+                    }
+
+                    let geometries = feature.get_geometries();
+                    bucket.add_feature(
+                        &*feature,
+                        geometries,
+                        &ImagePositions::new(),
+                        &PatternLayerMap::new(),
+                        i,
+                        &self.id.canonical,
+                    )?;
+                    feature_index.insert(geometries, i, source_layer_id, &leader_impl.id);
+                    i += 1;
+                }
+
+                if !bucket.has_data() {
+                    continue;
+                }
+
+                let bucket: BucketPtr = Arc::from(bucket);
+                for layer in group {
+                    // `emplace` keeps an existing entry.
+                    self.render_data
+                        .entry(layer.base_impl.id.clone())
+                        .or_insert_with(|| LayerRenderData {
+                            bucket: bucket.clone(),
+                            layer_properties: layer.clone(),
+                        });
+                }
             }
         }
 
+        self.request_new_glyphs(&glyph_dependencies);
         self.request_new_images(image_dependencies);
 
-        self.finalize_layout();
+        self.finalize_layout()
     }
 
     fn has_pending_dependencies(&self) -> bool {
-        // TODO(port): pendingGlyphDependencies (symbols, M5).
+        for glyph_ids in self.pending_glyph_dependencies.glyphs.values() {
+            if !glyph_ids.is_empty() {
+                return true;
+            }
+        }
         !self.pending_image_dependencies.is_empty()
     }
 
@@ -498,29 +664,74 @@ impl GeometryTileWorker {
     }
 
     /// `finalizeLayout()`.
-    fn finalize_layout(&mut self) {
+    fn finalize_layout(&mut self) -> Result<(), ExceptionPtr> {
         if self.data.is_none()
             || self.layers.is_none()
             || !self.has_pending_parse_result()
             || self.has_pending_dependencies()
         {
-            return;
+            return Ok(());
         }
 
-        // TODO(port): imageAtlas = dynamicTextureAtlas->uploadIconsAndPatterns,
-        // glyphAtlas, layout->prepareSymbols and createBucket for the
-        // deferred layouts (patterns and symbols).
-        self.layouts_pending = false;
+        let mut image_atlas = ImageAtlas::default();
+        let mut glyph_atlas = GlyphAtlas::default();
+        if let Some(atlas) = &self.dynamic_texture_atlas {
+            image_atlas = atlas.upload_icons_and_patterns(&self.icon_map, &self.pattern_map, &self.version_map);
+        }
+        if !self.layouts.is_empty() {
+            if let Some(atlas) = &self.dynamic_texture_atlas {
+                glyph_atlas = atlas.upload_glyphs(&self.glyph_map);
+            }
+
+            let mut layouts = std::mem::take(&mut self.layouts);
+            for layout in layouts.iter_mut() {
+                if self.obsolete() {
+                    if let Some(atlas) = &self.dynamic_texture_atlas {
+                        atlas.remove_textures(&glyph_atlas.texture_handles, &glyph_atlas.dynamic_texture);
+                        atlas.remove_textures(&image_atlas.texture_handles, &image_atlas.dynamic_texture);
+                    }
+                    return Ok(());
+                }
+
+                layout.prepare_symbols(
+                    &self.glyph_map,
+                    &glyph_atlas.glyph_positions,
+                    &self.icon_map,
+                    &image_atlas.icon_positions,
+                );
+
+                if !layout.has_symbol_instances() {
+                    continue;
+                }
+
+                // layout adds the bucket to buckets
+                let feature_index = self.feature_index.as_mut().expect("feature index");
+                layout.create_bucket(
+                    &image_atlas.pattern_positions,
+                    feature_index,
+                    &mut self.render_data,
+                    self.first_load,
+                    self.show_collision_boxes,
+                    &self.id.canonical,
+                )?;
+            }
+        }
+
+        self.layouts.clear();
 
         self.first_load = false;
 
         let layout_result = LayoutResult::new(
             std::mem::take(&mut self.render_data),
             Arc::from(self.feature_index.take().expect("feature index")),
+            glyph_atlas,
+            image_atlas,
+            self.dynamic_texture_atlas.clone(),
         );
         let correlation_id = self.correlation_id;
         self.parent
             .invoke(move |tile: &GeometryTileInner| tile.on_layout(layout_result, correlation_id));
+        Ok(())
     }
 
     pub fn source_id(&self) -> &str {

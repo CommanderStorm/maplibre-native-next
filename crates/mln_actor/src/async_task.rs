@@ -2,7 +2,7 @@
 // platform/default/src/mln/util/async_task.cpp: a coalescing wake-up whose
 // callback runs on the RunLoop of the thread that created it.
 
-use crate::run_loop::{AsyncHandle, RunLoop};
+use crate::run_loop::{AsyncHandle, Core, RunLoop};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +31,30 @@ impl AsyncTask {
     pub fn send(&self) {
         self.handle.pending.store(true, Ordering::SeqCst);
         self.handle.core.wake();
+    }
+
+    /// A `Send + Sync` handle whose `send()` is this task's `send()`: C++
+    /// calls `AsyncTask::send` from other threads through a pointer (e.g.
+    /// `NetworkStatus` observers).
+    pub fn sender(&self) -> AsyncTaskSender {
+        AsyncTaskSender {
+            pending: self.handle.pending.clone(),
+            core: self.handle.core.clone(),
+        }
+    }
+}
+
+/// See `AsyncTask::sender`. Sending after the task is gone does nothing.
+#[derive(Clone)]
+pub struct AsyncTaskSender {
+    pending: Arc<AtomicBool>,
+    core: Arc<Core>,
+}
+
+impl AsyncTaskSender {
+    pub fn send(&self) {
+        self.pending.store(true, Ordering::SeqCst);
+        self.core.wake();
     }
 }
 

@@ -12,9 +12,10 @@ pub mod run_loop;
 pub mod scheduler;
 pub mod thread;
 pub mod thread_pool;
+pub mod timer;
 
 pub use actor_ref::ActorRef;
-pub use async_task::AsyncTask;
+pub use async_task::{AsyncTask, AsyncTaskSender};
 pub use established_actor::{AspiringActor, EstablishedActor};
 pub use local_object::LocalObject;
 pub use mailbox::Mailbox;
@@ -22,3 +23,4 @@ pub use run_loop::{RunLoop, RunLoopHandle};
 pub use scheduler::{Scheduler, SchedulerPtr, TaggedScheduler};
 pub use thread::Thread;
 pub use thread_pool::ThreadPool;
+pub use timer::Timer;

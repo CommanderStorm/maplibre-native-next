@@ -4,8 +4,109 @@
 use super::{Converter, Convertible, Error};
 use crate::source::Source;
 use crate::sources::geojson_source::{GeoJSONOptions, GeoJSONSource};
+use crate::sources::tile_source::{RasterSource, UrlOrTileset, VectorSource};
 use geojson::GeoJSON;
+use mln_style_types::SourceType;
+use mln_util::constants;
+use mln_util::tileset::{Tileset, VectorEncoding};
 use std::sync::Arc;
+
+/// `convertURLOrTileset(value, error)`: a tile source can either specify a
+/// URL to TileJSON, or inline TileJSON.
+fn convert_url_or_tileset(value: &Convertible<'_>, error: &mut Error) -> Option<UrlOrTileset> {
+    let Some(url_val) = value.object_member("url") else {
+        let tileset = Tileset::convert(value, error)?;
+        return Some(UrlOrTileset::Tileset(tileset));
+    };
+
+    let Some(url) = url_val.to_string() else {
+        error.message = "source url must be a string".to_owned();
+        return None;
+    };
+
+    Some(UrlOrTileset::Url(url))
+}
+
+/// `convertRasterSource(id, value, error)`.
+fn convert_raster_source(id: &str, value: &Convertible<'_>, error: &mut Error) -> Option<Box<dyn Source>> {
+    let url_or_tileset = convert_url_or_tileset(value, error)?;
+
+    let mut tile_size = constants::TILE_SIZE_I;
+    if let Some(tile_size_value) = value.object_member("tileSize") {
+        match tile_size_value.to_number() {
+            Some(size) if !(size < 0.0 || size > f32::from(u16::MAX)) => tile_size = size as u16,
+            _ => {
+                error.message = "invalid tileSize".to_owned();
+                return None;
+            }
+        }
+    }
+
+    Some(Box::new(RasterSource::new(id, url_or_tileset, tile_size, SourceType::Raster)))
+}
+
+// dem-heatmap
+/// `convertRasterDEMSource(id, value, error)`.
+fn convert_raster_dem_source(id: &str, value: &Convertible<'_>, error: &mut Error) -> Option<Box<dyn Source>> {
+    let url_or_tileset = convert_url_or_tileset(value, error)?;
+
+    let mut tile_size = constants::TILE_SIZE_I;
+    if let Some(tile_size_value) = value.object_member("tileSize") {
+        match tile_size_value.to_number() {
+            Some(size) if !(size < 0.0 || size > f32::from(u16::MAX)) => tile_size = size as u16,
+            _ => {
+                error.message = "invalid tileSize".to_owned();
+                return None;
+            }
+        }
+    }
+
+    // TODO: Refactor TileJSON parsing responsibilities. Currently `Tileset`
+    // handles full TileJSON parsing with optional parameters. Since
+    // style.json can contain TileJSON parameter overrides or non-TileJSON
+    // spec parameters, a separate mechanism is needed. Ideally these two
+    // pathways share parsing logic.
+    let options = crate::conversion::tileset::SourceOptions::convert(value, error);
+
+    Some(Box::new(crate::sources::tile_source::RasterDEMSource::new(id, url_or_tileset, tile_size, options)))
+}
+
+/// `convertVectorSource(id, value, error)`.
+fn convert_vector_source(id: &str, value: &Convertible<'_>, error: &mut Error) -> Option<Box<dyn Source>> {
+    let url_or_tileset = convert_url_or_tileset(value, error)?;
+    let mut maxzoom = None;
+    if let Some(maxzoom_value) = value.object_member("maxzoom") {
+        match maxzoom_value.to_number() {
+            Some(z) if !(z < 0.0 || z > f32::from(u8::MAX)) => maxzoom = Some(z),
+            _ => {
+                error.message = "invalid maxzoom".to_owned();
+                return None;
+            }
+        }
+    }
+    let mut minzoom = None;
+    if let Some(minzoom_value) = value.object_member("minzoom") {
+        match minzoom_value.to_number() {
+            Some(z) if !(z < 0.0 || z > f32::from(u8::MAX)) => minzoom = Some(z),
+            _ => {
+                error.message = "invalid minzoom".to_owned();
+                return None;
+            }
+        }
+    }
+    let mut encoding = VectorEncoding::Mapbox;
+    if let Some(encoding_value) = value.object_member("encoding") {
+        match encoding_value.to_string().as_deref() {
+            Some("mvt") => encoding = VectorEncoding::Mapbox,
+            Some("mlt") => encoding = VectorEncoding::MLT,
+            _ => {
+                error.message = "invalid encoding".to_owned();
+                return None;
+            }
+        }
+    }
+    Some(Box::new(VectorSource::new(id, url_or_tileset, maxzoom, minzoom, encoding)))
+}
 
 /// `convertGeoJSONSource(id, value, error)`.
 fn convert_geojson_source(id: &str, value: &Convertible<'_>, error: &mut Error) -> Option<Box<dyn Source>> {
@@ -39,6 +140,39 @@ fn convert_geojson_source(id: &str, value: &Convertible<'_>, error: &mut Error) 
     Some(Box::new(result))
 }
 
+/// `convertImageSource(id, value, error)` (conformance).
+fn convert_image_source(id: &str, value: &Convertible<'_>, error: &mut Error) -> Option<Box<dyn Source>> {
+    let Some(url_value) = value.object_member("url") else {
+        error.message = "Image source must have a url value".to_owned();
+        return None;
+    };
+
+    let Some(url_string) = url_value.to_string() else {
+        error.message = "Image url must be a URL string".to_owned();
+        return None;
+    };
+
+    let Some(coordinates_value) = value.object_member("coordinates") else {
+        error.message = "Image source must have a coordinates values".to_owned();
+        return None;
+    };
+
+    if !coordinates_value.is_array() || coordinates_value.array_length() != 4 {
+        error.message = "Image coordinates must be an array of four longitude latitude pairs".to_owned();
+        return None;
+    }
+
+    let mut coordinates = [mln_util::LatLng::default(); 4];
+    for (i, coordinate) in coordinates.iter_mut().enumerate() {
+        let lat_lng = super::convert::<mln_util::LatLng>(&coordinates_value.array_member(i), error)?;
+        *coordinate = lat_lng;
+    }
+    let result = crate::sources::image_source::ImageSource::new(id, coordinates);
+    result.set_url(&url_string);
+
+    Some(Box::new(result))
+}
+
 /// `convert<std::unique_ptr<Source>>(value, error, id)`.
 pub fn convert_source(value: &Convertible<'_>, error: &mut Error, id: &str) -> Option<Box<dyn Source>> {
     if !value.is_object() {
@@ -56,15 +190,11 @@ pub fn convert_source(value: &Convertible<'_>, error: &mut Error, id: &str) -> O
         return None;
     };
     match type_.as_str() {
+        "raster" => convert_raster_source(id, value, error),
+        "vector" => convert_vector_source(id, value, error),
         "geojson" => convert_geojson_source(id, value, error),
-        "raster" | "raster-dem" | "vector" | "image" => {
-            // TODO(port): convertRasterSource, convertRasterDEMSource,
-            // convertVectorSource, convertImageSource with the tile and
-            // image sources (M4). Until then the parser logs this and skips
-            // the source, as it does for an invalid one.
-            error.message = format!("source type '{type_}' is not ported yet");
-            None
-        }
+        "raster-dem" => convert_raster_dem_source(id, value, error), // dem-heatmap
+        "image" => convert_image_source(id, value, error), // conformance
         _ => {
             error.message = "invalid source type".to_owned();
             None

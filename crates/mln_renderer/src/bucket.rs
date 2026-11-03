@@ -7,7 +7,7 @@
 // Bucket>`, `Bucket: Send + Sync`. The render thread only reads them, except
 // `upload` (an atomic flag, as in C++).
 //
-// TODO(port): `update` (feature state), `registerAtCrossTileIndex`, `place`,
+// TODO(port): `registerAtCrossTileIndex`, `place`,
 // `updateVertices` (symbol buckets, M5), `getRenderThreadID`, `check`.
 
 use crate::layout::pattern_layout::PatternLayerMap;
@@ -15,15 +15,21 @@ use crate::render_layer::RenderLayer;
 use mln_gfx::UploadPass;
 use mln_style::util::AsAny;
 use mln_style_types::image::ImagePositions;
-use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryTileFeature};
+use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryTileFeature, GeometryTileLayer};
 use mln_tile_id::CanonicalTileID;
 use mln_util::exception::ExceptionPtr;
 use mln_util::feature::feature_id_to_string;
 use mln_util::identity::SimpleIdentity;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 pub type BucketPtr = Arc<dyn Bucket>;
+
+/// `FeatureStates = mln::unordered_map<std::string, FeatureState>`
+/// (util/feature.hpp).
+pub type FeatureStates = std::collections::HashMap<String, mln_style::expression::expression::FeatureState>;
+/// `LayerFeatureStates = mln::unordered_map<std::string, FeatureStates>`.
+pub type LayerFeatureStates = std::collections::HashMap<String, FeatureStates>;
 
 /// `Bucket::RetainedFeature`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,11 +46,16 @@ pub struct BucketBase {
     pub bucket_id: SimpleIdentity,
     pub retain_features_by_id: bool,
     pub retained_features: Vec<RetainedFeature>,
+    /// Port addition: bumped by `update` (feature state). C++ updates the
+    /// shared vertex vectors in place (`updateModified()`); the render
+    /// layers compare this to refresh their drawables' copies.
+    pub version: AtomicU64,
 }
 
 impl Default for BucketBase {
     fn default() -> Self {
         BucketBase {
+            version: AtomicU64::new(0),
             uploaded: AtomicBool::new(false),
             bucket_id: SimpleIdentity::new(),
             retain_features_by_id: false,
@@ -91,6 +102,24 @@ pub trait Bucket: AsAny + Send + Sync {
         _canonical: &CanonicalTileID,
     ) -> Result<(), ExceptionPtr> {
         Ok(())
+    }
+
+    /// `update(const FeatureStates&, const GeometryTileLayer&, layerID,
+    /// const ImagePositions&)`: re-evaluates the feature-state dependent
+    /// attribute values. `&self`: the bucket is shared (see the file
+    /// comment); implementations lock their binders.
+    fn update(
+        &self,
+        _states: &FeatureStates,
+        _layer: &dyn GeometryTileLayer,
+        _layer_id: &str,
+        _image_positions: &ImagePositions,
+    ) {
+    }
+
+    /// The `version` counter (see `BucketBase::version`).
+    fn get_version(&self) -> u64 {
+        self.base().version.load(Ordering::SeqCst)
     }
 
     fn record_sdf_pattern(&mut self, _layer_id: &str, _sdf: bool) {}

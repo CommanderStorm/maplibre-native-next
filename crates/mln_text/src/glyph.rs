@@ -1,12 +1,16 @@
 // Ports include/mln/text/glyph.hpp, include/mln/text/glyph_range.hpp and
-// src/mln/text/glyph.cpp (the parts the shaper and the glyph PBF parser use).
+// src/mln/text/glyph.cpp.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Mutex;
 
+use mln_style_types::image::RectU16;
 use mln_util::image::AlphaImage;
+use mln_util::immutable::Immutable;
 
 use mln_util::font_stack::{FontStack, font_stack_to_string};
+
+use crate::tagged_string::FontStackHash;
 
 /// `GlyphIDType` (glyph_range.hpp): `FontPBF` (0) for glyphs from glyph PBFs,
 /// other values are generated at runtime for HarfBuzz-shaped font faces
@@ -138,6 +142,179 @@ impl Glyph {
     /// ecosystem. If this is different, the glyphs also need to be reencoded.
     pub const BORDER_SIZE: u8 = 3;
 }
+
+/// `Glyphs = std::map<GlyphID, std::optional<Immutable<Glyph>>>`.
+pub type Glyphs = BTreeMap<GlyphID, Option<Immutable<Glyph>>>;
+/// `GlyphMap = std::map<FontStackHash, Glyphs>`.
+pub type GlyphMap = BTreeMap<FontStackHash, Glyphs>;
+
+/// `PositionedGlyph`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PositionedGlyph {
+    pub glyph: GlyphID,
+    pub x: f32,
+    pub y: f32,
+    pub vertical: bool,
+    pub font: FontStackHash,
+    pub scale: f32,
+    pub rect: RectU16,
+    pub metrics: GlyphMetrics,
+    pub image_id: Option<String>,
+    /// Maps positioned glyph to TaggedString section
+    pub section_index: usize,
+}
+
+impl PositionedGlyph {
+    /// `PositionedGlyph(glyph, x, y, vertical, font, scale, rect, metrics,
+    /// imageID, sectionIndex = 0)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        glyph: GlyphID,
+        x: f32,
+        y: f32,
+        vertical: bool,
+        font: FontStackHash,
+        scale: f32,
+        rect: RectU16,
+        metrics: GlyphMetrics,
+        image_id: Option<String>,
+        section_index: usize,
+    ) -> Self {
+        PositionedGlyph { glyph, x, y, vertical, font, scale, rect, metrics, image_id, section_index }
+    }
+}
+
+/// `enum class WritingModeType : uint8_t`, a bitmask
+/// (util/bitmask_operations.hpp).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct WritingModeType(pub u8);
+
+#[allow(non_upper_case_globals)]
+impl WritingModeType {
+    pub const None: WritingModeType = WritingModeType(0);
+    pub const Horizontal: WritingModeType = WritingModeType(1 << 0);
+    pub const Vertical: WritingModeType = WritingModeType(1 << 1);
+}
+
+impl std::ops::BitOr for WritingModeType {
+    type Output = WritingModeType;
+    fn bitor(self, rhs: Self) -> Self {
+        WritingModeType(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitAnd for WritingModeType {
+    type Output = WritingModeType;
+    fn bitand(self, rhs: Self) -> Self {
+        WritingModeType(self.0 & rhs.0)
+    }
+}
+
+impl std::ops::Not for WritingModeType {
+    type Output = WritingModeType;
+    fn not(self) -> Self {
+        WritingModeType(!self.0)
+    }
+}
+
+/// `PositionedLine`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PositionedLine {
+    pub positioned_glyphs: Vec<PositionedGlyph>,
+    pub line_offset: f32,
+}
+
+/// `Shaping`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Shaping {
+    pub positioned_lines: Vec<PositionedLine>,
+    pub top: f32,
+    pub bottom: f32,
+    pub left: f32,
+    pub right: f32,
+    /// C++ leaves this uninitialized in `Shaping()`; here it is `None`.
+    pub writing_mode: WritingModeType,
+    pub verticalizable: bool,
+    pub icons_in_text: bool,
+}
+
+impl Shaping {
+    /// The y offset *should* be part of the font metadata.
+    pub const Y_OFFSET: i32 = -17;
+
+    /// `Shaping(float x, float y, WritingModeType)`.
+    pub fn new(x: f32, y: f32, writing_mode: WritingModeType) -> Self {
+        Shaping { top: y, bottom: y, left: x, right: x, writing_mode, ..Default::default() }
+    }
+
+    /// `explicit operator bool`: whether any line has a glyph.
+    pub fn is_some(&self) -> bool {
+        self.positioned_lines.iter().any(|line| !line.positioned_glyphs.is_empty())
+    }
+}
+
+/// `FontFace::Range`.
+pub type FontFaceRange = (u32, u32);
+
+/// `FontFace`: style defined faces.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FontFace {
+    /// an unique glyph id
+    pub type_: GlyphIDType,
+    /// font face name
+    pub name: String,
+    /// font file url
+    pub url: String,
+    /// unicode ranges
+    pub ranges: Vec<FontFaceRange>,
+}
+
+impl FontFace {
+    pub fn new(name: &str, url: &str, ranges: Vec<FontFaceRange>) -> Self {
+        FontFace { type_: GlyphIDType::FontPBF, name: name.to_string(), url: url.to_string(), ranges }
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.name.is_empty() && !self.url.is_empty() && !self.ranges.is_empty()
+    }
+}
+
+/// `FontFaces`.
+pub type FontFaces = Vec<FontFace>;
+
+/// `HBShapeRequest`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HBShapeRequest {
+    pub str_: Vec<u16>,
+    pub font_stack: FontStack,
+    pub type_: GlyphIDType,
+}
+
+/// `HBShapeRequests = std::map<FontStack, std::map<GlyphIDType,
+/// std::set<std::u16string>>>`.
+pub type HBShapeRequests = BTreeMap<FontStack, BTreeMap<GlyphIDType, BTreeSet<Vec<u16>>>>;
+
+/// `GlyphDependencies`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GlyphDependencies {
+    pub glyphs: BTreeMap<FontStack, GlyphIDs>,
+    pub shapes: HBShapeRequests,
+}
+
+/// `GlyphRangeDependencies = std::map<FontStack, std::unordered_set<GlyphRange>>`.
+pub type GlyphRangeDependencies = BTreeMap<FontStack, HashSet<GlyphRange>>;
+
+/// `GlyphPosition`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlyphPosition {
+    pub rect: RectU16,
+    pub metrics: GlyphMetrics,
+}
+
+/// `GlyphPositionMap = std::map<GlyphID, GlyphPosition>`.
+pub type GlyphPositionMap = BTreeMap<GlyphID, GlyphPosition>;
+/// `GlyphPositions = std::map<FontStackHash, GlyphPositionMap>`.
+pub type GlyphPositions = BTreeMap<FontStackHash, GlyphPositionMap>;
 
 /// `genNewGlyphIDType()`: a process-wide counter (a function-local static
 /// in C++) that skips `FontPBF` when it wraps.

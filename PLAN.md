@@ -9,11 +9,24 @@ port, not a redesign:
 - The architecture in `../maplibre-native/ARCHITECTURE.md` is kept: the Impl
   idiom, `Immutable<T>` snapshots diffed by the render objects, actor-based
   threading, the `gfx` backend abstraction.
-- Quirks are ported, not fixed (premultiplied `Color`, rapidjson number
-  formatting, `strtof`-based CSS parsing, `fmin`/`fmax` NaN behaviour). A
-  necessary deviation goes in `DEVIATIONS.md`.
-- **Done means identical to C++**, checked by differential tests that link the
-  C++ core as an oracle, plus the shared render, query and expression suites.
+- **Done means matching C++ where it is observable**: the shared render,
+  query and expression suites with the C++ baselines, and the public API's
+  behaviour. Quirks that change those outcomes are ported, not fixed
+  (premultiplied `Color`, rapidjson number formatting in serialized
+  expressions, CSS parsing); every known difference goes in `DEVIATIONS.md`.
+- **Prefer a crate over a port** when a one-off comparison against the C++
+  shows the difference does not change observable outcomes (`mlt-core`,
+  `unicode-bidi`); port when it does (earcut) or when there is no crate.
+  Differential tests are the measuring tool for that decision and for
+  debugging, not a requirement for every function.
+- **Don't reproduce** C++ undefined behaviour, one compiler's standard-library
+  internals (libstdc++ sort tie order, x86-64 conversion results) or build
+  configurations, unless a test outcome depends on it. Those already differ
+  between the C++ builds on different platforms.
+- Breadth before depth: the near-term goals are render-test conformance
+  (headline metric: passes in the full `//tools/render-test:render_tests`)
+  and rendering OpenFreeMap's Liberty style completely (section 6). Stub
+  specifics (exact BiDi, MLT, exotic options) until they block a test.
 
 `PORTING.md` holds the working rules; this file holds the plan.
 
@@ -106,6 +119,8 @@ per pair when we get there, from the measured edges.
 | **harfbuzz** (`text/harfbuzz*.cpp`, `HBShaper`) | **[HarfRust](https://github.com/harfbuzz/harfrust)** (`harfrust` 0.15, locally patched for two HarfRust bugs found by the difftest, to upstream), with the C++ build's `HB_TINY` configuration emulated (hidden AAT tables, no FeatureVariations, HarfBuzz 8.2 UCD tables) | measured: 94.2% of 59,015 shaping cases bit-identical over 149 fonts; the rest is HarfRust's Unicode 18 data vs. HarfBuzz 8.2's Unicode 15 (1,691 cases) and fallback mark positioning that `HB_TINY` disables and HarfRust cannot (1,649), all classified in `DEVIATIONS.md` |
 | freetype (`text/freetype.cpp`: face loading, cmaps, rasterization) | the needed parts of FreeType 2.13 ported (face loading, cmap formats 0-14, charmap selection, the ftgrays rasterizer) plus hb-ft; outlines and hinting via `skrifa` | cmap lookups identical (19.1M); SDF step bit-identical; bitmaps 68% identical, 1.1% of pixels differ (skrifa vs. FreeType hinting) |
 | csscolorparser, rapidjson dtoa, pixelmatch, earcut, kdbush, supercluster, geojson-vt, polylabel, wagyu | ported | exact |
+| earcut: the `earcut` crate (georust) instead? | evaluated, rejected | `//difftest/earcut_crate`: identical without holes, but with holes only 25% identical and 1.1% of polygons cover a different area (earcut.js 3.x hole bridging); the port stays |
+| maplibre-tile-spec C++ decoder (MLT) | the `mlt-core` crate (user decision) | `//difftest/mlt` against the C++ decoder |
 | protozero + vector-tile | hand-rolled MVT reader | exact |
 | sqlite | `rusqlite` (same engine) | exact; offline databases interchangeable both ways |
 | nunicode (collation, case mapping) | ported (`//vendor/nunicode`, tables generated from the vendored sources) | exact: every code point compared against C++ |
@@ -147,6 +162,15 @@ per pair when we get there, from the measured edges.
 | M5 | Symbols and text | HarfRust shaping difftests; glyph PBFs; collision and placement; `text-*` and `icon-*` render tests |
 | M6 | Rest of the style spec, query tests, platform shells | |
 
+Near-term target (2026-11-03), **OpenFreeMap Liberty**: 111 layers
+(background, raster PNG z0-6, 16 fill incl. 2 `fill-pattern`, 67 line incl. 17
+`line-dasharray`, 25 symbol with glyph PBFs and sprite icons, 1
+`fill-extrusion`), one OpenMapTiles vector source, all its expression ops
+already ported. Remaining: online loading and the GLFW app (running), vector
+tile pipeline and fill/line (running), line dashes, fill patterns, raster,
+fill-extrusion, and symbols (layout, atlases, collision, placement), the
+largest piece.
+
 ## 7. Current workstreams
 
 Five parallel agents, each owning separate directories (see `PORTING.md`),
@@ -156,7 +180,11 @@ all on the M1 critical path:
 |---|---|---|
 | `runner` | `//tools/render-test`, `//vendor/pixelmatch`, `mln_util::image` (PremultipliedImage, PNG I/O) | runner over the shared fixtures (manifest, metadata, operations, pixelmatch metric), with a reference-image self-check (finished) |
 | `style` | `mln_style_types`, `mln_style` (incl. `style/conversion/*` converters and `PropertyExpression`) | parse the M1 test styles into `Style::Impl` with `BackgroundLayer` properties, transitions and functions (finished) |
-| `shaping` (M5 groundwork, replaces `text`) | `mln_text` (shaping.cpp, BiDi, glyph_manager), `mln_util::i18n`, `//difftest/shaping` | line breaking and positioning identical to C++; BiDi matched against ICU |
+| `shaping` (M5 groundwork, replaces `text`) | `mln_text` (shaping.cpp, BiDi, glyph_manager), `mln_util::i18n`, `//difftest/shaping` | line breaking and positioning identical to C++; BiDi matched against ICU (parked: stub the rest; `symbols` takes over mln_text) |
+| `glfw` (smoke test, parked) | `//platform/glfw`, `mln_webgpu::SurfaceBackend`, online/HTTP file source, `Style::load_url` | `mln-glfw` opens OpenFreeMap Liberty over HTTPS in a window (background, fill, line today) |
+| `dem-heatmap` (conformance wave) | raster-dem/hillshade, heatmap, color-relief | their render tests (79 blocked) |
+| `conformance` (OpenFreeMap / conformance wave) | raster (incl. image sources), fill-extrusion, PatternAtlas + pattern hooks | full-suite pass count up; Liberty's raster, buildings, dashes and patterns |
+| `symbols` (OpenFreeMap / conformance wave) | symbol layout, glyph and icon atlases, collision, placement, symbol drawables; stubs (e.g. LTR-only) where needed | `text-*`, `icon-*`, `symbol-*` render tests (61 groups); Liberty's 25 symbol layers |
 | `sources` (M3) | `mln_style` sources (`source*.rs`, `sources/`, `conversion/source.rs`, GeoJSON conversion), `mln_renderer::{sources,tile}` (RenderSource, TilePyramid, Tile, GeometryTile, GeometryTileWorker, tile loaders, GeoJSON/vector tiles) | GeoJSON and vector sources load tiles and run the worker that creates buckets |
 | `layers` (M3) | `mln_renderer::{buckets,layers}` for circle, fill, line (+ raster), paint property binders, their tweakers; the matching `mln_webgpu`/`mln_gfx` additions (shader attribute tables, polyline building) | circle/fill/line drawables render; the M3 render tests pass |
 | `text` (second wave, replaces `render`) | `mln_text`, `//difftest/text` | HBShaper on HarfRust + skrifa, shaping difftest exact over HarfBuzz's 146 test fonts; glyph PBFs; rasterization (finished) |

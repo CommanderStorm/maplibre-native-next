@@ -1,0 +1,68 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+# Differential test of MLT decoding: //crates/mln_tile's VectorMLTTileData
+# (on the mlt-core crate) against the C++ VectorMLTTileData (on the C++ MLT
+# decoder, @maplibre_tile_spec//cpp:mlt_cpp, linked by mbgl-core).
+
+cc_library(
+    name = "exception_kind",
+    srcs = ["exception_kind.cpp"],
+    copts = [
+        "-std=c++20",
+        "-fexceptions",
+    ],
+)
+
+cc_library(
+    name = "reference",
+    srcs = [
+        "platform_shims.cpp",
+        "reference.cpp",
+    ],
+    copts = [
+        "-std=c++20",
+        "-fexceptions",
+        "-fno-rtti",
+        "-Wno-deprecated-declarations",
+    ],
+    # platform_shims.cpp defines symbols that mbgl-core needs.
+    alwayslink = True,
+    deps = [
+        ":exception_kind",
+        "@maplibre//:mbgl-core",
+    ],
+)
+
+# The oracle runs as its own process (oracle_main.cpp): on malformed tiles the
+# C++ decoder can fail an assert (fastbuild) or read out of bounds.
+cc_binary(
+    name = "mlt_oracle",
+    srcs = ["oracle_main.cpp"],
+    copts = ["-std=c++20"],
+    deps = [":reference"],
+)
+
+rust_test(
+    name = "mlt_difftest",
+    size = "large",
+    srcs = [
+        "dump.rs",
+        "mlt_difftest.rs",
+    ],
+    crate_root = "mlt_difftest.rs",
+    data = [
+        ":mlt_oracle",
+        "@maplibre//metrics:render-test-files",
+        "@maplibre//test:fixtures",
+    ],
+    deps = [
+        "//crates/mln_tile",
+        "//crates/mln_tile_id",
+        "//crates/mln_util",
+        "//vendor/maplibre-native-base:maplibre_native_base",
+        "@next_crates//:flate2",
+        "@next_crates//:mlt-core",
+        "@next_crates//:rusqlite",
+    ],
+)

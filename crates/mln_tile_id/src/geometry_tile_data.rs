@@ -7,7 +7,8 @@
 
 use maplibre_native_base::{Identifier, Point, PropertyMap, Value};
 use mln_util::geometry::FeatureType;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
+use std::sync::Arc;
 
 /// Normalized vector tile coordinates. Each geometry coordinate represents a
 /// point in a bidimensional space, varying from -V...0...+V, where V is the
@@ -20,22 +21,49 @@ pub type GeometryCoordinates = Vec<GeometryCoordinate>;
 /// `class GeometryCollection : public std::vector<GeometryCoordinates>`.
 ///
 /// C++ makes the copy constructor private and offers `clone()`; here
-/// `Clone` is that `clone()`.
-// TODO(port): the MLT triangle span (`getTriangles`/`setTriangles`).
-#[derive(Clone, Debug, Default, PartialEq)]
+/// `Clone` is that `clone()` (it keeps the triangles, as the C++ copy
+/// does). `==` is the `std::vector` base's: the triangles are not compared.
+#[derive(Clone, Debug, Default)]
 pub struct GeometryCollection {
     rings: Vec<GeometryCoordinates>,
+    /// The pre-tessellated triangles of an MLT polygon feature: C++
+    /// `std::shared_ptr<const mlt::MapLibreTile> triangleOwner` plus the
+    /// `std::span<const std::uint32_t> triangles` into its index buffer; here
+    /// the shared buffer and the span's range in it.
+    triangles: Option<(Arc<[u32]>, Range<usize>)>,
 }
 
 impl GeometryCollection {
     pub const fn new() -> Self {
-        GeometryCollection { rings: Vec::new() }
+        GeometryCollection { rings: Vec::new(), triangles: None }
+    }
+
+    /// `getTriangles()`: three indices per triangle, counted from the
+    /// feature's first vertex; empty unless the tile carried triangles.
+    pub fn get_triangles(&self) -> &[u32] {
+        match &self.triangles {
+            Some((owner, range)) => &owner[range.clone()],
+            None => &[],
+        }
+    }
+
+    /// `setTriangles(owner, triangles)`, with the span given as
+    /// `owner[range]`.
+    pub fn set_triangles(&mut self, owner: Arc<[u32]>, range: Range<usize>) {
+        assert!(range.start <= range.end && range.end <= owner.len());
+        self.triangles = Some((owner, range));
+    }
+}
+
+impl PartialEq for GeometryCollection {
+    fn eq(&self, other: &Self) -> bool {
+        self.rings == other.rings
     }
 }
 
 impl From<Vec<GeometryCoordinates>> for GeometryCollection {
     fn from(rings: Vec<GeometryCoordinates>) -> Self {
-        GeometryCollection { rings }
+        GeometryCollection { rings, triangles: None }
     }
 }
 
@@ -119,5 +147,17 @@ mod tests {
         let mut c = GeometryCollection::new();
         c.push(vec![Point::new(1, 2)]);
         assert_eq!(c.clone()[0][0], Point::new(1, 2));
+    }
+
+    #[test]
+    fn triangles() {
+        let mut c = GeometryCollection::from(vec![vec![Point::new(0, 0), Point::new(1, 0), Point::new(0, 1)]]);
+        assert!(c.get_triangles().is_empty());
+        let owner: Arc<[u32]> = Arc::from(vec![9, 9, 0, 1, 2, 9]);
+        c.set_triangles(owner, 2..5);
+        assert_eq!(c.get_triangles(), &[0, 1, 2]);
+        // The copy keeps them; == ignores them, as the C++ vector base does.
+        assert_eq!(c.clone().get_triangles(), &[0, 1, 2]);
+        assert_eq!(c, GeometryCollection::from(c.to_vec()));
     }
 }

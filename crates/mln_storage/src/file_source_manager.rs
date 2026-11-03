@@ -9,13 +9,14 @@
 // thread the result is the same. If two threads create the same file source
 // at once, the first one registered wins and the other is dropped.
 //
-// TODO(port): the Asset, FileSystem (LocalFileSource), Network
-// (OnlineFileSource), Mbtiles and Pmtiles factories; `getFileSource`
-// returns `None` for those types until they are ported.
+// TODO(port): the Asset, FileSystem (LocalFileSource), Mbtiles and Pmtiles
+// factories; `getFileSource` returns `None` for those types until they are
+// ported. (Network = OnlineFileSource, added by glfw.)
 
 use crate::database_file_source::DatabaseFileSource;
 use crate::file_source::{FileSource, FileSourceType};
 use crate::main_resource_loader::MainResourceLoader;
+use crate::online_file_source::OnlineFileSource;
 use crate::resource_options::ResourceOptions;
 use mln_util::client_options::ClientOptions;
 use mln_util::string::to_string_u64;
@@ -65,6 +66,12 @@ impl FileSourceManager {
                 FileSourceType::Database,
                 Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
                     Arc::new(DatabaseFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
+                }),
+            );
+            manager.register_file_source_factory(
+                FileSourceType::Network,
+                Arc::new(|resource_options: &ResourceOptions, client_options: &ClientOptions| {
+                    Arc::new(OnlineFileSource::new(resource_options, client_options)) as Arc<dyn FileSource>
                 }),
             );
             manager

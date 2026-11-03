@@ -6,6 +6,9 @@ use crate::expression::dsl;
 use crate::sources::geojson_source::{ClusterProperties, GeoJSONOptions};
 use std::sync::Arc;
 
+// The C++ `static_cast<uint8_t/uint16_t/size_t>(float)` of out-of-range
+// values is UB; the port saturates (`as`), see DEVIATIONS.md.
+
 impl Converter for GeoJSONOptions {
     fn convert(value: &Convertible<'_>, error: &mut Error) -> Option<Self> {
         let mut options = GeoJSONOptions::default();

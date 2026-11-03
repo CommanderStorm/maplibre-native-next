@@ -24,6 +24,7 @@ pub mod property_value;
 pub mod rotation;
 pub mod source;
 pub mod sprite;
+pub mod tileset;
 pub mod transition_options;
 
 pub use mln_conversion::{Convertible, Error};

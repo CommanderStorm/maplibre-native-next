@@ -22,6 +22,7 @@ use mln_util::logging::{Event, Log};
 use mln_util::Color;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::Ordering;
+use std::sync::RwLock;
 use std::sync::Arc;
 
 crate::paint_property_binders!(
@@ -59,7 +60,9 @@ pub struct FillBucket {
     pub triangles: Vec<u16>,
     pub triangle_segments: Vec<SegmentBase>,
 
-    pub paint_property_binders: BTreeMap<String, FillBinders>,
+    /// Behind `RwLock`s: `update` (feature state) changes them while the
+    /// bucket is shared.
+    pub paint_property_binders: BTreeMap<String, RwLock<FillBinders>>,
 
     sdf_patterns: HashMap<String, bool>,
     mixed_sdf_pattern_layers: HashSet<String>,
@@ -79,7 +82,7 @@ impl FillBucket {
         for (id, properties) in layer_paint_properties {
             paint_property_binders
                 .entry(id.clone())
-                .or_insert_with(|| FillBinders::new(get_evaluated::<FillLayerProperties>(properties), zoom));
+                .or_insert_with(|| RwLock::new(FillBinders::new(get_evaluated::<FillLayerProperties>(properties), zoom)));
         }
         FillBucket {
             base: BucketBase::default(),
@@ -127,7 +130,7 @@ impl FillBucket {
     ) {
         let length = self.vertices.len();
         for (id, binders) in self.paint_property_binders.iter_mut() {
-            binders.populate_vertex_vectors(
+            binders.get_mut().unwrap().populate_vertex_vectors(
                 feature,
                 length,
                 index,
@@ -207,5 +210,19 @@ impl Bucket for FillBucket {
         (translate[0] * translate[0] + translate[1] * translate[1]).sqrt()
     }
 
-    // TODO(port): update(FeatureStates, ...) (feature state).
+    fn update(
+        &self,
+        states: &crate::bucket::FeatureStates,
+        layer: &dyn mln_tile_id::geometry_tile_data::GeometryTileLayer,
+        layer_id: &str,
+        image_positions: &ImagePositions,
+    ) {
+        if let Some(binders) = self.paint_property_binders.get(layer_id) {
+            binders.write().unwrap().update_vertex_vectors(states, layer, image_positions);
+            self.base.uploaded.store(false, Ordering::SeqCst);
+
+            // sharedVertices->updateModified()
+            self.base.version.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }

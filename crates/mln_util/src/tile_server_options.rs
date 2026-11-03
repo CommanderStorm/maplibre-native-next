@@ -1,7 +1,7 @@
 // Ports include/mln/util/tile_server_options.hpp, src/mln/util/tile_server_options.cpp
 // and include/mln/util/default_style.hpp (+ default_style.cpp).
 //
-// TODO(port): MapboxConfiguration, MapTilerConfiguration.
+// (MapboxConfiguration and MapTilerConfiguration added by glfw.)
 
 /// `util::DefaultStyle`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -185,5 +185,56 @@ impl TileServerOptions {
             .with_default_styles(styles)
             .with_default_style("Basic")
             .set_requires_api_key(false)
+    }
+
+    /// `MapboxConfiguration()`.
+    pub fn mapbox_configuration() -> Self {
+        let styles = vec![
+            DefaultStyle::new("mapbox://styles/mapbox/streets-v11", "Streets", 11),
+            DefaultStyle::new("mapbox://styles/mapbox/outdoors-v11", "Outdoors", 11),
+            DefaultStyle::new("mapbox://styles/mapbox/light-v10", "Light", 10),
+            DefaultStyle::new("mapbox://styles/mapbox/dark-v10", "Dark", 10),
+            DefaultStyle::new("mapbox://styles/mapbox/satellite-v9", "Satellite", 9),
+            DefaultStyle::new("mapbox://styles/mapbox/satellite-streets-v11", "Satellite Streets", 11),
+        ];
+
+        TileServerOptions::new()
+            .with_base_url("https://api.mapbox.com")
+            .with_uri_scheme_alias("mapbox")
+            .with_api_key_parameter_name("access_token")
+            .with_source_template("/{domain}.json", "", Some("/v4".to_owned()))
+            .with_style_template("/styles/v1{path}", "styles", None)
+            .with_sprites_template("/styles/v1{directory}{filename}/sprite{extension}", "sprites", None)
+            .with_glyphs_template("/fonts/v1{path}", "fonts", None)
+            .with_tile_template("{path}", "tiles", Some("/v4".to_owned()))
+            .with_default_styles(styles)
+            .with_default_style("Streets")
+            .set_requires_api_key(true)
+    }
+
+    /// `MapTilerConfiguration()`.
+    pub fn map_tiler_configuration() -> Self {
+        let styles = vec![
+            DefaultStyle::new("maptiler://maps/streets", "Streets", 1),
+            DefaultStyle::new("maptiler://maps/outdoor", "Outdoor", 1),
+            DefaultStyle::new("maptiler://maps/basic", "Basic", 1),
+            DefaultStyle::new("maptiler://maps/bright", "Bright", 1),
+            DefaultStyle::new("maptiler://maps/pastel", "Pastel", 1),
+            DefaultStyle::new("maptiler://maps/hybrid", "Satellite Hybrid", 1),
+            DefaultStyle::new("maptiler://maps/topo", "Satellite Topo", 1),
+        ];
+
+        TileServerOptions::new()
+            .with_base_url("https://api.maptiler.com")
+            .with_uri_scheme_alias("maptiler")
+            .with_api_key_parameter_name("key")
+            .with_source_template("/tiles{path}/tiles.json", "sources", None)
+            .with_style_template("/maps{path}/style.json", "maps", None)
+            .with_sprites_template("/maps{path}", "sprites", None)
+            .with_glyphs_template("/fonts{path}", "fonts", None)
+            .with_tile_template("{path}", "tiles", None)
+            .with_default_styles(styles)
+            .with_default_style("Streets")
+            .set_requires_api_key(true)
     }
 }

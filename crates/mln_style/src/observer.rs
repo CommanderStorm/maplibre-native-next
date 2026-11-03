@@ -31,6 +31,12 @@ pub trait Observer: SourceObserver {
     fn on_sprite_loaded(&self, _sprite: Option<&Sprite>) {}
     fn on_sprite_error(&self, _sprite: Option<&Sprite>, _error: ExceptionPtr) {}
     fn on_sprite_requested(&self, _sprite: Option<&Sprite>) {}
+
+    /// Port-only (glfw): a `loadURL` response arrived. C++'s response
+    /// lambda captures the `Style::Impl` and parses at once; in Rust the
+    /// owner of the style must call `Impl::process_style_responses` (the
+    /// Map does it when this fires). See DEVIATIONS.md [glfw].
+    fn on_style_response(&self) {}
 }
 
 /// The default `Observer nullObserver`.

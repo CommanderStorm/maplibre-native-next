@@ -13,6 +13,7 @@ rust_library(
         "//crates/mln_util",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "@next_crates//:rusqlite",
+        "@next_crates//:ureq",
     ],
 )
 

@@ -1,10 +1,9 @@
 // Ports test/tile/vector_tile.test.cpp.
 //
 // TODO(port): VectorTile.setError, VectorTile.onError, VectorTile.Issue8542
-// (they need VectorMVTTile, TileParameters and the renderer) and
-// VectorTileData.MLTParseResults (MLT decoding).
+// (they need VectorMVTTile, TileParameters and the renderer).
 
-use crate::VectorMVTTileData;
+use crate::{VectorMLTTileData, VectorMVTTileData};
 use maplibre_native_base::Identifier;
 use mln_tile_id::GeometryTileData;
 use mln_util::geometry::FeatureType;
@@ -51,4 +50,54 @@ fn parse_results() {
     assert_eq!(properties.get("disputed"), feature.get_value("disputed").as_ref());
 
     assert_eq!(feature.get_value("invalid"), None);
+}
+
+#[test]
+fn mlt_parse_results() {
+    struct SubCase {
+        use_fast_pfor: bool,
+        fast_pfor_enabled: bool,
+    }
+    for test_case in [
+        SubCase { use_fast_pfor: false, fast_pfor_enabled: false },
+        SubCase { use_fast_pfor: false, fast_pfor_enabled: true },
+        SubCase { use_fast_pfor: true, fast_pfor_enabled: true },
+        SubCase { use_fast_pfor: true, fast_pfor_enabled: false },
+    ] {
+        let path = format!(
+            "test/fixtures/map/issue12432/0-0-0{}",
+            if test_case.use_fast_pfor { "-fastpfor.mlt" } else { ".mlt" }
+        );
+        let data = VectorMLTTileData::new(Arc::new(read_file(&path)), test_case.fast_pfor_enabled);
+
+        let layer_names = data.layer_names();
+
+        if !test_case.fast_pfor_enabled && test_case.use_fast_pfor {
+            // If fast PFOR is not enabled, the fast PFOR tile should fail to parse
+            assert_eq!(layer_names.len(), 0);
+            continue;
+        }
+
+        // MLT layers are presented in the order they're encountered, not sorted alphabetically like MVT layers
+        assert_eq!(layer_names.len(), 2);
+        assert_eq!(layer_names[0], "water");
+        assert_eq!(layer_names[1], "admin");
+
+        assert!(data.get_layer("invalid").is_none());
+
+        let layer = data.get_layer("admin").unwrap();
+        assert_eq!(layer.get_name(), "admin");
+        assert_eq!(layer.feature_count(), 17154);
+
+        let feature = layer.get_feature(0);
+        assert_eq!(feature.get_type(), FeatureType::LineString);
+        assert!(matches!(feature.get_id(), Identifier::Uint(_)));
+        assert_eq!(feature.get_id(), Identifier::Uint(1));
+
+        let properties = feature.get_properties();
+        assert_eq!(properties.len(), 3);
+        assert_eq!(properties.get("disputed"), feature.get_value("disputed").as_ref());
+
+        assert_eq!(feature.get_value("invalid"), None);
+    }
 }

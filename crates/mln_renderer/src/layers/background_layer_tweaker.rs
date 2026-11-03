@@ -5,8 +5,14 @@
 use crate::layer_tweaker::{get_tile_matrix, LayerTweaker, LayerTweakerBase};
 use crate::paint_parameters::PaintParameters;
 use mln_gfx::renderer::layer_group::visit_layer_group_drawables;
-use mln_gfx::shaders::background_layer_ubo::{BackgroundDrawableUBO, BackgroundDrawableUnionUBO, BackgroundPropsUBO};
-use mln_gfx::shaders::shader_defines::{ID_BACKGROUND_DRAWABLE_UBO, ID_BACKGROUND_PROPS_UBO};
+use mln_gfx::shaders::background_layer_ubo::{
+    BackgroundDrawableUBO, BackgroundDrawableUnionUBO, BackgroundPatternDrawableUBO, BackgroundPatternPropsUBO,
+    BackgroundPropsUBO,
+};
+use mln_gfx::shaders::shader_defines::{ID_BACKGROUND_DRAWABLE_UBO, ID_BACKGROUND_IMAGE_TEXTURE, ID_BACKGROUND_PROPS_UBO};
+use mln_gfx::texture2d::SamplerState;
+use mln_gfx::types::{TextureFilterType, TextureWrapType};
+use mln_util::constants::TILE_SIZE_D;
 use mln_gfx::{LayerGroupBase, UniformBufferPtr};
 use mln_style::layer_properties::LayerProperties;
 use super::{background_crossfade, background_layer_properties};
@@ -51,11 +57,20 @@ impl LayerTweaker for BackgroundLayerTweaker {
 
         let properties = self.base.evaluated_properties.clone();
         let evaluated = background_layer_properties(&properties);
-        let _crossfade = background_crossfade(&properties);
+        let crossfade = *background_crossfade(&properties);
+        let state = parameters.state;
         let has_pattern = !evaluated.get::<BackgroundPattern>().to.empty();
-        // TODO(port): background-pattern (PatternAtlas::getPattern, M3).
-        let image_pos_a: Option<()> = if has_pattern { parameters.pattern_atlas.borrow().get_pattern("") } else { None };
-        let image_pos_b: Option<()> = if has_pattern { parameters.pattern_atlas.borrow().get_pattern("") } else { None };
+        // conformance: background-pattern.
+        let image_pos_a = if has_pattern {
+            parameters.pattern_atlas.borrow().get_pattern(evaluated.get::<BackgroundPattern>().from.id())
+        } else {
+            None
+        };
+        let image_pos_b = if has_pattern {
+            parameters.pattern_atlas.borrow().get_pattern(evaluated.get::<BackgroundPattern>().to.id())
+        } else {
+            None
+        };
 
         if has_pattern && (image_pos_a.is_none() || image_pos_b.is_none()) {
             // The pattern isn't valid, disable the whole thing.
@@ -67,9 +82,22 @@ impl LayerTweaker for BackgroundLayerTweaker {
         // properties are re-evaluated every time
         self.base.properties_updated = false;
 
-        if has_pattern {
-            // TODO(port): BackgroundPatternPropsUBO (unreachable until
-            // patterns exist: getPattern returns nothing, see above).
+        if let (true, Some(image_pos_a), Some(image_pos_b)) = (has_pattern, &image_pos_a, &image_pos_b) {
+            let props_ubo = BackgroundPatternPropsUBO {
+                pattern_tl_a: image_pos_a.tl().map(f32::from),
+                pattern_br_a: image_pos_a.br().map(f32::from),
+                pattern_tl_b: image_pos_b.tl().map(f32::from),
+                pattern_br_b: image_pos_b.br().map(f32::from),
+                pattern_size_a: image_pos_a.display_size(),
+                pattern_size_b: image_pos_b.display_size(),
+                scale_a: crossfade.from_scale,
+                scale_b: crossfade.to_scale,
+                mix: crossfade.t,
+                opacity: *evaluated.get::<BackgroundOpacity>(),
+            };
+            layer_group
+                .mutable_uniform_buffers()
+                .create_or_update_pod(ID_BACKGROUND_PROPS_UBO, &props_ubo, context);
         } else {
             let props_ubo = BackgroundPropsUBO {
                 color: evaluated.get::<BackgroundColor>().to_float_array(),
@@ -121,8 +149,36 @@ impl LayerTweaker for BackgroundLayerTweaker {
             );
 
             if has_pattern {
-                // TODO(port): textures and BackgroundPatternDrawableUBO
-                // (unreachable until patterns exist).
+                if let Some(tex) = parameters.pattern_atlas.borrow().texture() {
+                    tex.borrow_mut().set_sampler_configuration(SamplerState {
+                        filter: TextureFilterType::Linear,
+                        wrap_u: TextureWrapType::Clamp,
+                        wrap_v: TextureWrapType::Clamp,
+                        ..Default::default()
+                    });
+                    drawable.set_texture(Some(tex.clone()), ID_BACKGROUND_IMAGE_TEXTURE);
+                }
+
+                let int_zoom = state.get_integer_zoom();
+                let tile_size_at_nearest_zoom =
+                    (TILE_SIZE_D * state.zoom_scale(f64::from(int_zoom) - f64::from(tile_id.canonical.z))) as i32;
+                let pixel_x = (f64::from(tile_size_at_nearest_zoom)
+                    * (f64::from(tile_id.canonical.x)
+                        + f64::from(tile_id.wrap) * state.zoom_scale(f64::from(tile_id.canonical.z))))
+                    as i32;
+                let pixel_y = tile_size_at_nearest_zoom.wrapping_mul(tile_id.canonical.y as i32);
+                let pix_to_tile = tile_id.pixels_to_tile_units(1.0, f32::from(int_zoom));
+
+                drawable_ubo_vector[i as usize] =
+                    BackgroundDrawableUnionUBO::from_pattern_drawable(&BackgroundPatternDrawableUBO {
+                        matrix: cast_matrix(&matrix),
+                        pixel_coord_upper: [(pixel_x >> 16) as f32, (pixel_y >> 16) as f32],
+                        pixel_coord_lower: [(pixel_x & 0xFFFF) as f32, (pixel_y & 0xFFFF) as f32],
+                        tile_units_to_pixels: if pix_to_tile != 0.0 { 1.0 / pix_to_tile } else { 0.0 },
+                        pad1: 0.0,
+                        pad2: 0.0,
+                        pad3: 0.0,
+                    });
             } else {
                 drawable_ubo_vector[i as usize] =
                     BackgroundDrawableUnionUBO::from_drawable(&BackgroundDrawableUBO { matrix: cast_matrix(&matrix) });

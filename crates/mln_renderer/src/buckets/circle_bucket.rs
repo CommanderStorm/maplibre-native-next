@@ -14,9 +14,11 @@ use mln_style::layer_properties::{get_evaluated, LayerProperties};
 use mln_style::layers::circle_layer_properties::*;
 use mln_style::properties::Property;
 use mln_util::immutable::Immutable;
+use mln_style_types::image::ImagePositions;
 use mln_util::Color;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
+use std::sync::RwLock;
 
 crate::paint_property_binders!(
     /// `CircleBinders = PaintPropertyBinders<CirclePaintProperties::DataDrivenProperties>`.
@@ -44,7 +46,9 @@ pub struct CircleBucket {
     /// `gfx::IndexVector<gfx::Triangles>`.
     pub triangles: Vec<u16>,
     pub segments: Vec<SegmentBase>,
-    pub paint_property_binders: BTreeMap<String, CircleBinders>,
+    /// Behind `RwLock`s: `update` (feature state) changes them while the
+    /// bucket is shared.
+    pub paint_property_binders: BTreeMap<String, RwLock<CircleBinders>>,
     pub mode: MapMode,
 }
 
@@ -59,7 +63,7 @@ impl CircleBucket {
         for (id, properties) in layer_paint_properties {
             paint_property_binders
                 .entry(id.clone())
-                .or_insert_with(|| CircleBinders::new(get_evaluated::<CircleLayerProperties>(properties), zoom));
+                .or_insert_with(|| RwLock::new(CircleBinders::new(get_evaluated::<CircleLayerProperties>(properties), zoom)));
         }
         CircleBucket {
             base: BucketBase::default(),
@@ -118,18 +122,31 @@ impl Bucket for CircleBucket {
         let radius = get_radius_or_width(
             evaluated.get::<CircleRadius>().constant(),
             CircleRadius::default_value(),
-            binders.map(|b| b.circle_radius.statistics.max()),
+            binders.map(|b| b.read().unwrap().circle_radius.statistics.max()),
         );
         let stroke = get_radius_or_width(
             evaluated.get::<CircleStrokeWidth>().constant(),
             CircleStrokeWidth::default_value(),
-            binders.map(|b| b.circle_stroke_width.statistics.max()),
+            binders.map(|b| b.read().unwrap().circle_stroke_width.statistics.max()),
         );
         let translate = evaluated.get::<CircleTranslate>();
         // util::length(a, b) = std::sqrt(a * a + b * b), in float
         radius + stroke + (translate[0] * translate[0] + translate[1] * translate[1]).sqrt()
     }
 
-    // TODO(port): update(FeatureStates, ...) (feature state; the bucket is
-    // shared immutably once built).
+    fn update(
+        &self,
+        states: &crate::bucket::FeatureStates,
+        layer: &dyn mln_tile_id::geometry_tile_data::GeometryTileLayer,
+        layer_id: &str,
+        image_positions: &ImagePositions,
+    ) {
+        if let Some(binders) = self.paint_property_binders.get(layer_id) {
+            binders.write().unwrap().update_vertex_vectors(states, layer, image_positions);
+            self.base.uploaded.store(false, Ordering::SeqCst);
+
+            // sharedVertices->updateModified()
+            self.base.version.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }

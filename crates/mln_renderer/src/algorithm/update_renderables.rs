@@ -22,6 +22,9 @@ pub trait RenderablesContext {
     /// `renderTile(tileID, tile)`.
     fn render_tile(&mut self, id: &UnwrappedTileID, tile: &OverscaledTileID);
 
+    /// `prefetchedTiles`: (tile id, storage key) pairs.
+    fn prefetched_tiles(&self) -> Vec<PrefetchedTile>;
+
     fn is_renderable(&self, tile: &OverscaledTileID) -> bool;
     fn has_tried_cache(&self, tile: &OverscaledTileID) -> bool;
     fn is_loaded(&self, tile: &OverscaledTileID) -> bool;
@@ -36,7 +39,6 @@ pub type PrefetchedTile = (OverscaledTileID, OverscaledTileID);
 pub fn update_renderables<C: RenderablesContext>(
     ctx: &mut C,
     ideal_tile_ids: &[OverscaledTileID],
-    prefetched_tiles: &dyn Fn(&C) -> Vec<PrefetchedTile>,
     zoom_range: &Range<u8>,
     max_parent_overscale_factor: Option<u8>,
 ) {
@@ -172,7 +174,7 @@ pub fn update_renderables<C: RenderablesContext>(
 
                 if !parent_or_child_tile_found {
                     // Reuse prefetched tiles in order to avoid empty screen
-                    for (prefetched_data_tile_id, prefetched_tile) in prefetched_tiles(ctx) {
+                    for (prefetched_data_tile_id, prefetched_tile) in ctx.prefetched_tiles() {
                         let prefetched_render_tile_id = prefetched_data_tile_id.to_unwrapped();
                         if ctx.is_renderable(&prefetched_tile)
                             && prefetched_data_tile_id.canonical.z <= zoom_range.max

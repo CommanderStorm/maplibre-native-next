@@ -9,10 +9,23 @@ use mln_style::layer;
 use mln_style_types::image::ImagePosition;
 use std::rc::Rc;
 
-/// `TileAtlasTextures`.
-// TODO(port): `gfx::Texture2DPtr glyph, icon` (symbols, M5).
-#[derive(Debug, Default)]
-pub struct TileAtlasTextures {}
+/// `TileAtlasTextures`: the glyph and icon (+ pattern) atlas textures of a
+/// tile, set in the upload pass (`RefCell`: C++ assigns through the shared
+/// pointer).
+#[derive(Default)]
+pub struct TileAtlasTextures {
+    pub glyph: std::cell::RefCell<Option<mln_gfx::texture2d::Texture2DPtr>>,
+    pub icon: std::cell::RefCell<Option<mln_gfx::texture2d::Texture2DPtr>>,
+}
+
+impl std::fmt::Debug for TileAtlasTextures {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TileAtlasTextures")
+            .field("glyph", &self.glyph.borrow().is_some())
+            .field("icon", &self.icon.borrow().is_some())
+            .finish()
+    }
+}
 
 /// `TileRenderData`. The C++ defaults of `getPattern`,
 /// `getLayerRenderData` and `getBucket` `assert(false)`.
