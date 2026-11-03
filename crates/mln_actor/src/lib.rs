@@ -11,6 +11,7 @@ pub mod mailbox;
 pub mod platform_settings;
 pub mod run_loop;
 pub mod scheduler;
+pub mod spawn;
 pub mod thread;
 pub mod thread_pool;
 pub mod timer;

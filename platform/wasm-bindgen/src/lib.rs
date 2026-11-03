@@ -14,8 +14,15 @@
 //! - `work(budget_ms)` right after the frame (a posted message, so the frame
 //!   is presented first): runs background tasks until the budget is spent,
 //!   then delivers their results.
+//!
+//! Built with shared memory (`+atomics`, build-threads.sh), the thread pools
+//! run on Web Workers instead: JavaScript provides `mlnSpawnThread`, which
+//! starts a worker on this module and memory that calls `mln_thread_entry`.
+//! The map then has to live in a worker itself (`create_offscreen`), since
+//! the page's main thread may not block on a lock; `work` does nothing.
 
 use maplibre_native_next::mln_actor::RunLoop;
+#[cfg(not(target_feature = "atomics"))]
 use maplibre_native_next::mln_actor::thread_pool::{has_background_tasks, run_background_tasks};
 use maplibre_native_next::mln_gfx::{BackendScope, RendererBackend, ScopeType};
 use maplibre_native_next::mln_map::{CameraOptions, Map, MapLoadError, MapObserver, MapOptions};
@@ -24,12 +31,14 @@ use maplibre_native_next::mln_storage::{ClientOptions, ResourceOptions};
 use maplibre_native_next::mln_util::geo::LatLng;
 use maplibre_native_next::mln_util::logging::{Event, EventSeverity, Log, Observer};
 use maplibre_native_next::mln_util::size::Size;
+#[cfg(not(target_feature = "atomics"))]
 use maplibre_native_next::mln_util::time::Instant;
 use maplibre_native_next::mln_webgpu::SurfaceBackend;
 use std::cell::{Cell, RefCell};
 use std::f64::consts::PI;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
+#[cfg(not(target_feature = "atomics"))]
 use std::time::Duration;
 use wasm_bindgen::prelude::*;
 
@@ -40,6 +49,39 @@ const MAX_ZOOM: f64 = 19.0;
 fn start() {
     console_error_panic_hook::set_once();
     Log::set_observer(Box::new(ConsoleLog));
+    #[cfg(target_feature = "atomics")]
+    maplibre_native_next::mln_actor::spawn::set_spawner(threads::spawn);
+}
+
+/// The threaded build's threads: Web Workers on this module and memory.
+#[cfg(target_feature = "atomics")]
+mod threads {
+    use wasm_bindgen::prelude::*;
+
+    type Entry = Box<dyn FnOnce() + Send + 'static>;
+
+    #[wasm_bindgen]
+    extern "C" {
+        /// Provided by the page: starts a worker that initializes this
+        /// module with `module` and `memory` and calls
+        /// `mln_thread_entry(entry)`.
+        #[wasm_bindgen(js_name = mlnSpawnThread)]
+        fn spawn_thread(module: JsValue, memory: JsValue, entry: u32, name: &str);
+    }
+
+    pub fn spawn(name: String, f: Entry) {
+        let entry = Box::into_raw(Box::new(f)) as usize as u32;
+        spawn_thread(wasm_bindgen::module(), wasm_bindgen::memory(), entry, &name);
+    }
+
+    /// Runs a spawned thread's closure, on its worker.
+    #[wasm_bindgen]
+    pub fn mln_thread_entry(entry: u32) {
+        // SAFETY: `entry` is the box `spawn` leaked for this thread; each
+        // worker runs it once.
+        let f = unsafe { Box::from_raw(entry as usize as *mut Entry) };
+        f();
+    }
 }
 
 // MARK: - Logging
@@ -202,12 +244,31 @@ impl WebMap {
     /// Creates the WebGPU device, a surface on `canvas` and the map, at
     /// `width` x `height` CSS pixels.
     pub async fn create(canvas: web_sys::HtmlCanvasElement, width: u32, height: u32, pixel_ratio: f64) -> Result<WebMap, JsValue> {
+        Self::with_target(wgpu::SurfaceTarget::Canvas(canvas), width, height, pixel_ratio).await
+    }
+
+    /// `create` for a canvas transferred to a worker.
+    pub async fn create_offscreen(
+        canvas: web_sys::OffscreenCanvas,
+        width: u32,
+        height: u32,
+        pixel_ratio: f64,
+    ) -> Result<WebMap, JsValue> {
+        Self::with_target(wgpu::SurfaceTarget::OffscreenCanvas(canvas), width, height, pixel_ratio).await
+    }
+
+    async fn with_target(
+        target: wgpu::SurfaceTarget<'static>,
+        width: u32,
+        height: u32,
+        pixel_ratio: f64,
+    ) -> Result<WebMap, JsValue> {
         let size = Size::new(width.max(1), height.max(1));
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
-        let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas)).map_err(js_error)?;
+        let surface = instance.create_surface(target).map_err(js_error)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -303,15 +364,26 @@ impl WebMap {
     /// `budget_ms`, then the RunLoop's tasks they produced. Returns whether
     /// background tasks remain.
     pub fn work(&mut self, budget_ms: f64) -> bool {
-        let deadline = Instant::now() + Duration::from_secs_f64(budget_ms.max(0.0) / 1000.0);
-        let remaining = run_background_tasks(deadline);
-        self.run_loop.run_once();
-        remaining
+        #[cfg(not(target_feature = "atomics"))]
+        {
+            let deadline = Instant::now() + Duration::from_secs_f64(budget_ms.max(0.0) / 1000.0);
+            let remaining = run_background_tasks(deadline);
+            self.run_loop.run_once();
+            remaining
+        }
+        #[cfg(target_feature = "atomics")]
+        {
+            let _ = budget_ms;
+            false
+        }
     }
 
     /// Whether background tasks are waiting for `work`.
     pub fn has_work(&self) -> bool {
-        has_background_tasks()
+        #[cfg(not(target_feature = "atomics"))]
+        return has_background_tasks();
+        #[cfg(target_feature = "atomics")]
+        return false;
     }
 
     /// Whether the map has an update that the next `render` would draw.

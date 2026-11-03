@@ -2,8 +2,8 @@
 // `ThreadedSchedulerBase` / `ThreadedScheduler` with one queue per tag, and
 // `ThreadPool` (= `ParallelScheduler(3)`, 4 threads).
 //
-// Port-only, wasm32-unknown-unknown (the browser build, which has no
-// threads): a scheduler starts no threads. Its tasks wait in the same tagged
+// Port-only, wasm32-unknown-unknown without shared memory (the
+// single-threaded browser build): a scheduler starts no threads. Its tasks wait in the same tagged
 // queues until the host runs them on its own thread with
 // `run_background_tasks`, a round at a time as a worker visits the queues;
 // `wait_for_empty` runs the tag's tasks itself instead of waiting.
@@ -19,11 +19,12 @@ use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
+use crate::spawn::JoinHandle;
 
-/// The browser build (wasm32-unknown-unknown): no threads.
+/// The single-threaded browser build (wasm32-unknown-unknown without
+/// atomics): no threads.
 macro_rules! cfg_web {
-    ($($item:item)*) => { $(#[cfg(all(target_family = "wasm", target_os = "unknown"))] $item)* };
+    ($($item:item)*) => { $(#[cfg(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")))] $item)* };
 }
 
 #[derive(Default)]
@@ -54,7 +55,7 @@ thread_local! {
 /// `ThreadedScheduler(n)`.
 pub struct ThreadedScheduler {
     shared: Arc<Shared>,
-    threads: Vec<JoinHandle<()>>,
+    threads: Vec<JoinHandle>,
 }
 
 impl ThreadedScheduler {
@@ -67,9 +68,9 @@ impl ThreadedScheduler {
             task_count: AtomicUsize::new(0),
             handler: Mutex::new(None),
         });
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics"))))]
         let threads = (0..n).map(|index| make_scheduler_thread(shared.clone(), index)).collect();
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+        #[cfg(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")))]
         let threads = {
             let _ = n;
             web::register(&shared);
@@ -83,28 +84,25 @@ impl ThreadedScheduler {
     }
 }
 
-#[cfg_attr(all(target_family = "wasm", target_os = "unknown"), allow(dead_code))]
-fn make_scheduler_thread(shared: Arc<Shared>, index: usize) -> JoinHandle<()> {
-    std::thread::Builder::new()
-        .name(format!("Worker {}", index + 1))
-        .spawn(move || {
-            OWNING_THREAD_POOL.with(|p| p.set(Arc::as_ptr(&shared) as usize));
-            loop {
-                {
-                    let mut terminated = shared.worker_mutex.lock().unwrap();
-                    if !*terminated && shared.task_count.load(Ordering::SeqCst) == 0 {
-                        terminated = shared.cv_available.wait(terminated).unwrap();
-                    }
-                    if *terminated {
-                        break;
-                    }
-                    // Let other threads run
+#[cfg_attr(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")), allow(dead_code))]
+fn make_scheduler_thread(shared: Arc<Shared>, index: usize) -> JoinHandle {
+    crate::spawn::spawn(format!("Worker {}", index + 1), move || {
+        OWNING_THREAD_POOL.with(|p| p.set(Arc::as_ptr(&shared) as usize));
+        loop {
+            {
+                let mut terminated = shared.worker_mutex.lock().unwrap();
+                if !*terminated && shared.task_count.load(Ordering::SeqCst) == 0 {
+                    terminated = shared.cv_available.wait(terminated).unwrap();
                 }
-
-                visit_queues(&shared);
+                if *terminated {
+                    break;
+                }
+                // Let other threads run
             }
-        })
-        .expect("failed to spawn worker thread")
+
+            visit_queues(&shared);
+        }
+    })
 }
 
 /// One iteration of a worker: runs a task from each tagged queue. Returns
@@ -215,9 +213,9 @@ impl Scheduler for ThreadedScheduler {
             }
         };
 
-        // The browser build has no workers to wait for: run the tag's tasks
-        // here.
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+        // The single-threaded browser build has no workers to wait for: run
+        // the tag's tasks here.
+        #[cfg(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")))]
         web::drain(&self.shared, &q);
 
         let mut queue = q.queue.lock().unwrap();
