@@ -3,7 +3,7 @@
 // talks to it through messages either way:
 //
 //   to the engine:   {type: "call", name, args}, {type: "query", id, args},
-//                    {type: "remove"}
+//                    {type: "wheel", value, kind, x, y}, {type: "remove"}
 //   from the engine: {type: "ready"}, {type: "failed", message},
 //                    {type: "frame", drew, state, events, moving, attributions},
 //                    {type: "query", id, features}
@@ -11,7 +11,10 @@
 // Each animation frame runs the engine's frame(): its RunLoop tasks, then a
 // draw when the map changed. Without threads, the background work (tile
 // parsing and layout) runs right after, in a posted task with a time budget,
-// so that the frame is presented first.
+// so that the frame is presented first. Scroll zoom steps (scroll_zoom.js)
+// apply right before each frame draws.
+
+import { ScrollZoom } from "./scroll_zoom.js";
 
 const WORK_BUDGET_MS = 8;
 
@@ -27,6 +30,7 @@ const nextFrame = globalThis.requestAnimationFrame
 export async function runEngine({ wasm, canvas, width, height, pixelRatio, post }) {
   const engine = await wasm.Engine.create(canvas, width, height, pixelRatio);
   const threaded = wasm.threaded();
+  const scrollZoom = new ScrollZoom(engine);
   let removed = false;
   let moving = false;
   let attributions = "";
@@ -44,6 +48,7 @@ export async function runEngine({ wasm, canvas, width, height, pixelRatio, post 
 
   function frame() {
     if (removed) return;
+    scrollZoom.frame();
     const drew = engine.frame();
     const state = engine.state();
     const events = engine.take_events();
@@ -78,6 +83,7 @@ export async function runEngine({ wasm, canvas, width, height, pixelRatio, post 
     if (removed) return;
     switch (message.type) {
       case "call":
+        if (message.name === "set_limits") [scrollZoom.minZoom, scrollZoom.maxZoom] = message.args;
         try {
           engine[message.name](...message.args);
         } catch (error) {
@@ -95,6 +101,9 @@ export async function runEngine({ wasm, canvas, width, height, pixelRatio, post 
         post({ type: "query", id: message.id, features });
         break;
       }
+      case "wheel":
+        scrollZoom.wheel(message);
+        break;
       case "remove":
         removed = true;
         engine.free();

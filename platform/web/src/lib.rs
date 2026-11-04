@@ -409,6 +409,20 @@ impl Engine {
         self.map.scale_by(scale, anchor, &animation(duration_ms));
     }
 
+    /// The camera's zoom now.
+    pub fn get_zoom(&self) -> f64 {
+        self.map.get_camera_options(None).zoom.unwrap_or(0.0)
+    }
+
+    /// Sets the zoom at once, keeping the CSS pixel (`x`, `y`) in place: the
+    /// scroll zoom handler's step (js/engine.js).
+    pub fn zoom_around(&mut self, zoom: f64, x: f64, y: f64) {
+        let scale = 2f64.powf(zoom - self.get_zoom());
+        if (scale - 1.0).abs() > 1e-12 {
+            self.map.scale_by(scale, Some(ScreenCoordinate::new(x, y)), &AnimationOptions::default());
+        }
+    }
+
     /// Rotates as a drag from (`x0`, `y0`) to (`x1`, `y1`) turns around the
     /// center.
     pub fn rotate_by(&mut self, x0: f64, y0: f64, x1: f64, y1: f64) {

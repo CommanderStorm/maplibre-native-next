@@ -9,6 +9,7 @@
 // camera then comes back with the next frame.
 
 import { Point } from "./geo.js";
+import { WheelClassifier } from "./scroll_zoom.js";
 
 class Toggle {
   constructor(enabled) {
@@ -31,9 +32,6 @@ class Toggle {
 // GL JS's inertia settings: a pan keeps going after release at this
 // deceleration (px/s²), for velocities up to maxSpeed (px/s).
 const INERTIA = { linearity: 0.3, deceleration: 2500, maxSpeed: 1400 };
-// Wheel zoom rates (zoom levels per deltaY pixel), as GL JS's.
-const WHEEL_ZOOM_RATE = 1 / 450;
-const TRACKPAD_ZOOM_RATE = 1 / 100;
 const DEGREES_PER_PIXEL_ROTATE = 0.8;
 const DEGREES_PER_PIXEL_PITCH = 0.5;
 // A press that moves less than this (CSS px) is a click.
@@ -53,6 +51,7 @@ export class Handlers {
     this._mode = null;
     this._samples = [];
     this._listeners = [];
+    this._wheelClassifier = new WheelClassifier((delta) => map._post({ type: "wheel", ...delta }));
 
     this._listen("pointerdown", (e) => this._pointerDown(e));
     this._listen("pointermove", (e) => this._pointerMove(e));
@@ -197,17 +196,12 @@ export class Handlers {
     this._map._call("rotate_by", cx + r, cy, cx + r * Math.cos(radians), cy + r * Math.sin(radians));
   }
 
+  // GL JS's scroll zoom (scroll_zoom.js): the engine eases toward the zoom
+  // the deltas add up to, around the pointer.
   _wheel(e) {
     if (!this.scrollZoom.isEnabled()) return;
     e.preventDefault();
-    const point = this._point(e);
-    let delta = e.deltaY;
-    if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 40;
-    // A mouse wheel moves in large steps; a trackpad (or a pinch, with
-    // ctrlKey) in small ones, many times a second.
-    const wheel = e.deltaMode === WheelEvent.DOM_DELTA_LINE || (Math.abs(delta) >= 100 && Number.isInteger(delta));
-    const zoom = -delta * (wheel ? WHEEL_ZOOM_RATE : TRACKPAD_ZOOM_RATE);
-    this._map._call("scale_by", 2 ** zoom, point.x, point.y, wheel ? 200 : NaN);
+    this._wheelClassifier.wheel(e, this._point(e));
   }
 
   _dblclick(e) {
