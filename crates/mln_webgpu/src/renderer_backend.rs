@@ -33,10 +33,6 @@ pub struct BackendImpl {
     /// `wgpu::TextureFormat::Undefined` is `None`.
     depth_stencil_format: Cell<Option<wgpu::TextureFormat>>,
     color_format: Cell<Option<wgpu::TextureFormat>>,
-    /// Port-only: buffers and textures dropped since the last submit, which
-    /// `destroy_retired` destroys after the next one (see `retire_buffer`).
-    retired_buffers: RefCell<Vec<wgpu::Buffer>>,
-    retired_textures: RefCell<Vec<wgpu::Texture>>,
 }
 
 impl BackendImpl {
@@ -75,38 +71,6 @@ impl BackendImpl {
     }
     pub fn get_color_format(&self) -> Option<wgpu::TextureFormat> {
         self.color_format.get()
-    }
-
-    /// Port-only: a buffer its owner dropped. wgpu's WebGPU backend
-    /// (wasm32-unknown-unknown) only drops its reference to the JavaScript
-    /// GPUBuffer, whose memory then waits for the garbage collector; a map
-    /// replacing tiles runs ahead of it by hundreds of MiB. There the buffer
-    /// is destroyed explicitly after the next submit (work recorded before
-    /// it may still use the buffer). Elsewhere dropping it frees it.
-    pub fn retire_buffer(&self, buffer: wgpu::Buffer) {
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-        self.retired_buffers.borrow_mut().push(buffer);
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        drop(buffer);
-    }
-
-    /// Port-only: `retire_buffer` for textures.
-    pub fn retire_texture(&self, texture: wgpu::Texture) {
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-        self.retired_textures.borrow_mut().push(texture);
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        drop(texture);
-    }
-
-    /// Port-only: destroys what was retired before a submit that just
-    /// happened; the browser frees each once the submitted work completes.
-    pub fn destroy_retired(&self) {
-        for buffer in self.retired_buffers.take() {
-            buffer.destroy();
-        }
-        for texture in self.retired_textures.take() {
-            texture.destroy();
-        }
     }
 }
 

@@ -26,33 +26,13 @@ version = "0.15.0"
 # a crate to that cfg; the code gates its use with the same cfg. A table gives
 # each cfg its own default-features/features.
 [target-dependencies]
-# ureq's TLS (rustls, ring) doesn't build for the browser (Emscripten or
-# wasm32-unknown-unknown), where mln_storage fetches through the browser
-# instead.
-ureq = 'cfg(not(target_family = "wasm"))'
+# ureq's TLS (rustls, ring) doesn't build for Emscripten, where mln_storage
+# fetches through the browser instead.
+ureq = 'cfg(not(target_os = "emscripten"))'
 
-# The browser build (wasm32-unknown-unknown) has no SQLite: mln_storage leaves
-# its database and MBTiles file sources out, and no C compiler is needed.
-rusqlite = 'cfg(not(all(target_family = "wasm", target_os = "unknown")))'
-
-# The wasm-bindgen browser build (wasm32-unknown-unknown): mln_storage's
-# fetch transport.
-js-sys = 'cfg(all(target_family = "wasm", target_os = "unknown"))'
-wasm-bindgen = 'cfg(all(target_family = "wasm", target_os = "unknown"))'
-wasm-bindgen-futures = 'cfg(all(target_family = "wasm", target_os = "unknown"))'
-web-sys = 'cfg(all(target_family = "wasm", target_os = "unknown"))'
-
-# zlib (libz-sys) needs a C library that wasm32-unknown-unknown lacks; the
-# browser build decompresses with miniz_oxide.
-[target-dependencies.flate2]
-'cfg(not(all(target_family = "wasm", target_os = "unknown")))' = {}
-'cfg(all(target_family = "wasm", target_os = "unknown"))' = { default-features = false, features = ["rust_backend"] }
-
-# In the Emscripten browser build the port renders through the custom backend
-# over webgpu.h (mln_wgpu_webgpu_h); wgpu's GLES backend would link EGL 1.5
-# functions that Emscripten doesn't provide. The wasm-bindgen browser build
-# uses wgpu's own WebGPU backend, without the WebGL one.
+# In the browser the port renders through the custom backend over webgpu.h
+# (mln_wgpu_webgpu_h); wgpu's GLES backend would link EGL 1.5 functions that
+# Emscripten doesn't provide.
 [target-dependencies.wgpu]
-'cfg(not(target_family = "wasm"))' = {}
+'cfg(not(target_os = "emscripten"))' = {}
 'cfg(target_os = "emscripten")' = { default-features = false, features = ["custom", "parking_lot", "std", "wgsl"] }
-'cfg(all(target_family = "wasm", target_os = "unknown"))' = { default-features = false, features = ["parking_lot", "std", "webgpu", "wgsl"] }

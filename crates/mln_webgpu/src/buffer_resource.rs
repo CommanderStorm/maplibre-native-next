@@ -128,11 +128,3 @@ impl BufferResource {
         self.persistent
     }
 }
-
-impl Drop for BufferResource {
-    fn drop(&mut self) {
-        if let Some(buffer) = self.buffer.take() {
-            self.context.get_backend().retire_buffer(buffer);
-        }
-    }
-}

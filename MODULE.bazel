@@ -180,43 +180,6 @@ crate.spec(
     version = "3",
 )
 
-# The browser build (wasm32-unknown-unknown, through wasm-bindgen): fetch for
-# mln_storage's HTTP file source, and web-time because std::time::Instant
-# panics there. tools/release/package.toml limits the wasm-bindgen crates to
-# that target in the published crate; natively they only compile.
-crate.spec(
-    package = "js-sys",
-    version = "0.3",
-)
-crate.spec(
-    package = "wasm-bindgen",
-    version = "0.2",
-)
-crate.spec(
-    package = "wasm-bindgen-futures",
-    version = "0.4",
-)
-crate.spec(
-    features = [
-        "AbortController",
-        "AbortSignal",
-        "Headers",
-        "Request",
-        "RequestCache",
-        "RequestInit",
-        "RequestMode",
-        "Response",
-        "Window",
-        "WorkerGlobalScope",
-    ],
-    package = "web-sys",
-    version = "0.3",
-)
-crate.spec(
-    package = "web-time",
-    version = "1",
-)
-
 # Ports the C++ WebGPU backend (src/mln/webgpu, which runs on Dawn or
 # wgpu-native) onto the Rust implementation of the same API. `custom` lets
 # //crates/mln_wgpu_webgpu_h plug in the browser's WebGPU (webgpu.h) on

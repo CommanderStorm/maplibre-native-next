@@ -24,13 +24,13 @@ use crate::resource::{Kind, Resource};
 use crate::resource_options::ResourceOptions;
 use crate::response::{Error, Reason, Response};
 use crate::sqlite3::{Database, OpenFlag, Query, Statement};
-use crate::tilejson_document::{Document, strtod, strtol};
 use mln_actor::{ActorRef, Thread};
 use mln_platform_default_image::compression::{decompress, is_compressed};
 use mln_util::chrono::Timestamp;
 use mln_util::client_options::ClientOptions;
 use mln_util::constants::MBTILES_PROTOCOL;
 use mln_util::url::percent_decode;
+use rapidjson::Writer;
 use serde_json::Value as Json;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -44,8 +44,120 @@ fn url_to_path(url: &str) -> Vec<u8> {
     percent_decode(&url[MBTILES_PROTOCOL.len().min(url.len())..])
 }
 
+/// A rapidjson `Document` object: members in insertion order, duplicate
+/// names allowed (`AddMember` appends, `operator[]` finds the first).
+#[derive(Default)]
+pub(crate) struct Document {
+    pub members: Vec<(String, Json)>,
+}
+
+impl Document {
+    /// `doc.Parse(json)` followed by `if (!doc.IsObject()) doc.SetObject()`.
+    pub fn parse_object(json: &[u8]) -> Self {
+        // `Parse(const char*)` stops at the first NUL.
+        let end = json.iter().position(|&b| b == 0).unwrap_or(json.len());
+        match serde_json::from_slice::<Json>(&json[..end]) {
+            Ok(Json::Object(object)) => Document {
+                members: object.into_iter().collect(),
+            },
+            _ => Document::default(),
+        }
+    }
+
+    pub fn has_member(&self, name: &str) -> bool {
+        self.members.iter().any(|(n, _)| n == name)
+    }
+
+    pub fn add_member(&mut self, name: impl Into<String>, value: Json) {
+        self.members.push((name.into(), value));
+    }
+
+    /// `doc[name]` (the member must exist).
+    pub fn get_mut(&mut self, name: &str) -> &mut Json {
+        &mut self.members.iter_mut().find(|(n, _)| n == name).expect("member").1
+    }
+
+    /// `serialize(doc)`: `doc.Accept(Writer<StringBuffer>)`.
+    pub fn serialize(&self) -> String {
+        let mut w = Writer::new();
+        w.start_object();
+        for (name, value) in &self.members {
+            w.key(name);
+            write_json(&mut w, value);
+        }
+        w.end_object();
+        w.into_string()
+    }
+}
+
+fn write_json(w: &mut Writer, value: &Json) {
+    match value {
+        Json::Null => {
+            w.null();
+        }
+        Json::Bool(b) => {
+            w.bool_(*b);
+        }
+        Json::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                w.uint64(u);
+            } else if let Some(i) = n.as_i64() {
+                w.int64(i);
+            } else {
+                w.double(n.as_f64().unwrap_or_default());
+            }
+        }
+        Json::String(s) => {
+            w.string(s);
+        }
+        Json::Array(values) => {
+            w.start_array();
+            for v in values {
+                write_json(w, v);
+            }
+            w.end_array();
+        }
+        Json::Object(map) => {
+            w.start_object();
+            for (k, v) in map {
+                w.key(k);
+                write_json(w, v);
+            }
+            w.end_object();
+        }
+    }
+}
+
 fn json_double(d: f64) -> Json {
     serde_json::Number::from_f64(d).map_or(Json::Null, Json::Number)
+}
+
+/// `std::strtod(s, nullptr)`: the longest prefix that is a number, after
+/// leading whitespace; 0 when there is none.
+pub(crate) fn strtod(s: &str) -> f64 {
+    let s = s.trim_start();
+    let mut best = 0.0;
+    for (i, _) in s.char_indices().skip(1).chain(std::iter::once((s.len(), ' '))) {
+        if let Ok(v) = s[..i].parse::<f64>() {
+            best = v;
+        }
+    }
+    best
+}
+
+/// `std::stoi(s)` / `std::strtol(s, nullptr, 10)`: the leading integer;
+/// 0 when there is none (C++ `stoi` throws then).
+pub(crate) fn strtol(s: &str) -> i64 {
+    let s = s.trim_start();
+    let bytes = s.as_bytes();
+    let mut end = 0;
+    if end < bytes.len() && (bytes[end] == b'-' || bytes[end] == b'+') {
+        end += 1;
+    }
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    s[..end].parse::<i64>().unwrap_or(0)
 }
 
 /// `split(s, delim)`: each `std::getline` piece through `std::strtod`.

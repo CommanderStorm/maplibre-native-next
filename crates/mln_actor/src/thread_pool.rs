@@ -2,12 +2,6 @@
 // `ThreadedSchedulerBase` / `ThreadedScheduler` with one queue per tag, and
 // `ThreadPool` (= `ParallelScheduler(3)`, 4 threads).
 //
-// Port-only, wasm32-unknown-unknown without shared memory (the
-// single-threaded browser build): a scheduler starts no threads. Its tasks wait in the same tagged
-// queues until the host runs them on its own thread with
-// `run_background_tasks`, a round at a time as a worker visits the queues;
-// `wait_for_empty` runs the tag's tasks itself instead of waiting.
-//
 // TODO(port): `runOnRenderThread`/`runRenderJobs`, thread names/priorities
 // from platform settings. (gtests-core added `SequencedScheduler` and the
 // exception handler: a panicking task is caught and passed to the handler,
@@ -19,13 +13,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use crate::spawn::JoinHandle;
-
-/// The single-threaded browser build (wasm32-unknown-unknown without
-/// atomics): no threads.
-macro_rules! cfg_web {
-    ($($item:item)*) => { $(#[cfg(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")))] $item)* };
-}
+use std::thread::JoinHandle;
 
 #[derive(Default)]
 struct Queue {
@@ -55,7 +43,7 @@ thread_local! {
 /// `ThreadedScheduler(n)`.
 pub struct ThreadedScheduler {
     shared: Arc<Shared>,
-    threads: Vec<JoinHandle>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl ThreadedScheduler {
@@ -68,14 +56,7 @@ impl ThreadedScheduler {
             task_count: AtomicUsize::new(0),
             handler: Mutex::new(None),
         });
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics"))))]
         let threads = (0..n).map(|index| make_scheduler_thread(shared.clone(), index)).collect();
-        #[cfg(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")))]
-        let threads = {
-            let _ = n;
-            web::register(&shared);
-            Vec::new()
-        };
         ThreadedScheduler { shared, threads }
     }
 
@@ -84,86 +65,78 @@ impl ThreadedScheduler {
     }
 }
 
-#[cfg_attr(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")), allow(dead_code))]
-fn make_scheduler_thread(shared: Arc<Shared>, index: usize) -> JoinHandle {
-    crate::spawn::spawn(format!("Worker {}", index + 1), move || {
-        OWNING_THREAD_POOL.with(|p| p.set(Arc::as_ptr(&shared) as usize));
-        loop {
-            {
-                let mut terminated = shared.worker_mutex.lock().unwrap();
-                if !*terminated && shared.task_count.load(Ordering::SeqCst) == 0 {
-                    terminated = shared.cv_available.wait(terminated).unwrap();
+fn make_scheduler_thread(shared: Arc<Shared>, index: usize) -> JoinHandle<()> {
+    std::thread::Builder::new()
+        .name(format!("Worker {}", index + 1))
+        .spawn(move || {
+            OWNING_THREAD_POOL.with(|p| p.set(Arc::as_ptr(&shared) as usize));
+            loop {
+                {
+                    let mut terminated = shared.worker_mutex.lock().unwrap();
+                    if !*terminated && shared.task_count.load(Ordering::SeqCst) == 0 {
+                        terminated = shared.cv_available.wait(terminated).unwrap();
+                    }
+                    if *terminated {
+                        break;
+                    }
+                    // Let other threads run
                 }
-                if *terminated {
-                    break;
-                }
-                // Let other threads run
-            }
 
-            visit_queues(&shared);
-        }
-    })
-}
+                // 1. Gather buckets for us to visit this iteration
+                let pending: Vec<Arc<Queue>> = shared.tagged_queue.lock().unwrap().values().cloned().collect();
 
-/// One iteration of a worker: runs a task from each tagged queue. Returns
-/// whether it ran any.
-fn visit_queues(shared: &Shared) -> bool {
-    let mut ran = false;
+                // 2. Visit a task from each
+                for q in pending {
+                    let tasklet = {
+                        let mut queue = q.queue.lock().unwrap();
+                        let tasklet = queue.pop_front();
+                        if tasklet.is_some() {
+                            q.running_count.fetch_add(1, Ordering::SeqCst);
+                        }
+                        tasklet
+                    };
+                    let Some(tasklet) = tasklet else {
+                        continue;
+                    };
 
-    // 1. Gather buckets for us to visit this iteration
-    let pending: Vec<Arc<Queue>> = shared.tagged_queue.lock().unwrap().values().cloned().collect();
+                    shared.task_count.fetch_sub(1, Ordering::SeqCst);
 
-    // 2. Visit a task from each
-    for q in pending {
-        let tasklet = {
-            let mut queue = q.queue.lock().unwrap();
-            let tasklet = queue.pop_front();
-            if tasklet.is_some() {
-                q.running_count.fetch_add(1, Ordering::SeqCst);
-            }
-            tasklet
-        };
-        let Some(tasklet) = tasklet else {
-            continue;
-        };
-        ran = true;
+                    // gtests-core: C++ `try { ... } catch (...)`.
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(tasklet)) {
+                        Ok(()) => {
+                            // The function and its captures are gone before
+                            // unblocking `waitForEmpty`.
 
-        shared.task_count.fetch_sub(1, Ordering::SeqCst);
-
-        // gtests-core: C++ `try { ... } catch (...)`.
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(tasklet)) {
-            Ok(()) => {
-                // The function and its captures are gone before
-                // unblocking `waitForEmpty`.
-
-                if q.running_count.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    let queue = q.queue.lock().unwrap();
-                    if queue.is_empty() {
-                        q.cv.notify_all();
+                            if q.running_count.fetch_sub(1, Ordering::SeqCst) == 1 {
+                                let queue = q.queue.lock().unwrap();
+                                if queue.is_empty() {
+                                    q.cv.notify_all();
+                                }
+                            }
+                        }
+                        Err(payload) => {
+                            let queue = q.queue.lock().unwrap();
+                            let handler = shared.handler.lock().unwrap().clone();
+                            let payload = match &handler {
+                                Some(handler) => {
+                                    handler(payload);
+                                    None
+                                }
+                                None => Some(payload),
+                            };
+                            if q.running_count.fetch_sub(1, Ordering::SeqCst) == 1 && queue.is_empty() {
+                                q.cv.notify_all();
+                            }
+                            drop(queue);
+                            if let Some(payload) = payload {
+                                std::panic::resume_unwind(payload);
+                            }
+                        }
                     }
                 }
             }
-            Err(payload) => {
-                let queue = q.queue.lock().unwrap();
-                let handler = shared.handler.lock().unwrap().clone();
-                let payload = match &handler {
-                    Some(handler) => {
-                        handler(payload);
-                        None
-                    }
-                    None => Some(payload),
-                };
-                if q.running_count.fetch_sub(1, Ordering::SeqCst) == 1 && queue.is_empty() {
-                    q.cv.notify_all();
-                }
-                drop(queue);
-                if let Some(payload) = payload {
-                    std::panic::resume_unwind(payload);
-                }
-            }
-        }
-    }
-    ran
+        })
+        .expect("failed to spawn worker thread")
 }
 
 impl Scheduler for ThreadedScheduler {
@@ -212,11 +185,6 @@ impl Scheduler for ThreadedScheduler {
                 None => return,
             }
         };
-
-        // The single-threaded browser build has no workers to wait for: run
-        // the tag's tasks here.
-        #[cfg(all(target_family = "wasm", target_os = "unknown", not(target_feature = "atomics")))]
-        web::drain(&self.shared, &q);
 
         let mut queue = q.queue.lock().unwrap();
         while queue.len() + q.running_count.load(Ordering::SeqCst) != 0 {
@@ -313,77 +281,6 @@ impl Scheduler for SequencedScheduler {
     fn set_exception_handler(&self, handler: ExceptionHandler) {
         self.scheduler.set_exception_handler(handler);
     }
-}
-
-cfg_web! {
-    /// The cooperative scheduling of the browser build.
-    mod web {
-        use super::{OWNING_THREAD_POOL, Queue, Shared, visit_queues};
-        use mln_util::time::Instant;
-        use std::sync::atomic::Ordering;
-        use std::sync::{Arc, Mutex, Weak};
-
-        /// Every scheduler's queues, for `run_background_tasks`.
-        static SCHEDULERS: Mutex<Vec<Weak<Shared>>> = Mutex::new(Vec::new());
-
-        pub(super) fn register(shared: &Arc<Shared>) {
-            let mut schedulers = SCHEDULERS.lock().unwrap();
-            schedulers.retain(|s| s.strong_count() > 0);
-            schedulers.push(Arc::downgrade(shared));
-        }
-
-        fn live() -> Vec<Arc<Shared>> {
-            SCHEDULERS.lock().unwrap().iter().filter_map(Weak::upgrade).collect()
-        }
-
-        /// Runs `f` as a task of `shared`'s pool (`owningThreadPool`).
-        fn as_owner<R>(shared: &Shared, f: impl FnOnce() -> R) -> R {
-            let previous = OWNING_THREAD_POOL.with(|p| p.replace(shared as *const Shared as usize));
-            let result = f();
-            OWNING_THREAD_POOL.with(|p| p.set(previous));
-            result
-        }
-
-        /// Runs `q`'s tasks until it is empty (`waitForEmpty`).
-        pub(super) fn drain(shared: &Shared, q: &Arc<Queue>) {
-            loop {
-                let Some(task) = q.queue.lock().unwrap().pop_front() else {
-                    return;
-                };
-                shared.task_count.fetch_sub(1, Ordering::SeqCst);
-                q.running_count.fetch_add(1, Ordering::SeqCst);
-                as_owner(shared, task);
-                q.running_count.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-
-        /// Runs scheduled tasks in rounds, one per tagged queue of each
-        /// scheduler, until none are left or `deadline` passed. Returns
-        /// whether tasks remain.
-        pub fn run_background_tasks(deadline: Instant) -> bool {
-            loop {
-                let mut ran = false;
-                for shared in live() {
-                    if shared.task_count.load(Ordering::SeqCst) != 0 {
-                        ran |= as_owner(&shared, || visit_queues(&shared));
-                    }
-                    if Instant::now() >= deadline {
-                        return has_background_tasks();
-                    }
-                }
-                if !ran {
-                    return false;
-                }
-            }
-        }
-
-        /// Whether any scheduler has tasks waiting.
-        pub fn has_background_tasks() -> bool {
-            live().iter().any(|shared| shared.task_count.load(Ordering::SeqCst) != 0)
-        }
-    }
-
-    pub use web::{has_background_tasks, run_background_tasks};
 }
 
 #[cfg(test)]

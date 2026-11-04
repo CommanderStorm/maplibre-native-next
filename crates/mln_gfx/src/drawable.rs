@@ -28,7 +28,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
-use mln_util::time::Instant;
+use std::time::Instant;
 
 pub type DrawPriority = i64;
 

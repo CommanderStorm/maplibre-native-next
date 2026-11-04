@@ -36,8 +36,7 @@ use mln_util::size::Size;
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use mln_util::time::Instant;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// `maxConsecutiveErrors`
 const MAX_CONSECUTIVE_ERRORS: i32 = 3;
