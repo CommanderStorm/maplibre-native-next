@@ -23,8 +23,21 @@ env:
   MAPLIBRE_NATIVE_REF: ef5c691552b1ba7d407762d35f358e1d67839e0a
 
 jobs:
+  # All tests plus the full shared C++ render suite (a manual target), on
+  # Linux (wgpu renders through Vulkan/lavapipe) and macOS (through Metal; the
+  # render suite picks manifests/macos-wgpu.json via the BUILD select). On
+  # macOS //difftest is left out: the C++ oracle comparisons are pinned to
+  # Linux x86-64 (PORTING.md), and it would build the whole C++ core.
   test:
-    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            targets: //... //tools/render-test:render_tests
+          - os: macos-15
+            targets: //crates/... //vendor/... //tools/... //tools/render-test:render_tests
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
@@ -37,10 +50,14 @@ jobs:
           ref: ${{ env.MAPLIBRE_NATIVE_REF }}
           path: maplibre-native
 
+      # On macOS only the test data (@maplibre//metrics) is used, but module
+      # resolution still needs vendor/maplibre-tile-spec (a
+      # local_path_override).
       - name: Fetch the C++ core's vendored submodules
         run: git -C maplibre-native submodule update --init --recursive --depth 1 --jobs 8 -- vendor
 
       - name: Install system packages
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -54,57 +71,15 @@ jobs:
           disk-cache: ${{ github.workflow }}
           repository-cache: true
 
-      # All tests, plus the full shared C++ render suite (a manual target).
       - name: Test
         working-directory: maplibre-native-next
-        run: bazel test --config=ci //... //tools/render-test:render_tests
+        run: bazel test --config=ci ${{ matrix.targets }}
 
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: testlogs
-          path: maplibre-native-next/bazel-testlogs/**/test.log
-          if-no-files-found: ignore
-
-  # The same tests on macOS, where wgpu renders through Metal (the render
-  # suite uses manifests/macos-wgpu.json via the BUILD select). //difftest is
-  # left out: the C++ oracle comparisons are pinned to Linux x86-64
-  # (PORTING.md), and it would build the whole C++ core.
-  test-macos:
-    runs-on: macos-15
-    timeout-minutes: 240
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          path: maplibre-native-next
-
-      - uses: actions/checkout@v5
-        with:
-          repository: ${{ env.MAPLIBRE_NATIVE_REPOSITORY }}
-          ref: ${{ env.MAPLIBRE_NATIVE_REF }}
-          path: maplibre-native
-
-      # Only the test data (@maplibre//metrics) is used, but module resolution
-      # needs vendor/maplibre-tile-spec (a local_path_override).
-      - name: Fetch the C++ core's vendored submodules
-        run: git -C maplibre-native submodule update --init --recursive --depth 1 --jobs 8 -- vendor
-
-      - uses: bazel-contrib/setup-bazel@0.19.1
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
-          repository-cache: true
-
-      - name: Test
-        working-directory: maplibre-native-next
-        run: bazel test --config=ci //crates/... //vendor/... //tools/... //tools/render-test:render_tests
-
-      - name: Upload test logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: testlogs-macos
+          name: testlogs-${{ runner.os }}
           path: maplibre-native-next/bazel-testlogs/**/test.log
           if-no-files-found: ignore
 
