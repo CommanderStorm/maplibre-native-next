@@ -33,10 +33,25 @@ jobs:
 
       # The threaded module rebuilds std with atomics: rust-src.
       - name: Install Rust
+        id: rust
         run: |
           rustup toolchain install stable --profile minimal --no-self-update \
             --target wasm32-unknown-unknown --component rust-src
           rustup default stable
+          echo "version=$(rustc --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      # The crates.io downloads and both modules' builds (target/web/single and
+      # target/web/threads, std included). Cargo then rebuilds only the port;
+      # a new Rust version starts over.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target/web
+          key: release-web-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('platform/web/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            release-web-${{ runner.os }}-${{ steps.rust.outputs.version }}-${{ hashFiles('platform/web/Cargo.lock') }}-
+            release-web-${{ runner.os }}-${{ steps.rust.outputs.version }}-
 
       # The CLI must be the version platform/web/Cargo.toml pins.
       - name: Install wasm-bindgen
