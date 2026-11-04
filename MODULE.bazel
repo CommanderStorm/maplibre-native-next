@@ -23,11 +23,16 @@ local_path_override(
     path = "../maplibre-native",
 )
 
-# Overrides declared by a non-root module are ignored, so repeat the ones from
-# ../maplibre-native/MODULE.bazel that the core build needs.
-local_path_override(
+# Overrides declared by a non-root module are ignored, so the
+# maplibre-tile-spec override from ../maplibre-native/MODULE.bazel must be
+# repeated here. Bazel fetches the commit the C++ repo's submodule pins
+# straight from GitHub, so the vendor/maplibre-tile-spec submodule never has
+# to be checked out (mlt_cpp needs only the in-tree cpp/vendor/fastpfor,
+# none of that repo's own submodules).
+git_override(
     module_name = "maplibre-tile-spec",
-    path = "../maplibre-native/vendor/maplibre-tile-spec",
+    remote = "https://github.com/maplibre/maplibre-tile-spec.git",
+    commit = "751ebb1837e4fd03c9074b91fce24727013c1868",
 )
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
@@ -116,8 +121,9 @@ crate.spec(
 )
 
 # MLT decoding: the Rust implementation of the MapLibre Tile spec, instead of
-# porting the C++ decoder (vendor/maplibre-tile-spec/cpp). //difftest/tile
-# compares it with the C++ decoder.
+# porting the C++ decoder (vendor/maplibre-tile-spec/cpp). Assumed correct
+# (user decision, 2026-11-04); the differential test against the C++ decoder
+# (//difftest/mlt) was removed with that decision.
 crate.spec(
     package = "mlt-core",
     version = "0.22",
