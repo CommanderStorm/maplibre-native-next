@@ -191,7 +191,7 @@ mod transport {
     use crate::response::{Error, Reason};
     use mln_util::chrono::rfc1123;
     use std::net::SocketAddr;
-    use std::sync::mpsc;
+    use std::sync::{Arc, mpsc};
     use std::time::Duration;
     use ureq::unversioned::resolver::{DefaultResolver, Resolver};
     use ureq::unversioned::transport::{
@@ -211,12 +211,14 @@ mod transport {
     /// with the resolver's first, and each attempt gets a head start of
     /// `HAPPY_EYEBALLS_DELAY` (or until it fails) before the next one starts
     /// alongside it. The first connection wins; the others are closed when
-    /// they finish. Each attempt is ureq's own TcpConnector on one address,
-    /// on its own thread.
-    #[derive(Debug, Default)]
-    struct HappyEyeballsConnector;
+    /// they finish. Each attempt is `per_address` (ureq's own TcpConnector,
+    /// or a test's) on one address, on its own thread.
+    #[derive(Debug)]
+    struct HappyEyeballsConnector<A> {
+        per_address: Arc<A>,
+    }
 
-    impl<In: UreqTransport> Connector<In> for HappyEyeballsConnector {
+    impl<In: UreqTransport, A: Connector> Connector<In> for HappyEyeballsConnector<A> {
         type Out = Either<In, Box<dyn UreqTransport>>;
 
         fn connect(
@@ -224,13 +226,14 @@ mod transport {
             details: &ConnectionDetails,
             chained: Option<In>,
         ) -> Result<Option<Self::Out>, ureq::Error> {
-            if chained.is_some() || details.addrs.len() < 2 {
-                // A CONNECT proxy's tunnel, or nothing to race.
-                let transport = TcpConnector::default().connect(details, chained)?;
-                return Ok(transport.map(|transport| match transport {
-                    Either::A(chained) => Either::A(chained),
-                    Either::B(tcp) => Either::B(Box::new(tcp) as Box<dyn UreqTransport>),
-                }));
+            if let Some(chained) = chained {
+                // A CONNECT proxy's tunnel.
+                return Ok(Some(Either::A(chained)));
+            }
+            if details.addrs.len() < 2 {
+                // Nothing to race.
+                let transport = self.per_address.connect(details, None)?;
+                return Ok(transport.map(|transport| Either::B(Box::new(transport) as Box<dyn UreqTransport>)));
             }
 
             let (first, second): (Vec<SocketAddr>, Vec<SocketAddr>) = details
@@ -247,7 +250,7 @@ mod transport {
             let mut last_error = None;
             loop {
                 if started < addrs.len() {
-                    start_attempt(details, addrs[started], sender.clone())?;
+                    start_attempt(&self.per_address, details, addrs[started], sender.clone())?;
                     started += 1;
                     running += 1;
                 }
@@ -271,10 +274,11 @@ mod transport {
         }
     }
 
-    /// One connection attempt of `HappyEyeballsConnector`: ureq's
-    /// TcpConnector on `addr` with the rest of `details`, on a thread that
-    /// sends the result to `sender`.
-    fn start_attempt(
+    /// One connection attempt of `HappyEyeballsConnector`: `per_address` on
+    /// `addr` with the rest of `details`, on a thread that sends the result
+    /// to `sender`.
+    fn start_attempt<A: Connector>(
+        per_address: &Arc<A>,
         details: &ConnectionDetails,
         addr: SocketAddr,
         sender: mpsc::Sender<Result<Box<dyn UreqTransport>, ureq::Error>>,
@@ -287,6 +291,7 @@ mod transport {
         let current_time = details.current_time.clone();
         let run_connector = details.run_connector.clone();
         let register_shutdown = details.register_shutdown.clone();
+        let per_address = per_address.clone();
         std::thread::Builder::new()
             .name("HTTPFileSource connect".to_owned())
             .spawn(move || {
@@ -306,8 +311,8 @@ mod transport {
                     run_connector,
                     register_shutdown,
                 };
-                let result = TcpConnector::default()
-                    .connect(&details, None::<()>)
+                let result = per_address
+                    .connect(&details, None)
                     .and_then(|transport| transport.ok_or(ureq::Error::ConnectionFailed))
                     .map(|transport| Box::new(transport) as Box<dyn UreqTransport>);
                 // After another attempt won, nobody listens: the
@@ -338,6 +343,11 @@ mod transport {
 
     impl Transport {
         pub fn new() -> Self {
+            Self::with_parts(TcpConnector::default(), DefaultResolver::default())
+        }
+
+        /// `new` with another per-address connector and resolver (tests).
+        fn with_parts(per_address: impl Connector, resolver: impl Resolver) -> Self {
             let config = ureq::Agent::config_builder()
                 .http_status_as_error(false)
                 .user_agent("MapLibreNative/1.0")
@@ -347,9 +357,11 @@ mod transport {
             // whose features are off).
             let connector = ()
                 .chain(ConnectProxyConnector::default())
-                .chain(HappyEyeballsConnector)
+                .chain(HappyEyeballsConnector {
+                    per_address: Arc::new(per_address),
+                })
                 .chain(RustlsConnector::default());
-            let agent = ureq::Agent::with_parts(config, connector, DefaultResolver::default());
+            let agent = ureq::Agent::with_parts(config, connector, resolver);
             Transport { agent }
         }
 
@@ -381,6 +393,107 @@ mod transport {
                 Ok(Vec::new())
             };
             Ok(Transfer { status, headers, body })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Mutex;
+        use std::time::Instant;
+        use ureq::config::Config;
+        use ureq::http::Uri;
+        use ureq::unversioned::resolver::ResolvedSocketAddrs;
+        use ureq::unversioned::transport::NextTimeout;
+
+        /// Resolves every host to `addrs`, in order.
+        #[derive(Debug)]
+        struct FixedResolver(Vec<SocketAddr>);
+
+        impl Resolver for FixedResolver {
+            fn resolve(
+                &self,
+                _uri: &Uri,
+                _config: &Config,
+                _timeout: NextTimeout,
+            ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+                let mut addrs = self.empty();
+                for addr in &self.0 {
+                    addrs.push(*addr);
+                }
+                Ok(addrs)
+            }
+        }
+
+        /// TcpConnector, except that a connect to one of `dropped` hangs as
+        /// for a host that drops the SYN. Records the addresses tried.
+        #[derive(Debug)]
+        struct DroppingConnector {
+            dropped: Vec<SocketAddr>,
+            attempts: Arc<Mutex<Vec<SocketAddr>>>,
+        }
+
+        impl Connector for DroppingConnector {
+            type Out = Box<dyn UreqTransport>;
+
+            fn connect(
+                &self,
+                details: &ConnectionDetails,
+                _chained: Option<()>,
+            ) -> Result<Option<Self::Out>, ureq::Error> {
+                let addr = details.addrs[0];
+                self.attempts.lock().unwrap().push(addr);
+                if self.dropped.contains(&addr) {
+                    std::thread::sleep(Duration::from_secs(60));
+                    return Err(ureq::Error::ConnectionFailed);
+                }
+                let transport = TcpConnector::default().connect(details, None::<()>)?;
+                Ok(transport.map(|transport| Box::new(transport) as Box<dyn UreqTransport>))
+            }
+        }
+
+        /// mapeak.com resolved to an IPv6 address that drops packets, then
+        /// an IPv4 one: each new connection waited for the OS connect
+        /// timeout (75 s on macOS) before trying the IPv4 address.
+        #[test]
+        fn falls_back_from_an_address_that_drops_connects() {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let server = listener.local_addr().unwrap();
+            std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).unwrap();
+                    if read == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
+            });
+
+            let dropped: Vec<SocketAddr> =
+                vec!["[2001:db8::1]:80".parse().unwrap(), "[2001:db8::2]:80".parse().unwrap()];
+            let attempts = Arc::new(Mutex::new(Vec::new()));
+            let transport = Transport::with_parts(
+                DroppingConnector {
+                    dropped: dropped.clone(),
+                    attempts: attempts.clone(),
+                },
+                FixedResolver(vec![dropped[0], dropped[1], server]),
+            );
+
+            let started = Instant::now();
+            let transfer = transport.transfer(&Resource::style("http://mapeak.test/style.json")).unwrap();
+            assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+            assert_eq!(200, transfer.status);
+            assert_eq!(b"ok".to_vec(), transfer.body.unwrap());
+            // The families alternate: the IPv4 address goes second, after
+            // HAPPY_EYEBALLS_DELAY.
+            assert_eq!([dropped[0], server], attempts.lock().unwrap()[..2]);
         }
     }
 }
