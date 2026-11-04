@@ -154,7 +154,11 @@ std::string getCurrentThreadName() {
 
 void setCurrentThreadName(const std::string& name) {
     if (name.size() < 16) {
+#if defined(__APPLE__)
+        pthread_setname_np(name.c_str());  // macOS: current thread only
+#else
         pthread_setname_np(pthread_self(), name.c_str());
+#endif
     }
 }
 

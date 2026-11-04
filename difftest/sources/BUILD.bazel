@@ -10,6 +10,9 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 # sources_difftest.rs drives it over stdin/stdout.
 cc_binary(
     name = "sources_oracle",
+    # The oracle links the Linux platform (mbgl-default + platform/linux,
+    # GLX), so this comparison builds and runs on Linux only.
+    target_compatible_with = ["@platforms//os:linux"],
     srcs = ["oracle_main.cpp"],
     # mbgl-core is built without RTTI; FakeTile derives from its classes.
     copts = [
@@ -29,6 +32,9 @@ cc_binary(
 
 rust_test(
     name = "sources_difftest",
+    # The oracle links the Linux platform (mbgl-default + platform/linux,
+    # GLX), so this comparison builds and runs on Linux only.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["sources_difftest.rs"],
     data = [

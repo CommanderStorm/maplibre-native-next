@@ -22,11 +22,14 @@ cc_library(
 
 rust_test(
     name = "libstdcxx_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["libstdcxx_difftest.rs"],
+    link_deps = [":libstdcxx_reference"],
     deps = [
         ":geometry_difftest_support",
-        ":libstdcxx_reference",
         "//vendor/libstdcxx",
         "@next_crates//:proptest",
     ],
@@ -44,10 +47,14 @@ cc_library(
 
 rust_test(
     name = "earcut_difftest",
+    # The generated polygons hit float differences in the arm64 C++ (FMA
+    # contraction), so the comparison is pinned to the Linux oracle;
+    # earcut_fixtures_difftest stays cross-platform.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["earcut_difftest.rs"],
+    link_deps = [":earcut_reference"],
     deps = [
-        ":earcut_reference",
         ":geometry_difftest_support",
         "//vendor/earcut",
         "//vendor/maplibre-native-base:maplibre_native_base",
@@ -60,8 +67,8 @@ rust_test(
     size = "medium",
     srcs = ["earcut_fixtures_difftest.rs"],
     data = ["@maplibre//vendor:earcut_fixtures"],
+    link_deps = [":earcut_reference"],
     deps = [
-        ":earcut_reference",
         "//vendor/earcut",
         "//vendor/earcut:earcut_test_fixtures",
         "//vendor/maplibre-native-base:maplibre_native_base",
@@ -111,6 +118,9 @@ rust_test(
 
 rust_test(
     name = "geojson_vt_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["geojson_vt_difftest.rs"],
     deps = [
@@ -139,9 +149,9 @@ rust_test(
     name = "kdbush_difftest",
     size = "medium",
     srcs = ["kdbush_difftest.rs"],
+    link_deps = [":supercluster_reference"],
     deps = [
         ":geometry_difftest_support",
-        ":supercluster_reference",
         "//vendor/kdbush",
         "@next_crates//:proptest",
         "@next_crates//:serde_json",
@@ -150,12 +160,15 @@ rust_test(
 
 rust_test(
     name = "supercluster_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["supercluster_difftest.rs"],
+    link_deps = [":supercluster_reference"],
     deps = [
         ":geojson_canonical",
         ":geometry_difftest_support",
-        ":supercluster_reference",
         "//vendor/geojson",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "//vendor/supercluster",
@@ -178,11 +191,14 @@ cc_library(
 
 rust_test(
     name = "polylabel_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["polylabel_difftest.rs"],
+    link_deps = [":misc_reference"],
     deps = [
         ":geometry_difftest_support",
-        ":misc_reference",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "//vendor/polylabel",
         "@next_crates//:proptest",
@@ -191,11 +207,14 @@ rust_test(
 
 rust_test(
     name = "cheap_ruler_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["cheap_ruler_difftest.rs"],
+    link_deps = [":misc_reference"],
     deps = [
         ":geometry_difftest_support",
-        ":misc_reference",
         "//vendor/cheap-ruler:cheap_ruler",
         "//vendor/maplibre-native-base:maplibre_native_base",
         "@next_crates//:proptest",
@@ -207,9 +226,9 @@ rust_test(
     name = "shelf_pack_difftest",
     size = "medium",
     srcs = ["shelf_pack_difftest.rs"],
+    link_deps = [":misc_reference"],
     deps = [
         ":geometry_difftest_support",
-        ":misc_reference",
         "//vendor/shelf-pack:shelf_pack",
         "@next_crates//:proptest",
         "@next_crates//:serde_json",
@@ -219,6 +238,9 @@ rust_test(
 # The libraries' own fixtures (earcut's: earcut_fixtures_difftest).
 rust_test(
     name = "fixtures_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["fixtures_difftest.rs"],
     data = [
@@ -228,11 +250,13 @@ rust_test(
         "@maplibre//vendor:polylabel_fixtures",
         "@maplibre//vendor:supercluster_fixtures",
     ],
+    link_deps = [
+        ":misc_reference",
+        ":supercluster_reference",
+    ],
     deps = [
         ":geojson_canonical",
         ":geometry_difftest_support",
-        ":misc_reference",
-        ":supercluster_reference",
         "//vendor/geojson",
         "//vendor/geojson-vt:geojson_vt",
         "//vendor/kdbush",

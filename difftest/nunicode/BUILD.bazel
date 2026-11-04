@@ -16,8 +16,8 @@ rust_test(
     size = "medium",
     srcs = ["nunicode_difftest.rs"],
     data = ["@maplibre//metrics:expression-test-files"],
+    link_deps = [":reference"],
     deps = [
-        ":reference",
         "//vendor/nunicode",
         "@next_crates//:proptest",
         "@next_crates//:serde_json",

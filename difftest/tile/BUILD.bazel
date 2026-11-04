@@ -47,6 +47,10 @@ TILE_DATA = [
 
 rust_test(
     name = "tile_difftest",
+    # The comparison is pinned to the Linux oracle (glibc libm/strtod,
+    # libstdc++ hashing, x86-64 conversions, FMA contraction): the C++
+    # itself behaves differently on macOS/arm64.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "large",
     srcs = [
         "dump.rs",
@@ -70,6 +74,10 @@ rust_test(
 
 rust_test(
     name = "geometry_difftest",
+    # The comparison is pinned to the Linux oracle (glibc libm/strtod,
+    # libstdc++ hashing, x86-64 conversions, FMA contraction): the C++
+    # itself behaves differently on macOS/arm64.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = [
         "dump.rs",

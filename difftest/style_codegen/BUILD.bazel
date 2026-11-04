@@ -47,8 +47,8 @@ rust_test(
         "style_codegen_difftest.rs",
     ],
     crate_root = "style_codegen_difftest.rs",
+    link_deps = [":reference"],
     deps = [
-        ":reference",
         "//crates/mln_conversion",
         "//crates/mln_style",
         "//crates/mln_util",

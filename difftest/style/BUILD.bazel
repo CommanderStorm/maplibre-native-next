@@ -24,11 +24,15 @@ cc_library(
 
 rust_test(
     name = "style_difftest",
+    # The comparison is pinned to the Linux oracle (glibc libm/strtod,
+    # libstdc++ hashing, x86-64 conversions, FMA contraction): the C++
+    # itself behaves differently on macOS/arm64.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "medium",
     srcs = ["style_difftest.rs"],
     data = ["@maplibre//metrics:render-test-files"],
+    link_deps = [":reference"],
     deps = [
-        ":reference",
         "//crates/mln_style",
         "//crates/mln_style_types",
         "//crates/mln_util",

@@ -37,10 +37,10 @@ port, not a redesign:
   `local_path_override(path = "../maplibre-native")`, so tests see uncommitted
   C++ changes. The reference checkout is the `maplibre-native-next-support`
   branch of `louwers/maplibre-native` (CI pins its tip, currently
-  `ef5c691552b1ba7d407762d35f358e1d67839e0a`): upstream
+  `4e03abe94cf562b10562c528578d109c7273694d`): upstream
   `maplibre/maplibre-native` commit
-  `8e144d0eca082e8350335b2172a6dfdc939b9cef` plus one commit with the
-  dependency changes below.
+  `8e144d0eca082e8350335b2172a6dfdc939b9cef` plus the dependency changes
+  below (and a `cc_static_library` load() that Bazel 9 needs).
 - Third-party crates are `crate.spec`s in `MODULE.bazel` (`@next_crates`).
   Crates in this repo are plain `rust_library` targets, so adding one never
   touches shared files.
@@ -125,7 +125,7 @@ per pair when we get there, from the measured edges.
 | freetype (`text/freetype.cpp`: face loading, cmaps, rasterization) | the needed parts of FreeType 2.13 ported (face loading, cmap formats 0-14, charmap selection, the ftgrays rasterizer) plus hb-ft; outlines and hinting via `skrifa` | cmap lookups identical (19.1M); SDF step bit-identical; bitmaps 68% identical, 1.1% of pixels differ (skrifa vs. FreeType hinting) |
 | csscolorparser, rapidjson dtoa, pixelmatch, earcut, kdbush, supercluster, geojson-vt, polylabel, wagyu | ported | exact |
 | earcut: the `earcut` crate (georust) instead? | evaluated, rejected | `//difftest/earcut_crate`: identical without holes, but with holes only 25% identical and 1.1% of polygons cover a different area (earcut.js 3.x hole bridging); the port stays |
-| maplibre-tile-spec C++ decoder (MLT) | the `mlt-core` crate (user decision) | `//difftest/mlt` against the C++ decoder |
+| maplibre-tile-spec C++ decoder (MLT) | the `mlt-core` crate (user decision) | assumed correct (user decision, 2026-11-04); the difftest against the C++ decoder was removed, and `MODULE.bazel` fetches `maplibre-tile-spec` (which mbgl-core links) from GitHub, so that vendor submodule is never needed |
 | protozero + vector-tile | hand-rolled MVT reader | exact |
 | sqlite | `rusqlite` (same engine) | exact; offline databases interchangeable both ways |
 | nunicode (collation, case mapping) | ported (`//vendor/nunicode`, tables generated from the vendored sources) | exact: every code point compared against C++ |
@@ -140,8 +140,14 @@ per pair when we get there, from the measured edges.
    (POD and JSON strings across the boundary); a `rust_test` calls both
    implementations on proptest-generated and edge-case inputs and requires
    identical results. Comparisons are bit-exact; any NaN equals any NaN. They
-   run on Linux x86-64 at `-c fastbuild` and `--config=oracle-opt`. On arm64,
-   clang may contract `a*b+c` into an FMA, so a ULP tolerance may be needed there.
+   run on Linux x86-64 at `-c fastbuild` and `--config=oracle-opt`. A
+   comparison that is pinned to the Linux oracle (glibc libm/strtod,
+   libstdc++ ordering and hashing, x86-64 conversions, arm64 FMA contraction,
+   or an oracle linking platform/linux) carries
+   `target_compatible_with = ["@platforms//os:linux"]`, so wildcard runs skip
+   it elsewhere; the rest (the text stack, MVT, geo, string, expression
+   types, the vendored geometry fixtures) also run and pass on macOS/arm64,
+   where `.bazelrc` builds the oracle with `-Wno-error`.
 2. **Shared data suites**, read in place from `@maplibre//metrics`:
    - render tests (`integration/render-tests`, 184 groups) and query tests:
      same `style.json` files, fixtures, `expected*.png` and pixelmatch metric

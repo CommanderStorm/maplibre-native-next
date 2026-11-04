@@ -87,8 +87,8 @@ cc_library(
 rust_test(
     name = "util_difftest",
     srcs = ["util_difftest.rs"],
+    link_deps = [":reference"],
     deps = [
-        ":reference",
         "//crates/mln_util",
         "@next_crates//:proptest",
     ],
@@ -104,6 +104,12 @@ rust_test(
 - The oracle is built at `-c fastbuild`, so C++ `assert`s are live. Don't
   generate inputs that violate a C++ precondition; note the case instead.
 - Also run them once with `--config=oracle-opt`.
+- A comparison pinned to the Linux oracle (glibc libm/strtod, libstdc++
+  ordering and hashing, x86-64 conversions, arm64 FMA contraction, or an
+  oracle linking `@maplibre//platform/linux`) gets
+  `target_compatible_with = ["@platforms//os:linux"]`, so wildcard runs skip
+  it on macOS; leave genuinely cross-platform comparisons unrestricted — they
+  run on macOS CI too.
 
 ## Ownership
 

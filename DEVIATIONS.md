@@ -552,9 +552,12 @@ account for it.
   (src/mln/tile/vector_mlt_tile_data.cpp on vendor/maplibre-tile-spec/cpp).
   `crates/mln_tile/src/mlt.rs` fills the C++ decoder's output model from
   mlt-core; `vector_mlt_tile_data.rs` ports the glue. On every fixture tile
-  both decoders read, `//difftest/mlt` finds no difference (layers, types,
-  ids, property variants and bits, scaled geometry, triangles, log). Known
-  differences:
+  both decoders read, the MLT difftest found no difference (layers, types,
+  ids, property variants and bits, scaled geometry, triangles, log).
+  `//difftest/mlt` was removed 2026-11-04 (user decision: mlt-core is assumed
+  correct; the measurements here are from its last run, and mbgl-core's
+  maplibre-tile-spec module is now fetched from GitHub by `MODULE.bazel`
+  instead of the vendor submodule). Known differences:
   1. *DOUBLE columns stored as 4-byte floats* (fixtures `14-4357-6245`,
      `counties-7-37-48`, `mapbox.mapbox-streets-v7/4-4-7`, `4-5-7` and their
      copies in `metrics/cache-style.db`): each has one optional DOUBLE
@@ -630,11 +633,11 @@ account for it.
   the same tiles in metrics/cache-style.db) store a DOUBLE column as 4-byte
   floats. The MLT spec defines DOUBLE as an 8-byte IEEE754 value; only the C++
   decoder's legacy path accepts them, and mlt-core rejects them. The port
-  stays spec compliant: `//difftest/mlt` ignores these tiles by name
-  (`NON_SPEC_TILES`) and fails on any other tile with the same pattern, and the
-  test documenting the C++ behaviour is `#[ignore]`d. To do (upstream,
-  maplibre-native): re-encode these fixtures with real doubles. No render or
-  query test uses them.
+  stays spec compliant: the MLT difftest (removed 2026-11-04, see the [mlt]
+  entry above) ignored these tiles by name (`NON_SPEC_TILES`) and failed on
+  any other tile with the same pattern. To do (upstream, maplibre-native):
+  re-encode these fixtures with real doubles. No render or query test uses
+  them.
 - **[sources] Sources and tiles are handles to `Rc`'d state** (style/source.cpp,
   sources/*, tile/tile.cpp, geometry_tile.cpp, renderer/render_source.cpp).
   C++ sources, tiles and render sources are reached from asynchronous

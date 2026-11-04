@@ -7,6 +7,9 @@ load("@rules_rust//rust:defs.bzl", "rust_test")
 
 cc_library(
     name = "reference",
+    # The oracle links the Linux platform (mbgl-default + platform/linux,
+    # GLX), so this comparison builds and runs on Linux only.
+    target_compatible_with = ["@platforms//os:linux"],
     srcs = ["reference.cpp"],
     copts = [
         "-std=c++20",
@@ -24,6 +27,9 @@ cc_library(
 # vendored SQLite and rusqlite's bundled one can't link into one binary.
 cc_binary(
     name = "storage_oracle",
+    # The oracle links the Linux platform (mbgl-default + platform/linux,
+    # GLX), so this comparison builds and runs on Linux only.
+    target_compatible_with = ["@platforms//os:linux"],
     srcs = ["oracle_main.cpp"],
     copts = ["-std=c++20"],
     # Dynamic mode, as cc_test links the C++ test binaries (mbgl-core and
@@ -37,6 +43,9 @@ cc_binary(
 
 rust_test(
     name = "storage_difftest",
+    # The oracle links the Linux platform (mbgl-default + platform/linux,
+    # GLX), so this comparison builds and runs on Linux only.
+    target_compatible_with = ["@platforms//os:linux"],
     size = "large",
     srcs = ["storage_difftest.rs"],
     data = [

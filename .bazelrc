@@ -8,6 +8,11 @@ build:linux --repo_env=CXX=g++
 
 test --test_output=errors
 
+# The C++ oracle sets -Werror (bazel/flags.bzl) and newer Apple clang warns
+# where upstream's compilers do not (e.g. -Wthread-safety-analysis in
+# tile_loader_impl.hpp); keep upstream's warnings non-fatal here.
+build:macos --per_file_copt=external/maplibre.*@-Wno-error
+
 # Several agents/people share one Bazel server on a machine that also runs
 # other heavy work; leave headroom for it.
 build --local_resources=memory=HOST_RAM*.5

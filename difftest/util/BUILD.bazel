@@ -11,8 +11,12 @@ cc_library(
     # The tests link only what these util functions need from mbgl-core;
     # without section GC the C++ link (experimental_use_cc_common_link)
     # reports the platform symbols (LayerManager, RunLoop, ...) that unused
-    # code in the pulled-in objects references.
-    linkopts = ["-Wl,--gc-sections"],
+    # code in the pulled-in objects references. Apple's ld has no
+    # --gc-sections; rustc already passes its -dead_strip.
+    linkopts = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["-Wl,--gc-sections"],
+    }),
     deps = ["@maplibre//:mbgl-core"],
 )
 
@@ -28,6 +32,13 @@ rust_library(
         name = name,
         size = "medium",
         srcs = [name + ".rs"],
+        # Most comparisons are pinned to the Linux oracle (glibc libm/strtod,
+        # x86-64 conversions, FMA contraction): the C++ itself behaves
+        # differently on macOS/arm64. string and geo match there too.
+        target_compatible_with = [] if name in [
+            "string_difftest",
+            "geo_difftest",
+        ] else ["@platforms//os:linux"],
         deps = [
             ":reference_ffi",
             "//crates/mln_math",

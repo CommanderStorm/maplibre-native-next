@@ -12,9 +12,12 @@ cc_library(
 
 rust_test(
     name = "pixelmatch_difftest",
+    # The comparison is pinned to the Linux oracle (libstdc++ order, glibc
+    # libm, FMA contraction): the C++ itself behaves differently on macOS.
+    target_compatible_with = ["@platforms//os:linux"],
     srcs = ["pixelmatch_difftest.rs"],
+    link_deps = [":reference"],
     deps = [
-        ":reference",
         "//vendor/pixelmatch",
         "@next_crates//:proptest",
     ],

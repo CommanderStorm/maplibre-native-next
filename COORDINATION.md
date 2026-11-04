@@ -2999,3 +2999,27 @@ Append-only. One entry per message, newest last:
   Vulkan adapter): Mesa 26 on the ubuntu-26.04 runners renamed the lavapipe
   ICD to `lvp_icd.json`; `build:ci`'s `VK_DRIVER_FILES` now points there,
   matching the C++ repo's linux-ci.yml (#4805).
+- [coordinator] maplibre-tile-spec no longer needs its vendor submodule
+  anywhere: MODULE.bazel fetches the pinned commit from GitHub with a
+  git_override. //difftest/mlt removed (user decision: mlt-core is assumed
+  correct; its last measurements stay recorded in DEVIATIONS.md [mlt]).
+- [coordinator] rules_rust deprecation: cc_library oracles moved from `deps`
+  to `link_deps` in all difftest BUILD files (PORTING.md example updated).
+  The remaining analysis warnings come from crate.annotation-injected deps
+  (libz-sys, glfw-sys), which rules_rust 0.74 annotations cannot express as
+  link_deps yet.
+- [coordinator] CI runs the full `//... //tools/render-test:render_tests` on
+  both matrix OSes now (no per-OS target list). macOS: `brew install glfw` +
+  darwin linkopts on //third_party/glfw:system. The glfw app itself runs on
+  macOS (Cocoa + Metal); init_glfw no longer assumes Wayland/X11 off-Linux.
+  Fork pin bumped to 4e03abe94cf5 (adds the cc_static_library load() that
+  Bazel 9 requires in platform/linux).
+- [coordinator] Difftests on macOS: the C++ oracle now builds on macOS
+  (-Wno-error for external/maplibre in .bazelrc:macos; pthread_setname_np
+  shim fix; --gc-sections made Linux-only). 16 difftests pass on macOS/arm64
+  (text stack, MVT, geo, string, expression types, vendored geometry
+  fixtures); the 21 comparisons pinned to the Linux oracle carry
+  target_compatible_with linux and are skipped there (PORTING.md). The
+  platform/web wasm evaluation targets are tagged manual (machine-local
+  probe paths; getrandom/sqlite-wasm toolchain gaps), so //... is green on
+  both OSes: macOS 113 pass / 21 skipped / 0 fail.
