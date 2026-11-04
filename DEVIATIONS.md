@@ -708,9 +708,14 @@ account for it.
   transport errors carry ureq's message (C++: `curl_easy_strerror: buffer`),
   mapped to `Connection` for DNS/connect/timeout/IO errors, else `Other`;
   `Last-Modified`/`Expires` parse with the vendored parsedate (libcurl's
-  `curl_getdate` differs only after 2037). Status mapping, caching headers,
-  conditional requests and the user agent match C++. Not observable in the
-  app beyond error texts.
+  `curl_getdate` differs only after 2037). Connections race a host's
+  addresses with curl's Happy Eyeballs delay (200 ms), but in RFC 8305
+  order (families alternate, one new attempt per delay) where curl runs one
+  attempt per family at a time; ureq alone tries them one after the other,
+  so an IPv6 address that drops packets stalled each new connection for the
+  OS connect timeout. Status mapping, caching headers, conditional requests
+  and the user agent match C++. Not observable in the app beyond error
+  texts.
 - **[glfw] OnlineFileSource**: request sets are ordered by request id, not
   pointer; ResourceTransform is a TODO(port); `normalizeSourceURL`'s
   "You must provide API key" exception becomes an error response.

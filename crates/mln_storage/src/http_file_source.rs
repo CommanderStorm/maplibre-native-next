@@ -179,16 +179,143 @@ fn range_header(resource: &Resource) -> Option<String> {
 }
 
 /// curl through ureq: blocking transfers on the worker threads.
+///
+/// ureq connects to a host's addresses one after the other and waits for
+/// each, so a host whose first (IPv6) address drops packets stalls every new
+/// connection until the OS gives up (75 s on macOS). curl races them (Happy
+/// Eyeballs), so the agent's TCP step does too: see `HappyEyeballsConnector`.
 #[cfg(not(target_os = "emscripten"))]
 mod transport {
     use super::{Transfer, range_header};
     use crate::resource::Resource;
     use crate::response::{Error, Reason};
     use mln_util::chrono::rfc1123;
+    use std::net::SocketAddr;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use ureq::unversioned::resolver::{DefaultResolver, Resolver};
+    use ureq::unversioned::transport::{
+        ConnectProxyConnector, ConnectionDetails, Connector, Either, RustlsConnector, TcpConnector,
+        Transport as UreqTransport,
+    };
 
     /// The worker threads of a file source: as many as the online file
     /// source's default maximum of concurrent requests.
     pub const WORKERS: u32 = mln_util::constants::DEFAULT_MAXIMUM_CONCURRENT_REQUESTS;
+
+    /// curl's default `CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS`.
+    const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(200);
+
+    /// The TCP step of ureq's default connector chain with Happy Eyeballs
+    /// (RFC 8305): the addresses alternate between the families, starting
+    /// with the resolver's first, and each attempt gets a head start of
+    /// `HAPPY_EYEBALLS_DELAY` (or until it fails) before the next one starts
+    /// alongside it. The first connection wins; the others are closed when
+    /// they finish. Each attempt is ureq's own TcpConnector on one address,
+    /// on its own thread.
+    #[derive(Debug, Default)]
+    struct HappyEyeballsConnector;
+
+    impl<In: UreqTransport> Connector<In> for HappyEyeballsConnector {
+        type Out = Either<In, Box<dyn UreqTransport>>;
+
+        fn connect(
+            &self,
+            details: &ConnectionDetails,
+            chained: Option<In>,
+        ) -> Result<Option<Self::Out>, ureq::Error> {
+            if chained.is_some() || details.addrs.len() < 2 {
+                // A CONNECT proxy's tunnel, or nothing to race.
+                let transport = TcpConnector::default().connect(details, chained)?;
+                return Ok(transport.map(|transport| match transport {
+                    Either::A(chained) => Either::A(chained),
+                    Either::B(tcp) => Either::B(Box::new(tcp) as Box<dyn UreqTransport>),
+                }));
+            }
+
+            let (first, second): (Vec<SocketAddr>, Vec<SocketAddr>) = details
+                .addrs
+                .iter()
+                .partition(|addr| addr.is_ipv6() == details.addrs[0].is_ipv6());
+            let addrs: Vec<SocketAddr> = (0..first.len().max(second.len()))
+                .flat_map(|i| first.get(i).into_iter().chain(second.get(i)).copied())
+                .collect();
+
+            let (sender, receiver) = mpsc::channel();
+            let mut started = 0;
+            let mut running = 0;
+            let mut last_error = None;
+            loop {
+                if started < addrs.len() {
+                    start_attempt(details, addrs[started], sender.clone())?;
+                    started += 1;
+                    running += 1;
+                }
+                let result = if started < addrs.len() {
+                    match receiver.recv_timeout(HAPPY_EYEBALLS_DELAY) {
+                        Ok(result) => result,
+                        Err(_) => continue, // the next attempt's turn
+                    }
+                } else if running > 0 {
+                    // `sender` is still here, so this can't disconnect.
+                    receiver.recv().expect("happy eyeballs channel")
+                } else {
+                    return Err(last_error.unwrap_or(ureq::Error::ConnectionFailed));
+                };
+                running -= 1;
+                match result {
+                    Ok(transport) => return Ok(Some(Either::B(transport))),
+                    Err(error) => last_error = Some(error),
+                }
+            }
+        }
+    }
+
+    /// One connection attempt of `HappyEyeballsConnector`: ureq's
+    /// TcpConnector on `addr` with the rest of `details`, on a thread that
+    /// sends the result to `sender`.
+    fn start_attempt(
+        details: &ConnectionDetails,
+        addr: SocketAddr,
+        sender: mpsc::Sender<Result<Box<dyn UreqTransport>, ureq::Error>>,
+    ) -> Result<(), ureq::Error> {
+        let uri = details.uri.clone();
+        let config = details.config.clone();
+        let request_level = details.request_level;
+        let now = details.now;
+        let timeout = details.timeout;
+        let current_time = details.current_time.clone();
+        let run_connector = details.run_connector.clone();
+        let register_shutdown = details.register_shutdown.clone();
+        std::thread::Builder::new()
+            .name("HTTPFileSource connect".to_owned())
+            .spawn(move || {
+                // TcpConnector doesn't resolve; a resolver is only required.
+                let resolver = DefaultResolver::default();
+                let mut addrs = resolver.empty();
+                addrs.push(addr);
+                let details = ConnectionDetails {
+                    uri: &uri,
+                    addrs,
+                    config: &config,
+                    request_level,
+                    resolver: &resolver,
+                    now,
+                    timeout,
+                    current_time,
+                    run_connector,
+                    register_shutdown,
+                };
+                let result = TcpConnector::default()
+                    .connect(&details, None::<()>)
+                    .and_then(|transport| transport.ok_or(ureq::Error::ConnectionFailed))
+                    .map(|transport| Box::new(transport) as Box<dyn UreqTransport>);
+                // After another attempt won, nobody listens: the
+                // connection closes here.
+                let _ = sender.send(result);
+            })?;
+        Ok(())
+    }
 
     #[derive(Clone)]
     pub struct Transport {
@@ -211,11 +338,18 @@ mod transport {
 
     impl Transport {
         pub fn new() -> Self {
-            let agent = ureq::Agent::config_builder()
+            let config = ureq::Agent::config_builder()
                 .http_status_as_error(false)
                 .user_agent("MapLibreNative/1.0")
-                .build()
-                .into();
+                .build();
+            // ureq's DefaultConnector with HappyEyeballsConnector for its
+            // TcpConnector (and without the SOCKS and native-tls steps,
+            // whose features are off).
+            let connector = ()
+                .chain(ConnectProxyConnector::default())
+                .chain(HappyEyeballsConnector)
+                .chain(RustlsConnector::default());
+            let agent = ureq::Agent::with_parts(config, connector, DefaultResolver::default());
             Transport { agent }
         }
 
