@@ -62,6 +62,16 @@ jobs:
             | tar -xz -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
 
+      # build.sh runs wasm-opt when it's on PATH: it optimizes the modules and
+      # drops their function names, about 10% less to download. The version
+      # local builds use.
+      - name: Install binaryen
+        run: |
+          version=133
+          curl -sSfL "https://github.com/WebAssembly/binaryen/releases/download/version_$version/binaryen-version_$version-x86_64-linux.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_$version/bin" >> "$GITHUB_PATH"
+
       - name: Build
         run: platform/web/build.sh
 
