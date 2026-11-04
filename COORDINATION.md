@@ -3023,3 +3023,9 @@ Append-only. One entry per message, newest last:
   platform/web wasm evaluation targets are tagged manual (machine-local
   probe paths; getrandom/sqlite-wasm toolchain gaps), so //... is green on
   both OSes: macOS 113 pass / 21 skipped / 0 fail.
+- [ffi] Fix (b685b5e): mln_webgpu's headless and surface backends request the
+  WebGPU default limits lowered to the adapter's
+  (`Limits::default().or_worse_values_from(&adapter.limits())`). The iOS,
+  tvOS and visionOS simulators' Metal allows 15 inter-stage shader variables,
+  so `DeviceDescriptor::default()` failed to create a device there. Released
+  as 0.0.6 for maplibre-native-ffi's Apple XCFramework.
