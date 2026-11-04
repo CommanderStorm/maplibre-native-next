@@ -2995,3 +2995,7 @@ Append-only. One entry per message, newest last:
   WebGPU backend ignores it. `.bazelversion` 8.6.0 → 9.3.1 (user request;
   8.6.0 also hit a darwin generate-xml.sh segfault flake under parallel test
   load).
+- [coordinator] Linux CI GPU tests ("WebGPU: Command encoder unavailable", no
+  Vulkan adapter): Mesa 26 on the ubuntu-26.04 runners renamed the lavapipe
+  ICD to `lvp_icd.json`; `build:ci`'s `VK_DRIVER_FILES` now points there,
+  matching the C++ repo's linux-ci.yml (#4805).

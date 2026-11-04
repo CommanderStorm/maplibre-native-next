@@ -26,7 +26,9 @@ build:ci --repo_env=CXX=clang++
 build:ci --local_resources=memory=HOST_RAM*.8
 build:ci --local_resources=cpu=HOST_CPUS
 build:ci --test_tag_filters=-requires-network
-build:ci --test_env=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+# Mesa 26 (ubuntu-26.04 runners) renamed the lavapipe ICD from
+# lvp_icd.x86_64.json to lvp_icd.json (same as the C++ repo's linux-ci.yml).
+build:ci --test_env=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
 build:ci --keep_going
 
 try-import %workspace%/user.bazelrc
