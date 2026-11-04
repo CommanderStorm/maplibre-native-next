@@ -142,8 +142,13 @@ impl HeadlessBackend {
             }
         };
 
-        // Request device (blocking)
-        let (device, queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) {
+        // Request device (blocking), with the WebGPU default limits lowered to
+        // what the adapter supports: the Metal of the iOS, tvOS and visionOS
+        // simulators allows fewer inter-stage shader variables than they ask.
+        let required_limits = wgpu::Limits::default().or_worse_values_from(&adapter.limits());
+        let (device, queue) = match pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor { required_limits, ..Default::default() }),
+        ) {
             Ok(pair) => pair,
             Err(e) => {
                 eprintln!("WebGPU HeadlessBackend: Failed to create device: {e}");

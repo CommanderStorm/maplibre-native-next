@@ -474,9 +474,12 @@ impl SurfaceBackend {
             (wgpu::Features::empty(), wgpu::TextureFormat::Depth24PlusStencil8)
         };
 
+        // The WebGPU default limits, lowered to what the adapter supports, as
+        // the headless backend requests them.
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("MapLibre WebGPU Device"),
             required_features,
+            required_limits: wgpu::Limits::default().or_worse_values_from(&adapter.limits()),
             ..Default::default()
         }))
         .map_err(|e| format!("Failed to create WebGPU device: {e}"))?;
