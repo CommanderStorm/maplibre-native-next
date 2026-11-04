@@ -27,10 +27,25 @@ rust_library(
 
 TEST_DATA = [
     "manifests/linux-wgpu.json",
+    "manifests/macos-wgpu.json",
     "ignores/rust-port.json",
     "@maplibre//metrics:expectations-platform-macos",
     "@maplibre//metrics:render-test-files",
 ]
+
+# The manifest for the OS the suite runs on: the same wgpu renderer, but with
+# the C++ ignore list for that platform's backend added (platform-macos-webgpu
+# on macOS, where wgpu renders through Metal).
+MANIFEST_ARGS = select({
+    "@platforms//os:macos": [
+        "--manifestPath",
+        "tools/render-test/manifests/macos-wgpu.json",
+    ],
+    "//conditions:default": [
+        "--manifestPath",
+        "tools/render-test/manifests/linux-wgpu.json",
+    ],
+})
 
 rust_test(
     name = "render_test_unit_test",
@@ -48,11 +63,9 @@ rust_test(
     srcs = ["src/main.rs"],
     args = [
         "--self-check",
-        "--manifestPath",
-        "tools/render-test/manifests/linux-wgpu.json",
         "--filter",
         "/render-tests/",
-    ],
+    ] + MANIFEST_ARGS,
     crate_root = "src/main.rs",
     data = TEST_DATA,
     use_libtest_harness = False,
@@ -135,11 +148,9 @@ rust_test(
     name = "m1_render_tests",
     srcs = ["src/main.rs"],
     args = [
-        "--manifestPath",
-        "tools/render-test/manifests/linux-wgpu.json",
         "--filter",
         M1_FILTER,
-    ],
+    ] + MANIFEST_ARGS,
     crate_features = ["map"],
     crate_root = "src/main.rs",
     data = TEST_DATA,
@@ -156,10 +167,7 @@ rust_test(
     name = "render_tests",
     size = "enormous",
     srcs = ["src/main.rs"],
-    args = [
-        "--manifestPath",
-        "tools/render-test/manifests/linux-wgpu.json",
-    ],
+    args = MANIFEST_ARGS,
     crate_features = ["map"],
     crate_root = "src/main.rs",
     data = TEST_DATA,

@@ -8,9 +8,18 @@
 #
 # The flake is used from a copy: `nix develop path:<repo>` would copy the whole
 # C++ working tree into the store on every call.
+#
+# On macOS there is no Nix dev shell: the Xcode toolchain is the environment
+# (like CI's test-macos job), so bazelisk runs directly.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ "$(uname)" == "Darwin" ]]; then
+    cd "$root"
+    exec bazelisk "$@"
+fi
+
 cpp="$(cd "$root/../maplibre-native" && pwd)"
 shell_dir="$root/.nix-shell"
 

@@ -17,12 +17,12 @@ build --local_resources=cpu=HOST_CPUS*.75
 # differential tests then also catch -O-dependent float behaviour.
 build:oracle-opt --compilation_mode=opt
 
-# CI (.github/workflows/ci.yml on GitHub's Ubuntu runner): clang, caches the
-# workflow saves, all cores, lavapipe for the GPU tests, no network tests.
+# CI (.github/workflows/ci.yml, Ubuntu and macOS runners): clang, all cores,
+# lavapipe for the GPU tests on Linux (wgpu picks Metal on macOS), no network
+# tests. Disk and repository caches come from bazel-contrib/setup-bazel's
+# user bazelrc, so they are not set here (this file would override it).
 build:ci --repo_env=CC=clang
 build:ci --repo_env=CXX=clang++
-build:ci --disk_cache=~/.cache/bazel-disk
-build:ci --repository_cache=~/.cache/bazel-repo
 build:ci --local_resources=memory=HOST_RAM*.8
 build:ci --local_resources=cpu=HOST_CPUS
 build:ci --test_tag_filters=-requires-network

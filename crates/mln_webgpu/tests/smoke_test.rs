@@ -1,18 +1,22 @@
 // Smoke test for the headless wgpu setup that src/mln/webgpu/headless_backend.cpp
-// relies on: a Vulkan (lavapipe) device, an RGBA8Unorm offscreen texture with
-// RenderAttachment | CopySrc, a clear, and a texture-to-buffer readback.
+// relies on: a device on the platform's backend (Vulkan/lavapipe on Linux,
+// Metal on macOS; `WGPU_BACKEND` overrides, as in HeadlessBackend), an
+// RGBA8Unorm offscreen texture with RenderAttachment | CopySrc, a clear, and
+// a texture-to-buffer readback.
 
 #[test]
 fn clear_offscreen_texture_and_read_back() {
+    let backends = wgpu::Backends::from_env()
+        .unwrap_or(if cfg!(target_os = "linux") { wgpu::Backends::VULKAN } else { wgpu::Backends::all() });
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
+        backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()
     }))
-    .expect("no Vulkan adapter (check LD_LIBRARY_PATH and VK_DRIVER_FILES)");
+    .expect("no adapter (on Linux check LD_LIBRARY_PATH and VK_DRIVER_FILES)");
     let info = adapter.get_info();
     eprintln!("adapter: {} ({:?}, {:?})", info.name, info.backend, info.device_type);
 

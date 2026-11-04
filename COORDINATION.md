@@ -2980,3 +2980,18 @@ Append-only. One entry per message, newest last:
   (no copy here any more). Build it there with
   MLN_FFI_IMPLEMENTATION=maplibre-native-next. Changes the C API needs in the
   port's crates are still requested here.
+- [coordinator] macOS/Metal support: the full suite runs on macOS, where wgpu
+  renders through Metal. `../maplibre-native` must be on the
+  `maplibre-native-next-support` branch of louwers/maplibre-native (= upstream
+  `8e144d0eca08` + the dependency commit; documented in PLAN.md §1). New
+  `tools/render-test/manifests/macos-wgpu.json` (the linux manifest plus the
+  C++ `platform-macos-webgpu.json` ignores), selected by OS in the
+  render-test BUILD targets; `scripts/bazel` execs plain bazelisk on Darwin;
+  CI gains a `test-macos` job (`//crates/... //vendor/... //tools/...` +
+  `render_tests`; `//difftest` stays Linux-only) and Bazel caching moved to
+  bazel-contrib/setup-bazel. Render suite on Metal: 1353/1460 passed,
+  0 failed — the one Metal-specific difference
+  (fill-extrusion-pattern/tile-buffer) is ignored exactly as the C++ macOS
+  WebGPU backend ignores it. `.bazelversion` 8.6.0 → 9.3.1 (user request;
+  8.6.0 also hit a darwin generate-xml.sh segfault flake under parallel test
+  load).

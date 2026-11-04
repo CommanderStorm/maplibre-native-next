@@ -35,7 +35,12 @@ port, not a redesign:
 - **Bazel only** (rules_rust 0.74, Rust edition 2024). `MODULE.bazel` depends
   on the C++ repo as the `maplibre` module through
   `local_path_override(path = "../maplibre-native")`, so tests see uncommitted
-  C++ changes. CI pins a commit with `git_override` instead.
+  C++ changes. The reference checkout is the `maplibre-native-next-support`
+  branch of `louwers/maplibre-native` (CI pins its tip, currently
+  `ef5c691552b1ba7d407762d35f358e1d67839e0a`): upstream
+  `maplibre/maplibre-native` commit
+  `8e144d0eca082e8350335b2172a6dfdc939b9cef` plus one commit with the
+  dependency changes below.
 - Third-party crates are `crate.spec`s in `MODULE.bazel` (`@next_crates`).
   Crates in this repo are plain `rust_library` targets, so adding one never
   touches shared files.
@@ -163,6 +168,13 @@ per pair when we get there, from the measured edges.
 | M6 | Rest of the style spec, query tests, platform shells | |
 
 Status 2026-11-03 17:40 (verified): full shared render suite **1326 of 1460 passed, 0 failed**; all of Liberty's layer types render in `//platform/glfw:mln-glfw`. Next focus (user): unit-test parity.
+
+Status 2026-11-04 (verified): the suite also runs on macOS, where wgpu
+renders through Metal (`manifests/macos-wgpu.json`, selected by OS in the
+BUILD): **1353 of 1460 passed, 0 failed** (79 ignored failed, 28 ignored
+passed). `//crates/...`, `//vendor/...` and `//tools/...` pass on macOS;
+`//difftest/...` stays Linux-only (the oracle comparisons are pinned to
+Linux x86-64).
 
 Near-term target (2026-11-03), **OpenFreeMap Liberty**: 111 layers
 (background, raster PNG z0-6, 16 fill incl. 2 `fill-pattern`, 67 line incl. 17
