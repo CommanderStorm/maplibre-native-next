@@ -1,6 +1,9 @@
 load(":defs.bzl", "wasm32_build", "wasm32_probe_build")
 
 # Evaluation of a browser build (WASM + WebGPU); owned by the wasm-eval agent.
+# All targets are manual: the checks track open toolchain gaps (getrandom,
+# sqlite-wasm-rs build scripts) and the probe builds use machine-local paths
+# (local_probe.bzl), so wildcard builds and CI skip them.
 
 platform(
     name = "wasm32",
@@ -37,6 +40,7 @@ WASM_CHECK_CRATES = {
 [
     wasm32_build(
         name = "check_" + name,
+        tags = ["manual"],
         deps = [label],
     )
     for name, label in WASM_CHECK_CRATES.items()
@@ -62,6 +66,7 @@ WASM_CHECK_THIRD_PARTY = [
 [
     wasm32_build(
         name = "check_crate_" + name,
+        tags = ["manual"],
         deps = ["@next_crates//:" + name],
     )
     for name in WASM_CHECK_THIRD_PARTY
@@ -73,6 +78,7 @@ WASM_CHECK_THIRD_PARTY = [
 [
     wasm32_probe_build(
         name = "probe_" + name,
+        tags = ["manual"],
         deps = [label],
     )
     for name, label in WASM_CHECK_CRATES.items()
@@ -81,6 +87,7 @@ WASM_CHECK_THIRD_PARTY = [
 [
     wasm32_probe_build(
         name = "probe_crate_" + name,
+        tags = ["manual"],
         deps = ["@next_crates//:" + name],
     )
     for name in WASM_CHECK_THIRD_PARTY

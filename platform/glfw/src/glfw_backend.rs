@@ -57,15 +57,21 @@ fn platform_name(platform: glfw::Platform) -> &'static str {
 }
 
 /// `glfwSetErrorCallback(glfwError); glfwInitHint(GLFW_PLATFORM, ...);
-/// glfwInit()`, trying Wayland, then X11.
+/// glfwInit()`. On Linux it tries Wayland, then X11; elsewhere C++ sets no
+/// platform hint (`#ifdef __linux__`), so glfwInit() picks the native
+/// platform (Cocoa on macOS).
 pub fn init_glfw() -> Result<glfw::Glfw, String> {
-    let platforms: &[glfw::Platform] = match std::env::var("MLN_GLFW_PLATFORM").as_deref() {
-        Ok("x11") => &[glfw::Platform::X11],
-        Ok("wayland") => &[glfw::Platform::Wayland],
-        _ => &[glfw::Platform::Wayland, glfw::Platform::X11],
+    let platforms: &[glfw::Platform] = if cfg!(target_os = "linux") {
+        match std::env::var("MLN_GLFW_PLATFORM").as_deref() {
+            Ok("x11") => &[glfw::Platform::X11],
+            Ok("wayland") => &[glfw::Platform::Wayland],
+            _ => &[glfw::Platform::Wayland, glfw::Platform::X11],
+        }
+    } else {
+        &[glfw::Platform::Any]
     };
     for &platform in platforms {
-        if !platform.is_supported() {
+        if platform != glfw::Platform::Any && !platform.is_supported() {
             continue;
         }
         glfw::init_hint(glfw::InitHint::Platform(platform));
