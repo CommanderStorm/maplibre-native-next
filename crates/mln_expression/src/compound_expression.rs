@@ -11,7 +11,8 @@ use crate::check_subtype::check_subtype;
 use crate::collator::Collator;
 use crate::expression::{
     Dependency, EvaluationContext, EvaluationError, EvaluationResult, Expression, ExpressionBase,
-    Kind, children_equal, collect_dependencies, downcast, mbgl_to_expression_value,
+    Kind, children_equal, collect_dependencies, downcast, evaluate_ref,
+    mbgl_to_expression_value,
 };
 use crate::parsing_context::{ParseResult, ParsingContext};
 use crate::type_::{self, Type};
@@ -19,7 +20,7 @@ use crate::utf8_op_helpers::{
     get_unicode_character_offset_on_validated_utf8, unicode_length_on_validated_utf8,
 };
 use crate::util::rgba;
-use crate::value::{ObjectType, Value, to_string, type_of};
+use crate::value::{ObjectType, Value, from_mbgl_value_owned, to_string, type_of};
 use maplibre_native_base::{Identifier as FeatureIdentifier, Value as MbglValue};
 use mln_conversion::Convertible;
 use mln_util::geometry::FeatureType;
@@ -308,11 +309,11 @@ static REGISTRY: LazyLock<Vec<SignatureBase>> = LazyLock::new(|| {
             Some(v) => Ok(mbgl_to_expression_value(v)),
         }),
         sig("has", T::Boolean, fixed(&[s.clone()]), D::FEATURE, |p, args| {
-            let a = eval_args(p, args)?;
+            let key = evaluate_ref(&*args[0], p)?;
             let Some(feature) = p.feature else {
                 return Err(feature_unavailable());
             };
-            Ok(Value::Bool(feature.get_value(string(&a[0])).is_some()))
+            Ok(Value::Bool(feature.get_value(string(&key)).is_some()))
         }),
         sig("has", T::Boolean, fixed(&[s.clone(), T::Object]), D::FEATURE, |p, args| {
             let a = eval_args(p, args)?;
@@ -320,13 +321,13 @@ static REGISTRY: LazyLock<Vec<SignatureBase>> = LazyLock::new(|| {
             Ok(Value::Bool(object.contains_key(string(&a[0]))))
         }),
         sig("get", T::Value, fixed(&[s.clone()]), D::FEATURE, |p, args| {
-            let a = eval_args(p, args)?;
+            let key = evaluate_ref(&*args[0], p)?;
             let Some(feature) = p.feature else {
                 return Err(feature_unavailable());
             };
-            match feature.get_value(string(&a[0])) {
+            match feature.get_value(string(&key)) {
                 None => Ok(Value::Null),
-                Some(v) => Ok(mbgl_to_expression_value(&v)),
+                Some(v) => Ok(from_mbgl_value_owned(v)),
             }
         }),
         sig("get", T::Value, fixed(&[s.clone(), T::Object]), D::FEATURE, |p, args| {

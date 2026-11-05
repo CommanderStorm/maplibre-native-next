@@ -324,6 +324,12 @@ pub trait Expression: AsAny + Send + Sync {
     fn base(&self) -> &ExpressionBase;
 
     fn evaluate(&self, params: &EvaluationContext<'_>) -> EvaluationResult;
+
+    /// The value of a literal, so hot callers can borrow it instead of cloning it on every evaluation.
+    fn literal_value(&self) -> Option<&Value> {
+        None
+    }
+
     fn each_child<'a>(&'a self, visit: &mut dyn FnMut(&'a dyn Expression));
 
     /// `operator==`.
@@ -564,6 +570,17 @@ pub fn evaluate_accumulated(
 }
 
 /// `toExpressionValue(mln::Value)`, used by the feature accessors.
+/// `evaluate`, borrowing the value of a literal instead of cloning it.
+pub(crate) fn evaluate_ref<'a>(
+    expression: &'a dyn Expression,
+    params: &EvaluationContext<'_>,
+) -> Result<std::borrow::Cow<'a, Value>, EvaluationError> {
+    match expression.literal_value() {
+        Some(value) => Ok(std::borrow::Cow::Borrowed(value)),
+        None => expression.evaluate(params).map(std::borrow::Cow::Owned),
+    }
+}
+
 pub(crate) fn mbgl_to_expression_value(v: &MbglValue) -> Value {
     from_mbgl_value(v)
 }

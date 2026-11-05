@@ -347,6 +347,16 @@ pub fn from_mbgl_value(value: &MbglValue) -> Value {
     }
 }
 
+/// `from_mbgl_value` for an owned value: strings, arrays and objects move instead of being cloned.
+pub fn from_mbgl_value_owned(value: MbglValue) -> Value {
+    match value {
+        MbglValue::Array(v) => Value::Array(v.into_iter().map(from_mbgl_value_owned).collect()),
+        MbglValue::Object(v) => Value::Object(v.into_iter().map(|(k, v)| (k, from_mbgl_value_owned(v))).collect()),
+        MbglValue::String(s) => Value::String(s),
+        other => from_mbgl_value(&other),
+    }
+}
+
 /// `ValueConverter<mln::Value>::fromExpressionValue`.
 pub fn to_mbgl_value(value: &Value) -> MbglValue {
     match value {
