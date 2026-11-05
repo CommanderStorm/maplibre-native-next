@@ -12,6 +12,34 @@ pub trait UniformBuffer: Any {
     fn update(&self, data: &[u8]);
     fn get_size(&self) -> usize;
     fn as_any(&self) -> &dyn Any;
+    /// Byte distance between per-drawable entries (see `upload_drawable_ubos`); 0 for a single UBO.
+    fn element_stride(&self) -> usize {
+        0
+    }
+    /// Records the entry stride `upload_drawable_ubos` packed this buffer with.
+    fn set_element_stride(&self, _stride: usize) {}
+}
+
+/// Entry alignment of per-drawable UBO arrays: WebGPU's default `minUniformBufferOffsetAlignment`.
+pub const DRAWABLE_UBO_ALIGNMENT: usize = 256;
+
+/// Creates or updates `buffer` with one entry per drawable (indexed by `ubo_index`), each at a
+/// `DRAWABLE_UBO_ALIGNMENT` stride so a draw binds its entry as a uniform. C++ (Metal, WebGPU)
+/// indexes a storage buffer instead, whose per-vertex loads are slow on llvmpipe.
+pub fn upload_drawable_ubos<T: bytemuck::Pod>(context: &dyn Context, buffer: &mut Option<UniformBufferPtr>, entries: &[T]) {
+    let size = size_of::<T>();
+    let stride = size.next_multiple_of(DRAWABLE_UBO_ALIGNMENT);
+    let mut bytes = vec![0u8; stride * entries.len()];
+    for (chunk, entry) in bytes.chunks_exact_mut(stride).zip(entries) {
+        chunk[..size].copy_from_slice(bytemuck::bytes_of(entry));
+    }
+    match buffer {
+        Some(existing) if existing.get_size() >= bytes.len() => existing.update(&bytes),
+        _ => *buffer = Some(context.create_uniform_buffer(&bytes, false, true)),
+    }
+    if let Some(buffer) = buffer {
+        buffer.set_element_stride(stride);
+    }
 }
 
 pub type UniformBufferPtr = Rc<dyn UniformBuffer>;

@@ -408,11 +408,7 @@ impl LayerTweaker for PolylineLayerTweaker {
             i += 1;
         });
 
-        let bytes: &[u8] = bytemuck::cast_slice(&drawable_ubo_vector);
-        match &self.drawable_uniform_buffer {
-            Some(buffer) if buffer.get_size() >= bytes.len() => buffer.update(bytes),
-            _ => self.drawable_uniform_buffer = Some(context.create_uniform_buffer(bytes, false, true)),
-        }
+        mln_gfx::uniform_buffer::upload_drawable_ubos(context, &mut self.drawable_uniform_buffer, &drawable_ubo_vector);
         layer_group.mutable_uniform_buffers().set(ID_LINE_DRAWABLE_UBO, self.drawable_uniform_buffer.clone());
     }
 }

@@ -894,3 +894,15 @@ account for it.
   list position by a linear scan instead of a map of list iterators, and the
   StringIndexer keeps owned `String`s instead of one char buffer re-indexed
   on reallocation. Same results; LRU `touch`/`remove` are O(n).
+- **Per-drawable UBOs are bound as uniforms, not indexed storage buffers**
+  (include/mln/shaders/webgpu/*.hpp, src/mln/webgpu/drawable.cpp, the
+  layer tweakers). C++ WebGPU, like Metal, packs a layer group's drawable
+  and tile-props UBOs into one storage buffer and every shader indexes it
+  with the `globalIndex` uniform each draw writes. The port writes each
+  entry at a 256-byte stride (`gfx::upload_drawable_ubos`, WebGPU's default
+  `minUniformBufferOffsetAlignment`) and binds the drawable's own entry as a
+  uniform. The vendored WGSL stays as C++ has it: `ShaderGroup` rewrites the
+  two arrays to `var<uniform>` structs and drops `globalIndex`
+  (`bind_drawable_ubos_as_uniforms`). The shaders get the same values, so
+  render results are unchanged. On llvmpipe the per-vertex storage-buffer
+  loads made the vertex stage about 3x slower.

@@ -190,7 +190,8 @@ thread_local! {
 
 /// Owned resources of a bind group entry (the wgpu entries borrow them).
 enum EntryResource {
-    Buffer(wgpu::Buffer, u64),
+    /// Buffer, offset, size.
+    Buffer(wgpu::Buffer, u64, u64),
     Sampler(wgpu::Sampler),
     TextureView(wgpu::TextureView),
 }
@@ -456,7 +457,15 @@ impl Drawable {
                             valid_bindings = false;
                             break;
                         };
-                        resources.push((binding_info.binding, EntryResource::Buffer(gpu_buffer, buffer.get_size() as u64)));
+                        // A per-drawable UBO array binds just this drawable's entry.
+                        let (offset, size) = match buffer.element_stride() as u64 {
+                            0 => (0, buffer.get_size() as u64),
+                            stride => {
+                                debug_assert_eq!(stride % u64::from(device.limits().min_uniform_buffer_offset_alignment), 0);
+                                (u64::from(self.base.ubo_index) * stride, stride)
+                            }
+                        };
+                        resources.push((binding_info.binding, EntryResource::Buffer(gpu_buffer, offset, size)));
                     }
                     BindingType::Sampler => {
                         let Some(texture) = find_texture_for_binding(binding_info.binding, true) else {
@@ -513,9 +522,9 @@ impl Drawable {
                 .map(|(binding, resource)| wgpu::BindGroupEntry {
                     binding: *binding,
                     resource: match resource {
-                        EntryResource::Buffer(buffer, size) => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        EntryResource::Buffer(buffer, offset, size) => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer,
-                            offset: 0,
+                            offset: *offset,
                             size: wgpu::BufferSize::new(*size),
                         }),
                         EntryResource::Sampler(sampler) => wgpu::BindingResource::Sampler(sampler),

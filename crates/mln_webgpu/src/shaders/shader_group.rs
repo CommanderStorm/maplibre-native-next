@@ -18,6 +18,63 @@ use std::rc::Rc;
 
 const UNIFORM_PREFIX: &str = "HAS_UNIFORM_u_";
 
+/// The per-drawable UBO arrays the C++ shaders declare as storage buffers.
+const DRAWABLE_UBO_ARRAYS: [&str; 2] = ["drawableVector", "tilePropsVector"];
+
+/// Port-only (DEVIATIONS.md): rewrites a vendored WGSL source so that each draw
+/// reads its own drawable and tile-props entry as a uniform (bound by
+/// `Drawable` at `ubo_index * element_stride`, see `gfx::upload_drawable_ubos`)
+/// instead of indexing a storage array with `globalIndex`. llvmpipe's
+/// per-vertex storage-buffer loads made the vertex stage about 3x slower.
+pub fn bind_drawable_ubos_as_uniforms(source: &str) -> String {
+    let mut out = source.to_owned();
+    for name in DRAWABLE_UBO_ARRAYS {
+        let declaration = format!("var<storage, read> {name}: array<");
+        while let Some(start) = out.find(&declaration) {
+            let type_start = start + declaration.len();
+            let Some(type_len) = out[type_start..].find(">;") else {
+                break;
+            };
+            let entry_type = out[type_start..type_start + type_len].to_owned();
+            out.replace_range(start..type_start + type_len + 2, &format!("var<uniform> {name}: {entry_type};"));
+        }
+        for index in ["[globalIndex.value]", "[index]"] {
+            out = out.replace(&format!("{name}{index}"), name);
+        }
+    }
+    // Without its reads the per-draw index goes, and with it the binding that
+    // `Drawable` writes for every draw.
+    if count_identifier(&out, "index") == 1 {
+        out = remove_line(&out, "let index = globalIndex.value;");
+    }
+    if count_identifier(&out, "globalIndex") == 1 {
+        out = remove_line(&out, "@group(0) @binding(1) var<uniform> globalIndex: GlobalIndexUBO;");
+    }
+    out
+}
+
+/// Occurrences of `name` as a whole WGSL identifier.
+fn count_identifier(source: &str, name: &str) -> usize {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    source
+        .match_indices(name)
+        .filter(|&(at, _)| {
+            !source[..at].ends_with(is_ident) && !source[at + name.len()..].starts_with(is_ident)
+        })
+        .count()
+}
+
+/// `source` without the lines that are `line` after trimming.
+fn remove_line(source: &str, line: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for l in source.split_inclusive('\n') {
+        if l.trim() != line {
+            out.push_str(l);
+        }
+    }
+    out
+}
+
 pub struct ShaderGroup {
     data: ShaderGroupData,
     shader_id: BuiltIn,
@@ -80,8 +137,8 @@ impl shader_group::ShaderGroup for ShaderGroup {
         for key in additional_defines.keys() {
             define_set.entry(key.clone()).or_insert(true);
         }
-        vertex_source = preprocess_wgsl(&vertex_source, &define_set);
-        fragment_source = preprocess_wgsl(&fragment_source, &define_set);
+        vertex_source = preprocess_wgsl(&bind_drawable_ubos_as_uniforms(&vertex_source), &define_set);
+        fragment_source = preprocess_wgsl(&bind_drawable_ubos_as_uniforms(&fragment_source), &define_set);
 
         let context = gfx_context.as_any().downcast_ref::<Context>().expect("webgpu::Context");
         let shader: ShaderProgramBasePtr = Rc::new(ShaderProgram::new(

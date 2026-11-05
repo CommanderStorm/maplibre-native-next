@@ -1,6 +1,7 @@
 // Compiles every WGSL source extracted from include/mln/shaders/webgpu/*.hpp
 // the way webgpu::ShaderGroup + ShaderProgram do (struct prelude if any,
-// preprocessor with the default ProgramParameters defines, Prelude prepended)
+// drawable UBOs rewritten to uniforms, preprocessor with the default
+// ProgramParameters defines, Prelude prepended)
 // and reports which ones wgpu's WGSL front end (naga) rejects. C++ compiles
 // them with Dawn's Tint, so a failure here is a wgpu-vs-Dawn difference.
 //
@@ -11,6 +12,7 @@ use mln_gfx::context::Context as _;
 use mln_gfx::renderer_backend::RendererBackend;
 use mln_util::size::Size;
 use mln_webgpu::HeadlessBackend;
+use mln_webgpu::shaders::shader_group::bind_drawable_ubos_as_uniforms;
 use mln_webgpu::shaders::shader_program::ShaderProgram;
 use mln_webgpu::shaders::wgsl_preprocessor::preprocess_wgsl;
 use mln_webgpu::shaders::wgsl_sources::ALL;
@@ -33,8 +35,8 @@ fn all_extracted_wgsl_compiles() {
             continue; // Prelude
         };
         let prelude = source.prelude.unwrap_or("");
-        let vertex = preprocess_wgsl(&format!("{prelude}{vertex}"), &defines);
-        let fragment = preprocess_wgsl(&format!("{prelude}{fragment}"), &defines);
+        let vertex = preprocess_wgsl(&bind_drawable_ubos_as_uniforms(&format!("{prelude}{vertex}")), &defines);
+        let fragment = preprocess_wgsl(&bind_drawable_ubos_as_uniforms(&format!("{prelude}{fragment}")), &defines);
         let program = ShaderProgram::new(context, &vertex, &fragment, &[], &[], source.name);
         if program.has_shader_modules() {
             compiled += 1;
@@ -78,8 +80,8 @@ fn all_extracted_wgsl_compiles_with_all_conditionals_defined() {
             continue;
         };
         let prelude = source.prelude.unwrap_or("");
-        let vertex = format!("{prelude}{vertex}");
-        let fragment = format!("{prelude}{fragment}");
+        let vertex = bind_drawable_ubos_as_uniforms(&format!("{prelude}{vertex}"));
+        let fragment = bind_drawable_ubos_as_uniforms(&format!("{prelude}{fragment}"));
         let mut defines: HashMap<String, bool> = [("DEVICE_PIXEL_RATIO".to_owned(), true)].into_iter().collect();
         for sym in conditional_symbols(&vertex).into_iter().chain(conditional_symbols(&fragment)) {
             defines.insert(sym, true);
@@ -99,4 +101,17 @@ fn all_extracted_wgsl_compiles_with_all_conditionals_defined() {
         }
     }
     eprintln!("all-defined variant: compiled {compiled}; rejected by naga: {failed:?}");
+}
+
+/// Every per-drawable UBO array becomes a uniform, and the per-draw index goes.
+#[test]
+fn drawable_ubos_are_uniforms_after_the_rewrite() {
+    for source in ALL {
+        let prelude = source.prelude.unwrap_or("");
+        for stage in [source.vertex, source.fragment].into_iter().flatten() {
+            let rewritten = bind_drawable_ubos_as_uniforms(&format!("{prelude}{stage}"));
+            assert!(!rewritten.contains("var<storage"), "{} keeps a storage buffer", source.built_in);
+            assert!(!rewritten.contains("globalIndex"), "{} keeps globalIndex", source.built_in);
+        }
+    }
 }

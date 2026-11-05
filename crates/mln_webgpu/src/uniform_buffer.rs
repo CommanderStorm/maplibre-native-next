@@ -8,6 +8,7 @@ use crate::context::Context;
 use crate::renderer_backend::BackendImpl;
 use mln_gfx::uniform_buffer;
 use std::any::Any;
+use std::cell::Cell;
 use std::rc::Rc;
 
 const UNIFORM_BUFFER_ALIGNMENT: usize = 256;
@@ -29,6 +30,8 @@ pub struct UniformBuffer {
     /// context's global uniform buffer array.
     backend: Rc<BackendImpl>,
     buffer: Option<wgpu::Buffer>,
+    /// See `gfx::UniformBuffer::element_stride`.
+    element_stride: Cell<usize>,
 }
 
 impl UniformBuffer {
@@ -62,7 +65,7 @@ impl UniformBuffer {
             }
             buffer = Some(b);
         }
-        UniformBuffer { size: aligned_size, backend, buffer }
+        UniformBuffer { size: aligned_size, backend, buffer, element_stride: Cell::new(0) }
     }
 
     /// `clone()`: a new buffer of the same size; contents are not copied
@@ -89,6 +92,14 @@ impl uniform_buffer::UniformBuffer for UniformBuffer {
 
     fn get_size(&self) -> usize {
         self.size
+    }
+
+    fn element_stride(&self) -> usize {
+        self.element_stride.get()
+    }
+
+    fn set_element_stride(&self, stride: usize) {
+        self.element_stride.set(stride);
     }
 
     fn as_any(&self) -> &dyn Any {

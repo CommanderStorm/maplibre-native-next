@@ -188,14 +188,7 @@ impl LayerTweaker for BackgroundLayerTweaker {
             i += 1;
         });
 
-        let bytes: &[u8] = bytemuck::cast_slice(&drawable_ubo_vector);
-        let drawable_ubo_vector_size = bytes.len();
-        match &self.drawable_uniform_buffer {
-            Some(buffer) if buffer.get_size() >= drawable_ubo_vector_size => buffer.update(bytes),
-            _ => {
-                self.drawable_uniform_buffer = Some(context.create_uniform_buffer(bytes, false, true));
-            }
-        }
+        mln_gfx::uniform_buffer::upload_drawable_ubos(context, &mut self.drawable_uniform_buffer, &drawable_ubo_vector);
 
         layer_group
             .mutable_uniform_buffers()
