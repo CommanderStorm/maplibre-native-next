@@ -16,6 +16,7 @@ use mln_webgpu::HeadlessBackend;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// `HeadlessFrontend::RenderResult`.
 pub struct RenderResult {
@@ -197,6 +198,8 @@ impl HeadlessFrontend {
     /// `render(Map&)`. C++ rethrows the still image error; the port returns
     /// it (its `what()` message).
     pub fn render(&mut self, map: &mut Map) -> Result<RenderResult, String> {
+        // Spinning before sleeping keeps wake-up latency off short waits.
+        const RENDER_SPIN: Duration = Duration::from_millis(2);
         let backend = self.shared.backend.clone();
         let _guard = BackendScope::new(backend.get_renderer_backend(), ScopeType::Explicit);
 
@@ -210,6 +213,8 @@ impl HeadlessFrontend {
         }));
 
         let mut image = PremultipliedImage::new(Size::default());
+        let run_loop = RunLoop::get();
+        let mut idle_since = Instant::now();
         loop {
             // C++ reads the image inside the callback, which runs at the end
             // of the frame; nothing renders in between.
@@ -221,7 +226,14 @@ impl HeadlessFrontend {
             if image.valid() {
                 break;
             }
-            RunLoop::get().run_once();
+            // C++ spins on runOnce, which costs a core per renderer while
+            // workers parse tiles; spin only briefly after the last work.
+            if run_loop.run_once_did_work() {
+                idle_since = Instant::now();
+            } else if outcome.borrow().is_none() && idle_since.elapsed() >= RENDER_SPIN {
+                run_loop.wait_for_work();
+                idle_since = Instant::now();
+            }
         }
 
         Ok(RenderResult { image })

@@ -894,3 +894,12 @@ account for it.
   list position by a linear scan instead of a map of list iterators, and the
   StringIndexer keeps owned `String`s instead of one char buffer re-indexed
   on reallocation. Same results; LRU `touch`/`remove` are O(n).
+- **`HeadlessFrontend::render` waits for work instead of spinning**
+  (platform/default/src/mln/gfx/headless_frontend.cpp). C++ calls
+  `runOnce` (`UV_RUN_NOWAIT`) in a loop until the still image is ready,
+  which keeps a core busy for every renderer while the workers parse tiles.
+  The port keeps spinning for 2 ms after the last task, timer or async
+  handle ran, then sleeps until the loop has work
+  (`RunLoop::wait_for_work`). Posted tasks and async handles wake it, so
+  the runner's timeout watchdog still unwinds a waiting test. Render
+  results are unchanged.
