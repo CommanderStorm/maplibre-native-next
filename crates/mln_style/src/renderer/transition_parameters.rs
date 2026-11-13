@@ -36,7 +36,7 @@ impl TransitionParameters {
     }
 
     #[must_use]
-    pub fn is_global_state_only(&self) -> bool {
+    pub(crate) fn is_global_state_only(&self) -> bool {
         self.global_state_change.as_ref().is_some_and(|change| change.state_only)
     }
 }

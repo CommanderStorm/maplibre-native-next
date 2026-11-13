@@ -592,7 +592,7 @@ impl SurfaceTarget {
 
     /// The backend the target draws on.
     #[must_use]
-    pub fn backend(&self) -> &Rc<RendererBackend> {
+    pub(crate) fn backend(&self) -> &Rc<RendererBackend> {
         &self.backend
     }
 
@@ -616,7 +616,7 @@ impl SurfaceTarget {
         }
     }
 
-    pub fn process_events(&self) {
+    pub(crate) fn process_events(&self) {
         self.state.process_events();
     }
 

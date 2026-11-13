@@ -63,7 +63,7 @@ fn impl_cast(impl_: &Arc<dyn layer::Impl>) -> &RasterLayerImpl {
     impl_.downcast_ref::<RasterLayerImpl>().expect("RenderRasterLayer: not a raster layer impl")
 }
 
-pub struct RenderRasterLayer {
+pub(crate) struct RenderRasterLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: RasterPaintProperties::Unevaluated,
@@ -83,7 +83,7 @@ pub struct RenderRasterLayer {
 }
 
 impl RenderRasterLayer {
-    pub fn new(impl_: Arc<RasterLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<RasterLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(RasterLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

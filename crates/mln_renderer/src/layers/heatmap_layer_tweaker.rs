@@ -19,14 +19,14 @@ use crate::layer_tweaker::{
 };
 use crate::paint_parameters::PaintParameters;
 
-pub struct HeatmapLayerTweaker {
+pub(crate) struct HeatmapLayerTweaker {
     base: LayerTweakerBase,
     evaluated_props_uniform_buffer: Option<UniformBufferPtr>,
     drawable_uniform_buffer: Option<UniformBufferPtr>,
 }
 
 impl HeatmapLayerTweaker {
-    pub fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
+    pub(crate) fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
         HeatmapLayerTweaker {
             base: LayerTweakerBase::new(id, properties),
             evaluated_props_uniform_buffer: None,

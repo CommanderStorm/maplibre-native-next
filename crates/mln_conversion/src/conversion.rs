@@ -24,7 +24,7 @@ impl Error {
 /// The per-front-end operations (`ConversionTraits<T>` in C++). The
 /// preconditions are the C++ ones: `array_length`/`array_member` only if
 /// `is_array`, `object_member`/`each_member` only if `is_object`.
-pub trait ConversionTraits {
+pub(crate) trait ConversionTraits {
     /// Whether the value is undefined or a JSON null.
     fn is_undefined(&self) -> bool;
 
@@ -69,12 +69,12 @@ pub struct Convertible<'a> {
 
 impl<'a> Convertible<'a> {
     /// Wraps a borrowed front-end value.
-    pub fn new(value: &'a dyn ConversionTraits) -> Self {
+    pub(crate) fn new(value: &'a dyn ConversionTraits) -> Self {
         Convertible { inner: Inner::Borrowed(value) }
     }
 
     /// Wraps an owned front-end value (a handle the front end created).
-    pub fn owned(value: impl ConversionTraits + 'a) -> Self {
+    pub(crate) fn owned(value: impl ConversionTraits + 'a) -> Self {
         Convertible { inner: Inner::Owned(Box::new(value)) }
     }
 

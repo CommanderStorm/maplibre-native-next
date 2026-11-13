@@ -458,7 +458,7 @@ impl Device {
     /// display.
     ///
     /// Fails as [`with_options`](Self::with_options) does.
-    pub fn new() -> Result<Device, Error> {
+    pub(crate) fn new() -> Result<Device, Error> {
         Self::with_options(DeviceOptions::default())
     }
 
@@ -631,7 +631,7 @@ impl Device {
 
     /// The API that the device's contexts render with.
     #[must_use]
-    pub fn api(&self) -> Api {
+    pub(crate) fn api(&self) -> Api {
         match &*self.kind {
             Kind::Library(group) => group.api,
             Kind::Single(single) => single.api,
@@ -643,7 +643,7 @@ impl Device {
 
     /// Whether the device's renderers take turns in one context.
     #[must_use]
-    pub fn is_single_context(&self) -> bool {
+    pub(crate) fn is_single_context(&self) -> bool {
         matches!(*self.kind, Kind::Single(_))
     }
 

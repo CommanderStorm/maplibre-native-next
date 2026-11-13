@@ -63,7 +63,7 @@
 
 use super::shader_source::GlslShaderSource;
 
-pub const ATMOSPHERE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const ATMOSPHERE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "AtmosphereShader",
     name: r"AtmosphereShader",
     vertex: r"layout(location = 0) in vec2 a_pos;
@@ -195,7 +195,7 @@ void main() {
 ",
 };
 
-pub const BACKGROUND_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const BACKGROUND_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "BackgroundPatternShader",
     name: r"BackgroundPatternShader",
     vertex: r"layout (std140) uniform BackgroundPatternDrawableUBO {
@@ -280,7 +280,7 @@ void main() {
 ",
 };
 
-pub const BACKGROUND_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const BACKGROUND_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "BackgroundShader",
     name: r"BackgroundShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -309,7 +309,7 @@ void main() {
 ",
 };
 
-pub const CIRCLE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const CIRCLE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "CircleShader",
     name: r"CircleShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -566,7 +566,7 @@ lowp float stroke_opacity = u_stroke_opacity;
 ",
 };
 
-pub const CLIPPING_MASK_PROGRAM: GlslShaderSource = GlslShaderSource {
+pub(crate) const CLIPPING_MASK_PROGRAM: GlslShaderSource = GlslShaderSource {
     built_in: "ClippingMaskProgram",
     name: r"ClippingMaskProgram",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -589,7 +589,7 @@ void main() {
 ",
 };
 
-pub const COLLISION_BOX_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const COLLISION_BOX_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "CollisionBoxShader",
     name: r"CollisionBoxShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -673,7 +673,7 @@ void main() {
 ",
 };
 
-pub const COLLISION_CIRCLE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const COLLISION_CIRCLE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "CollisionCircleShader",
     name: r"CollisionCircleShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -795,7 +795,7 @@ void main() {
 ",
 };
 
-pub const COLOR_RELIEF_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const COLOR_RELIEF_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "ColorReliefShader",
     name: r"ColorReliefShader",
     vertex: r"layout(std140) uniform ColorReliefDrawableUBO {
@@ -905,7 +905,7 @@ void main() {
 ",
 };
 
-pub const DEBUG_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const DEBUG_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "DebugShader",
     name: r"DebugShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -947,7 +947,7 @@ void main() {
 ",
 };
 
-pub const FILL_EXTRUSION_INSTANCED_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_EXTRUSION_INSTANCED_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillExtrusionInstancedShader",
     name: r"FillExtrusionInstancedShader",
     vertex: r"invariant gl_Position;
@@ -1094,7 +1094,7 @@ void main() {
 ",
 };
 
-pub const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillExtrusionPatternInstancedShader",
     name: r"FillExtrusionPatternInstancedShader",
     vertex: r"invariant gl_Position;
@@ -1341,7 +1341,7 @@ mediump vec4 pattern_to = u_pattern_to;
 ",
 };
 
-pub const FILL_EXTRUSION_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_EXTRUSION_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillExtrusionPatternShader",
     name: r"FillExtrusionPatternShader",
     vertex: r"invariant gl_Position;
@@ -1576,7 +1576,7 @@ mediump vec4 pattern_to = u_pattern_to;
 ",
 };
 
-pub const FILL_EXTRUSION_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_EXTRUSION_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillExtrusionShader",
     name: r"FillExtrusionShader",
     vertex: r"invariant gl_Position;
@@ -1711,7 +1711,7 @@ void main() {
 ",
 };
 
-pub const FILL_OUTLINE_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_OUTLINE_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillOutlinePatternShader",
     name: r"FillOutlinePatternShader",
     vertex: r"layout (std140) uniform GlobalPaintParamsUBO {
@@ -1915,7 +1915,7 @@ mediump vec4 pattern_to = u_pattern_to;
 ",
 };
 
-pub const FILL_OUTLINE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_OUTLINE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillOutlineShader",
     name: r"FillOutlineShader",
     vertex: r"layout (std140) uniform GlobalPaintParamsUBO {
@@ -2014,7 +2014,7 @@ lowp float opacity = u_opacity;
 ",
 };
 
-pub const FILL_OUTLINE_TRIANGULATED_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_OUTLINE_TRIANGULATED_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillOutlineTriangulatedShader",
     name: r"FillOutlineTriangulatedShader",
     vertex: r#"// floor(127 / 2) == 63.0
@@ -2133,7 +2133,7 @@ void main() {
 ",
 };
 
-pub const FILL_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillPatternShader",
     name: r"FillPatternShader",
     vertex: r"layout (std140) uniform GlobalPaintParamsUBO {
@@ -2330,7 +2330,7 @@ mediump vec4 pattern_to = u_pattern_to;
 ",
 };
 
-pub const FILL_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const FILL_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "FillShader",
     name: r"FillShader",
     vertex: r"layout (std140) uniform FillDrawableUBO {
@@ -2410,7 +2410,7 @@ lowp float opacity = u_opacity;
 ",
 };
 
-pub const GLOBE_DEPTH_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const GLOBE_DEPTH_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "GlobeDepthShader",
     name: r"GlobeDepthShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -2425,7 +2425,7 @@ void main() {
 ",
 };
 
-pub const HEATMAP_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const HEATMAP_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "HeatmapShader",
     name: r"HeatmapShader",
     vertex: r#"layout (location = 0) in vec2 a_pos;
@@ -2546,7 +2546,7 @@ highp float weight = u_weight;
 ",
 };
 
-pub const HEATMAP_TEXTURE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const HEATMAP_TEXTURE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "HeatmapTextureShader",
     name: r"HeatmapTextureShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -2603,7 +2603,7 @@ void main() {
 ",
 };
 
-pub const HILLSHADE_PREPARE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const HILLSHADE_PREPARE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "HillshadePrepareShader",
     name: r"HillshadePrepareShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -2708,7 +2708,7 @@ void main() {
 ",
 };
 
-pub const HILLSHADE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const HILLSHADE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "HillshadeShader",
     name: r"HillshadeShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
@@ -2915,7 +2915,7 @@ void main() {
 "#,
 };
 
-pub const LINE_GRADIENT_SDF_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const LINE_GRADIENT_SDF_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "LineGradientSDFShader",
     name: r"LineGradientSDFShader",
     vertex: r#"// floor(127 / 2) == 63.0
@@ -3199,7 +3199,7 @@ lowp float floorwidth = u_floorwidth;
 ",
 };
 
-pub const LINE_GRADIENT_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const LINE_GRADIENT_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "LineGradientShader",
     name: r"LineGradientShader",
     vertex: r#"
@@ -3432,7 +3432,7 @@ lowp float opacity = u_opacity;
 ",
 };
 
-pub const LINE_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const LINE_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "LinePatternShader",
     name: r"LinePatternShader",
     vertex: r#"// floor(127 / 2) == 63.0
@@ -3758,7 +3758,7 @@ lowp float opacity = u_opacity;
 ",
 };
 
-pub const LINE_SDF_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const LINE_SDF_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "LineSDFShader",
     name: r"LineSDFShader",
     vertex: r#"// floor(127 / 2) == 63.0
@@ -4046,7 +4046,7 @@ lowp float floorwidth = u_floorwidth;
 ",
 };
 
-pub const LINE_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const LINE_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "LineShader",
     name: r"LineShader",
     vertex: r#"// floor(127 / 2) == 63.0
@@ -4283,7 +4283,7 @@ lowp float opacity = u_opacity;
 ",
 };
 
-pub const PRELUDE: GlslShaderSource = GlslShaderSource {
+pub(crate) const PRELUDE: GlslShaderSource = GlslShaderSource {
     built_in: "Prelude",
     name: r"Prelude",
     vertex: r"#ifdef GL_ES
@@ -4553,7 +4553,7 @@ bool clippedAtAntimeridian(highp float tileX) {
 ",
 };
 
-pub const RASTER_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const RASTER_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "RasterShader",
     name: r"RasterShader",
     vertex: r"layout (std140) uniform RasterDrawableUBO {
@@ -4652,7 +4652,7 @@ void main() {
 ",
 };
 
-pub const SKY_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const SKY_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "SkyShader",
     name: r"SkyShader",
     vertex: r"layout(location = 0) in vec2 a_pos;
@@ -4695,7 +4695,7 @@ void main() {
 ",
 };
 
-pub const SYMBOL_ICON_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const SYMBOL_ICON_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "SymbolIconShader",
     name: r"SymbolIconShader",
     vertex: r"layout (location = 0) in vec4 a_pos_offset;
@@ -4926,7 +4926,7 @@ lowp float opacity = u_opacity;
 ",
 };
 
-pub const SYMBOL_SDF_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const SYMBOL_SDF_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "SymbolSDFShader",
     name: r"SymbolSDFShader",
     vertex: r"layout (location = 0) in vec4 a_pos_offset;
@@ -5271,7 +5271,7 @@ lowp float halo_blur = u_halo_blur;
 ",
 };
 
-pub const SYMBOL_TEXT_AND_ICON_SHADER: GlslShaderSource = GlslShaderSource {
+pub(crate) const SYMBOL_TEXT_AND_ICON_SHADER: GlslShaderSource = GlslShaderSource {
     built_in: "SymbolTextAndIconShader",
     name: r"SymbolTextAndIconShader",
     vertex: r"layout (location = 0) in vec4 a_pos_offset;
@@ -5633,11 +5633,11 @@ lowp float halo_blur = u_halo_blur;
 ",
 };
 
-pub const WIDE_VECTOR_SHADER: GlslShaderSource =
+pub(crate) const WIDE_VECTOR_SHADER: GlslShaderSource =
     GlslShaderSource { built_in: "WideVectorShader", name: r"WideVectorShader", vertex: r"", fragment: r"" };
 
 /// Every extracted specialisation, sorted by `BuiltIn` name.
-pub const ALL: &[&GlslShaderSource] = &[
+pub(crate) const ALL: &[&GlslShaderSource] = &[
     &ATMOSPHERE_SHADER,
     &BACKGROUND_PATTERN_SHADER,
     &BACKGROUND_SHADER,

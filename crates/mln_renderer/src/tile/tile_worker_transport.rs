@@ -50,20 +50,20 @@ use crate::tile::raster_tile::{RasterTileInner, RasterTileMessage, RasterTileWor
 /// `obsolete` flag and an atlas of its own, and the worker runs as an actor.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WorkerParameters {
-    pub id: OverscaledTileID,
-    pub source_id: String,
+    pub(crate) id: OverscaledTileID,
+    pub(crate) source_id: String,
     /// Set by the tile when it no longer needs the worker's results.
     #[serde(skip)]
-    pub obsolete: Arc<AtomicBool>,
-    pub mode: MapMode,
-    pub pixel_ratio: f32,
-    pub show_collision_boxes: bool,
+    pub(crate) obsolete: Arc<AtomicBool>,
+    pub(crate) mode: MapMode,
+    pub(crate) pixel_ratio: f32,
+    pub(crate) show_collision_boxes: bool,
     #[serde(skip)]
-    pub dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
-    pub font_faces: Option<Arc<FontFaces>>,
-    pub capture_rendered_features: bool,
+    pub(crate) dynamic_texture_atlas: Option<DynamicTextureAtlasPtr>,
+    pub(crate) font_faces: Option<Arc<FontFaces>>,
+    pub(crate) capture_rendered_features: bool,
     #[serde(skip)]
-    pub synchronous: bool,
+    pub(crate) synchronous: bool,
 }
 
 /// Where a worker's messages for its tile go: `TileMessage`s from a
@@ -124,7 +124,7 @@ impl TileEndpoint<RasterDEMTileMessage> for ActorRef<RasterDEMTileInner> {
 
 /// The synchronous `OptionalActorRef<GeometryTile>`: the tile itself, on
 /// the render thread.
-pub struct SynchronousTile(pub LocalObject<Weak<GeometryTileInner>>);
+pub(crate) struct SynchronousTile(pub(crate) LocalObject<Weak<GeometryTileInner>>);
 
 impl TileEndpoint for SynchronousTile {
     fn send(&self, message: TileMessage) {
@@ -135,13 +135,13 @@ impl TileEndpoint for SynchronousTile {
 }
 
 /// Workers on the map's thread pool, as in C++.
-pub struct InProcessTransport {
+pub(crate) struct InProcessTransport {
     thread_pool: TaggedScheduler,
 }
 
 impl InProcessTransport {
     #[must_use]
-    pub fn new(thread_pool: TaggedScheduler) -> Self {
+    pub(crate) fn new(thread_pool: TaggedScheduler) -> Self {
         InProcessTransport { thread_pool }
     }
 }

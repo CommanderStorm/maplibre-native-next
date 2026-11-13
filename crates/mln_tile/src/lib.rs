@@ -17,17 +17,20 @@
 
 mod error;
 pub mod geometry_tile_data;
-pub mod mlt;
-pub mod vector_mlt_tile_data;
-pub mod vector_mvt_tile_data;
+pub(crate) mod mlt;
+pub(crate) mod vector_mlt_tile_data;
+pub(crate) mod vector_mvt_tile_data;
 
-pub use error::Error;
+pub(crate) use error::Error;
 pub use geometry_tile_data::{
-    classify_rings, convert_feature, convert_geometry, convert_geometry_to_tile, fixup_polygons, limit_holes,
+    classify_rings, convert_feature, convert_geometry, convert_geometry_to_tile, limit_holes,
     round_polygon_corners, to_geometry_collection,
 };
-pub use vector_mlt_tile_data::{VectorMLTTileData, VectorMLTTileFeature, VectorMLTTileLayer};
-pub use vector_mvt_tile_data::{VectorMVTTileData, VectorMVTTileFeature, VectorMVTTileLayer};
+pub(crate) use geometry_tile_data::fixup_polygons;
+pub use vector_mlt_tile_data::VectorMLTTileData;
+pub(crate) use vector_mlt_tile_data::{VectorMLTTileFeature, VectorMLTTileLayer};
+pub use vector_mvt_tile_data::VectorMVTTileData;
+pub(crate) use vector_mvt_tile_data::{VectorMVTTileFeature, VectorMVTTileLayer};
 
 #[cfg(test)]
 mod malformed_tile_test;

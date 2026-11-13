@@ -59,7 +59,7 @@ fn impl_cast(impl_: &Arc<dyn layer::Impl>) -> &LineLayerImpl {
 
 const POS_NORMAL_ATTRIB_NAME: &str = "a_pos_normal";
 
-pub fn apply_color_ramp(
+pub(crate) fn apply_color_ramp(
     color_value: &mln_style::color_ramp_property_value::ColorRampPropertyValue,
     image: &mut PremultipliedImage,
     global_state: Option<&GlobalStateMap>,
@@ -233,7 +233,7 @@ fn read_line_attributes(
     );
 }
 
-pub struct RenderLineLayer {
+pub(crate) struct RenderLineLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: LinePaintProperties::Unevaluated,
@@ -254,7 +254,7 @@ pub struct RenderLineLayer {
 }
 
 impl RenderLineLayer {
-    pub fn new(impl_: Arc<LineLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<LineLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(LineLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

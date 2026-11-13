@@ -26,7 +26,7 @@ use crate::layout::symbol_projection::{get_gl_coord_matrix, get_label_plane_matr
 use crate::paint_parameters::PaintParameters;
 use crate::render_tile::RenderTile;
 
-pub struct SymbolLayerTweaker {
+pub(crate) struct SymbolLayerTweaker {
     base: LayerTweakerBase,
     evaluated_props_uniform_buffer: Option<UniformBufferPtr>,
     drawable_uniform_buffer: Option<UniformBufferPtr>,
@@ -34,7 +34,7 @@ pub struct SymbolLayerTweaker {
 }
 
 impl SymbolLayerTweaker {
-    pub fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
+    pub(crate) fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
         SymbolLayerTweaker {
             base: LayerTweakerBase::new(id, properties),
             evaluated_props_uniform_buffer: None,

@@ -5,21 +5,21 @@
 // `geojsonvt::geojson` is the same variant as `mapbox::geojson::geojson`
 // (`mln::GeoJSON`): //vendor/geojson's `GeoJSON`.
 
-pub mod clip;
-pub mod convert;
-pub mod simplify;
-pub mod tile;
-pub mod types;
-pub mod wrap;
+pub(crate) mod clip;
+pub(crate) mod convert;
+pub(crate) mod simplify;
+pub(crate) mod tile;
+pub(crate) mod types;
+pub(crate) mod wrap;
 
 /// `mapbox::geojsonvt::detail`
-pub mod detail {
-    pub use crate::clip::{Clipper, clip};
-    pub use crate::convert::{Project, convert};
-    pub use crate::simplify::{get_sq_seg_dist, simplify, simplify_range};
-    pub use crate::tile::InternalTile;
+pub(crate) mod detail {
+    pub(crate) use crate::clip::{Clipper, clip};
+    pub(crate) use crate::convert::{Project, convert};
+    pub(crate) use crate::simplify::{get_sq_seg_dist, simplify, simplify_range};
+    pub(crate) use crate::tile::InternalTile;
     pub use crate::types::*;
-    pub use crate::wrap::{shift_coords, wrap};
+    pub(crate) use crate::wrap::{shift_coords, wrap};
 }
 
 use std::collections::{BTreeMap, HashMap};
@@ -27,11 +27,11 @@ use std::collections::{BTreeMap, HashMap};
 use detail::{InternalTile, VtFeatures};
 use feature::Feature;
 use geojson::{FeatureCollection, GeoJSON};
-pub use tile::Tile;
+pub(crate) use tile::Tile;
 
 /// `ToFeatureCollection`
 #[must_use]
-pub fn to_feature_collection(geojson: &GeoJSON) -> FeatureCollection<f64> {
+pub(crate) fn to_feature_collection(geojson: &GeoJSON) -> FeatureCollection<f64> {
     match geojson {
         GeoJSON::FeatureCollection(value) => value.clone(),
         GeoJSON::Feature(value) => vec![value.clone()],
@@ -85,11 +85,11 @@ impl Default for Options {
 }
 
 /// `empty_tile`
-pub static EMPTY_TILE: Tile = Tile { features: Vec::new(), num_points: 0, num_simplified: 0 };
+pub(crate) static EMPTY_TILE: Tile = Tile { features: Vec::new(), num_points: 0, num_simplified: 0 };
 
 /// `toID(z, x, y)`
 #[must_use]
-pub fn to_id(z: u8, x: u32, y: u32) -> u64 {
+pub(crate) fn to_id(z: u8, x: u32, y: u32) -> u64 {
     1u64.wrapping_shl(u32::from(z))
         .wrapping_mul(u64::from(y))
         .wrapping_add(u64::from(x))
@@ -141,9 +141,9 @@ pub fn geojson_to_tile(
 
 /// `GeoJSONVT`
 pub struct GeoJSONVT {
-    pub options: Options,
-    pub stats: BTreeMap<u8, u32>,
-    pub total: u32,
+    pub(crate) options: Options,
+    pub(crate) stats: BTreeMap<u8, u32>,
+    pub(crate) total: u32,
     // C++: `std::unordered_map`; only looked up, and iterated by
     // `getInternalTiles()` users that do not depend on the order.
     tiles: HashMap<u64, InternalTile>,
@@ -152,7 +152,7 @@ pub struct GeoJSONVT {
 impl GeoJSONVT {
     /// `GeoJSONVT(const feature_collection&, const Options&)`
     #[must_use]
-    pub fn new(features: &FeatureCollection<f64>, options: Options) -> Self {
+    pub(crate) fn new(features: &FeatureCollection<f64>, options: Options) -> Self {
         let mut vt = GeoJSONVT { options, stats: BTreeMap::new(), total: 0, tiles: HashMap::new() };
 
         let z2 = 1u32.wrapping_shl(u32::from(options.max_zoom));
@@ -217,7 +217,7 @@ impl GeoJSONVT {
 
     /// `getInternalTiles()`
     #[must_use]
-    pub fn get_internal_tiles(&self) -> &HashMap<u64, InternalTile> {
+    pub(crate) fn get_internal_tiles(&self) -> &HashMap<u64, InternalTile> {
         &self.tiles
     }
 

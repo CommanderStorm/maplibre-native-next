@@ -42,7 +42,7 @@ use crate::transform::{Transform, TransformObserver};
 
 /// Receives the outcome of [`Map::render_still`]: `Ok` once a complete frame
 /// rendered, or why the image failed.
-pub type StillImageCallback = Box<dyn FnOnce(Result<(), Error>)>;
+pub(crate) type StillImageCallback = Box<dyn FnOnce(Result<(), Error>)>;
 
 /// A call of the style's observer.
 enum StyleEvent {
@@ -761,19 +761,19 @@ impl Map {
         self.on_update();
     }
 
-    pub fn is_gesture_in_progress(&self) -> bool {
+    pub(crate) fn is_gesture_in_progress(&self) -> bool {
         self.transform.is_gesture_in_progress()
     }
 
-    pub fn is_rotating(&self) -> bool {
+    pub(crate) fn is_rotating(&self) -> bool {
         self.transform.is_rotating()
     }
 
-    pub fn is_scaling(&self) -> bool {
+    pub(crate) fn is_scaling(&self) -> bool {
         self.transform.is_scaling()
     }
 
-    pub fn is_panning(&self) -> bool {
+    pub(crate) fn is_panning(&self) -> bool {
         self.transform.is_panning()
     }
 
@@ -1076,7 +1076,7 @@ impl Map {
         self.on_update();
     }
 
-    pub fn get_frustum_offset(&self) -> EdgeInsets {
+    pub(crate) fn get_frustum_offset(&self) -> EdgeInsets {
         self.transform.get_frustum_offset()
     }
 
@@ -1172,7 +1172,7 @@ impl Map {
     /// The stats of the most recently completed frame, whose
     /// `frame_rendered_features` holds every rendered feature by source and
     /// layer. `None` before the first frame.
-    pub fn get_last_frame_stats(&self) -> Option<Arc<RenderingStats>> {
+    pub(crate) fn get_last_frame_stats(&self) -> Option<Arc<RenderingStats>> {
         self.last_frame_stats.clone()
     }
 
@@ -1267,12 +1267,12 @@ impl Map {
 
     /// Whether the globe hides a location from the camera; a Mercator map
     /// hides nothing.
-    pub fn is_location_occluded(&self, lat_lng: &LatLng) -> bool {
+    pub(crate) fn is_location_occluded(&self, lat_lng: &LatLng) -> bool {
         self.transform.is_location_occluded(lat_lng)
     }
 
     /// Whether the map is drawn as a globe, alone or blending into Mercator.
-    pub fn is_globe_rendering(&self) -> bool {
+    pub(crate) fn is_globe_rendering(&self) -> bool {
         self.transform.get_state().is_globe_rendering()
     }
 

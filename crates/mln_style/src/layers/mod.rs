@@ -9,14 +9,14 @@
 pub mod background_layer;
 pub mod background_layer_impl;
 #[rustfmt::skip]
-pub mod background_layer_properties;
+pub(crate) mod background_layer_properties;
 #[rustfmt::skip]
 pub mod circle_layer;
 pub mod circle_layer_impl;
 #[rustfmt::skip]
 pub mod circle_layer_properties;
 #[rustfmt::skip]
-pub mod color_relief_layer;
+pub(crate) mod color_relief_layer;
 pub mod color_relief_layer_impl;
 #[rustfmt::skip]
 pub mod color_relief_layer_properties;
@@ -32,7 +32,7 @@ pub mod fill_extrusion_layer_impl;
 #[rustfmt::skip]
 pub mod fill_extrusion_layer_properties;
 #[rustfmt::skip]
-pub mod heatmap_layer;
+pub(crate) mod heatmap_layer;
 pub mod heatmap_layer_impl;
 #[rustfmt::skip]
 pub mod heatmap_layer_properties;

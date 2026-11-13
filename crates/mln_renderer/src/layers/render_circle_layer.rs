@@ -332,7 +332,7 @@ fn project_query_geometry(
     query_geometry.iter().map(|p| project_point(*p, projector, size)).collect()
 }
 
-pub struct RenderCircleLayer {
+pub(crate) struct RenderCircleLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: CirclePaintProperties::Unevaluated,
@@ -340,7 +340,7 @@ pub struct RenderCircleLayer {
 }
 
 impl RenderCircleLayer {
-    pub fn new(impl_: Arc<CircleLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<CircleLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(CircleLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

@@ -9,15 +9,15 @@
 //! International Business Machines Corporation and others. Under ICU's
 //! license (LICENSE-ICU).
 
-pub mod ubidi_props;
+pub(crate) mod ubidi_props;
 #[rustfmt::skip]
 mod ubidi_props_data;
-pub mod ushape;
+pub(crate) mod ushape;
 
 /// ICU's `UErrorCode`, limited to the values this module produces.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UErrorCode {
+pub(crate) enum UErrorCode {
     U_STRING_NOT_TERMINATED_WARNING,
     U_ZERO_ERROR,
     U_ILLEGAL_ARGUMENT_ERROR,
@@ -31,12 +31,12 @@ pub enum UErrorCode {
 impl UErrorCode {
     /// `U_FAILURE(code)`: errors are > `U_ZERO_ERROR`, warnings < 0.
     #[must_use]
-    pub fn is_failure(self) -> bool {
+    pub(crate) fn is_failure(self) -> bool {
         !matches!(self, UErrorCode::U_STRING_NOT_TERMINATED_WARNING | UErrorCode::U_ZERO_ERROR)
     }
 
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             UErrorCode::U_STRING_NOT_TERMINATED_WARNING => "U_STRING_NOT_TERMINATED_WARNING",
             UErrorCode::U_ZERO_ERROR => "U_ZERO_ERROR",

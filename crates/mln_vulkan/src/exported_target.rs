@@ -986,7 +986,7 @@ impl ExportedTarget {
     }
 
     /// How the target shares its images.
-    pub fn kind(&self) -> ExportKind {
+    pub(crate) fn kind(&self) -> ExportKind {
         self.kind
     }
 

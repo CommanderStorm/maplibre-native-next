@@ -46,7 +46,7 @@ impl SegmentBase {
     }
 }
 
-pub type SegmentVector = Vec<SegmentBase>;
+pub(crate) type SegmentVector = Vec<SegmentBase>;
 
 /// The most vertices a segment holds, since they are addressed by 16-bit
 /// indices.

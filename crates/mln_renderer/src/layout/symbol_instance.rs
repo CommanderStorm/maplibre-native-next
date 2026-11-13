@@ -20,14 +20,14 @@ use crate::text::quads::{SymbolQuads, get_glyph_quads, get_icon_quads};
 
 /// Bit flags for what a symbol contains: text, an RGBA icon, an SDF icon.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SymbolContent(pub u8);
+pub(crate) struct SymbolContent(pub(crate) u8);
 
 #[allow(non_upper_case_globals)]
 impl SymbolContent {
-    pub const None: SymbolContent = SymbolContent(0);
-    pub const Text: SymbolContent = SymbolContent(1 << 0);
-    pub const IconRGBA: SymbolContent = SymbolContent(1 << 1);
-    pub const IconSDF: SymbolContent = SymbolContent(1 << 2);
+    pub(crate) const None: SymbolContent = SymbolContent(0);
+    pub(crate) const Text: SymbolContent = SymbolContent(1 << 0);
+    pub(crate) const IconRGBA: SymbolContent = SymbolContent(1 << 1);
+    pub(crate) const IconSDF: SymbolContent = SymbolContent(1 << 2);
 }
 
 impl std::ops::BitOr for SymbolContent {
@@ -53,22 +53,22 @@ impl std::ops::BitOrAssign for SymbolContent {
 /// A symbol's shaped text in each orientation. The right-justified shaping
 /// is the horizontal one: `right()` and `right_mut()` return `horizontal`.
 #[derive(Clone, Debug, Default)]
-pub struct ShapedTextOrientations {
-    pub horizontal: Shaping,
-    pub vertical: Shaping,
+pub(crate) struct ShapedTextOrientations {
+    pub(crate) horizontal: Shaping,
+    pub(crate) vertical: Shaping,
     // The following are used with variable text placement on.
-    pub center: Shaping,
-    pub left: Shaping,
-    pub single_line: bool,
+    pub(crate) center: Shaping,
+    pub(crate) left: Shaping,
+    pub(crate) single_line: bool,
 }
 
 impl ShapedTextOrientations {
     #[must_use]
-    pub fn right(&self) -> &Shaping {
+    pub(crate) fn right(&self) -> &Shaping {
         &self.horizontal
     }
 
-    pub fn right_mut(&mut self) -> &mut Shaping {
+    pub(crate) fn right_mut(&mut self) -> &mut Shaping {
         &mut self.horizontal
     }
 }
@@ -90,21 +90,21 @@ fn get_any_shaping(shaped_text_orientations: &ShapedTextOrientations) -> &Shapin
 }
 
 #[derive(Debug, Default)]
-pub struct SymbolInstanceSharedData {
-    pub line: GeometryCoordinates,
+pub(crate) struct SymbolInstanceSharedData {
+    pub(crate) line: GeometryCoordinates,
     // Note: When singleLine == true, only `rightJustifiedGlyphQuads` is populated.
-    pub right_justified_glyph_quads: SymbolQuads,
-    pub center_justified_glyph_quads: SymbolQuads,
-    pub left_justified_glyph_quads: SymbolQuads,
-    pub vertical_glyph_quads: SymbolQuads,
-    pub icon_quads: Option<SymbolQuads>,
-    pub vertical_icon_quads: Option<SymbolQuads>,
+    pub(crate) right_justified_glyph_quads: SymbolQuads,
+    pub(crate) center_justified_glyph_quads: SymbolQuads,
+    pub(crate) left_justified_glyph_quads: SymbolQuads,
+    pub(crate) vertical_glyph_quads: SymbolQuads,
+    pub(crate) icon_quads: Option<SymbolQuads>,
+    pub(crate) vertical_icon_quads: Option<SymbolQuads>,
 }
 
 impl SymbolInstanceSharedData {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         line: GeometryCoordinates,
         shaped_text_orientations: &ShapedTextOrientations,
         shaped_icon: &Option<PositionedIcon>,
@@ -164,7 +164,7 @@ impl SymbolInstanceSharedData {
     }
 
     #[must_use]
-    pub fn empty(&self) -> bool {
+    pub(crate) fn empty(&self) -> bool {
         self.right_justified_glyph_quads.is_empty()
             && self.center_justified_glyph_quads.is_empty()
             && self.left_justified_glyph_quads.is_empty()
@@ -173,7 +173,7 @@ impl SymbolInstanceSharedData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SymbolInstance {
+pub(crate) struct SymbolInstance {
     /// Port-only: not written by serde. The layout releases it before the
     /// bucket leaves the worker (`releaseSharedData`).
     #[serde(skip)]
@@ -197,12 +197,12 @@ pub struct SymbolInstance {
     text_offset: [f32; 2],
     icon_offset: [f32; 2],
     key: Vec<u16>,
-    pub placed_right_text_index: Option<usize>,
-    pub placed_center_text_index: Option<usize>,
-    pub placed_left_text_index: Option<usize>,
-    pub placed_vertical_text_index: Option<usize>,
-    pub placed_icon_index: Option<usize>,
-    pub placed_vertical_icon_index: Option<usize>,
+    pub(crate) placed_right_text_index: Option<usize>,
+    pub(crate) placed_center_text_index: Option<usize>,
+    pub(crate) placed_left_text_index: Option<usize>,
+    pub(crate) placed_vertical_text_index: Option<usize>,
+    pub(crate) placed_icon_index: Option<usize>,
+    pub(crate) placed_vertical_icon_index: Option<usize>,
     text_box_scale: f32,
     text_variable_anchor_offset: Option<VariableAnchorOffsetCollection>,
     single_line: bool,
@@ -210,11 +210,11 @@ pub struct SymbolInstance {
 }
 
 impl SymbolInstance {
-    pub const INVALID_CROSS_TILE_ID: u32 = u32::MAX;
+    pub(crate) const INVALID_CROSS_TILE_ID: u32 = u32::MAX;
 
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         anchor: Anchor,
         shared_data: Arc<SymbolInstanceSharedData>,
         shaped_text_orientations: &ShapedTextOrientations,
@@ -350,58 +350,58 @@ impl SymbolInstance {
     }
 
     #[must_use]
-    pub fn get_default_horizontal_placed_text_index(&self) -> Option<usize> {
+    pub(crate) fn get_default_horizontal_placed_text_index(&self) -> Option<usize> {
         self.placed_right_text_index.or(self.placed_center_text_index).or(self.placed_left_text_index)
     }
 
     #[must_use]
-    pub fn line(&self) -> &GeometryCoordinates {
+    pub(crate) fn line(&self) -> &GeometryCoordinates {
         &self.shared().line
     }
     #[must_use]
-    pub fn right_justified_glyph_quads(&self) -> &SymbolQuads {
+    pub(crate) fn right_justified_glyph_quads(&self) -> &SymbolQuads {
         &self.shared().right_justified_glyph_quads
     }
     #[must_use]
-    pub fn left_justified_glyph_quads(&self) -> &SymbolQuads {
+    pub(crate) fn left_justified_glyph_quads(&self) -> &SymbolQuads {
         &self.shared().left_justified_glyph_quads
     }
     #[must_use]
-    pub fn center_justified_glyph_quads(&self) -> &SymbolQuads {
+    pub(crate) fn center_justified_glyph_quads(&self) -> &SymbolQuads {
         &self.shared().center_justified_glyph_quads
     }
     #[must_use]
-    pub fn vertical_glyph_quads(&self) -> &SymbolQuads {
+    pub(crate) fn vertical_glyph_quads(&self) -> &SymbolQuads {
         &self.shared().vertical_glyph_quads
     }
     #[must_use]
-    pub fn icon_quads(&self) -> &Option<SymbolQuads> {
+    pub(crate) fn icon_quads(&self) -> &Option<SymbolQuads> {
         &self.shared().icon_quads
     }
     #[must_use]
-    pub fn vertical_icon_quads(&self) -> &Option<SymbolQuads> {
+    pub(crate) fn vertical_icon_quads(&self) -> &Option<SymbolQuads> {
         &self.shared().vertical_icon_quads
     }
 
     #[must_use]
-    pub fn has_text(&self) -> bool {
+    pub(crate) fn has_text(&self) -> bool {
         (self.symbol_content & SymbolContent::Text).0 != 0
     }
     #[must_use]
-    pub fn has_icon(&self) -> bool {
+    pub(crate) fn has_icon(&self) -> bool {
         (self.symbol_content & SymbolContent::IconRGBA).0 != 0 || self.has_sdf_icon()
     }
     #[must_use]
-    pub fn has_sdf_icon(&self) -> bool {
+    pub(crate) fn has_sdf_icon(&self) -> bool {
         (self.symbol_content & SymbolContent::IconSDF).0 != 0
     }
 
-    pub fn release_shared_data(&mut self) {
+    pub(crate) fn release_shared_data(&mut self) {
         self.shared_data = None;
     }
 
     #[must_use]
-    pub fn get_text_anchors(&self) -> Vec<SymbolAnchorType> {
+    pub(crate) fn get_text_anchors(&self) -> Vec<SymbolAnchorType> {
         match &self.text_variable_anchor_offset {
             Some(offsets) => offsets.iter().map(|anchor_offset| anchor_offset.anchor_type).collect(),
             None => Vec::new(),
@@ -409,86 +409,86 @@ impl SymbolInstance {
     }
 
     #[must_use]
-    pub fn get_anchor(&self) -> &Anchor {
+    pub(crate) fn get_anchor(&self) -> &Anchor {
         &self.anchor
     }
     #[must_use]
-    pub fn get_right_justified_glyph_quads_size(&self) -> usize {
+    pub(crate) fn get_right_justified_glyph_quads_size(&self) -> usize {
         self.right_justified_glyph_quads_size
     }
     #[must_use]
-    pub fn get_center_justified_glyph_quads_size(&self) -> usize {
+    pub(crate) fn get_center_justified_glyph_quads_size(&self) -> usize {
         self.center_justified_glyph_quads_size
     }
     #[must_use]
-    pub fn get_left_justified_glyph_quads_size(&self) -> usize {
+    pub(crate) fn get_left_justified_glyph_quads_size(&self) -> usize {
         self.left_justified_glyph_quads_size
     }
     #[must_use]
-    pub fn get_vertical_glyph_quads_size(&self) -> usize {
+    pub(crate) fn get_vertical_glyph_quads_size(&self) -> usize {
         self.vertical_glyph_quads_size
     }
     #[must_use]
-    pub fn get_icon_quads_size(&self) -> usize {
+    pub(crate) fn get_icon_quads_size(&self) -> usize {
         self.icon_quads_size
     }
     #[must_use]
-    pub fn get_text_collision_feature(&self) -> &CollisionFeature {
+    pub(crate) fn get_text_collision_feature(&self) -> &CollisionFeature {
         &self.text_collision_feature
     }
     #[must_use]
-    pub fn get_icon_collision_feature(&self) -> &CollisionFeature {
+    pub(crate) fn get_icon_collision_feature(&self) -> &CollisionFeature {
         &self.icon_collision_feature
     }
     #[must_use]
-    pub fn get_vertical_text_collision_feature(&self) -> &Option<CollisionFeature> {
+    pub(crate) fn get_vertical_text_collision_feature(&self) -> &Option<CollisionFeature> {
         &self.vertical_text_collision_feature
     }
     #[must_use]
-    pub fn get_vertical_icon_collision_feature(&self) -> &Option<CollisionFeature> {
+    pub(crate) fn get_vertical_icon_collision_feature(&self) -> &Option<CollisionFeature> {
         &self.vertical_icon_collision_feature
     }
     #[must_use]
-    pub fn get_writing_modes(&self) -> WritingModeType {
+    pub(crate) fn get_writing_modes(&self) -> WritingModeType {
         self.writing_modes
     }
     #[must_use]
-    pub fn get_layout_feature_index(&self) -> usize {
+    pub(crate) fn get_layout_feature_index(&self) -> usize {
         self.layout_feature_index
     }
     #[must_use]
-    pub fn get_data_feature_index(&self) -> usize {
+    pub(crate) fn get_data_feature_index(&self) -> usize {
         self.data_feature_index
     }
     #[must_use]
-    pub fn get_text_offset(&self) -> [f32; 2] {
+    pub(crate) fn get_text_offset(&self) -> [f32; 2] {
         self.text_offset
     }
     #[must_use]
-    pub fn get_icon_offset(&self) -> [f32; 2] {
+    pub(crate) fn get_icon_offset(&self) -> [f32; 2] {
         self.icon_offset
     }
     #[must_use]
-    pub fn get_key(&self) -> &[u16] {
+    pub(crate) fn get_key(&self) -> &[u16] {
         &self.key
     }
     #[must_use]
-    pub fn get_text_box_scale(&self) -> f32 {
+    pub(crate) fn get_text_box_scale(&self) -> f32 {
         self.text_box_scale
     }
     #[must_use]
-    pub fn get_text_variable_anchor_offset(&self) -> &Option<VariableAnchorOffsetCollection> {
+    pub(crate) fn get_text_variable_anchor_offset(&self) -> &Option<VariableAnchorOffsetCollection> {
         &self.text_variable_anchor_offset
     }
     #[must_use]
-    pub fn get_single_line(&self) -> bool {
+    pub(crate) fn get_single_line(&self) -> bool {
         self.single_line
     }
     #[must_use]
-    pub fn get_cross_tile_id(&self) -> u32 {
+    pub(crate) fn get_cross_tile_id(&self) -> u32 {
         self.cross_tile_id
     }
-    pub fn set_cross_tile_id(&mut self, x: u32) {
+    pub(crate) fn set_cross_tile_id(&mut self, x: u32) {
         self.cross_tile_id = x;
     }
 }

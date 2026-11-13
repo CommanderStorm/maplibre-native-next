@@ -57,9 +57,9 @@ pub struct VecMap<K, V> {
 }
 
 /// [`VecMap::iter`].
-pub type Iter<'a, K, V> = std::iter::Zip<std::slice::Iter<'a, K>, std::slice::Iter<'a, V>>;
+pub(crate) type Iter<'a, K, V> = std::iter::Zip<std::slice::Iter<'a, K>, std::slice::Iter<'a, V>>;
 /// [`VecMap::iter_mut`].
-pub type IterMut<'a, K, V> = std::iter::Zip<std::slice::Iter<'a, K>, std::slice::IterMut<'a, V>>;
+pub(crate) type IterMut<'a, K, V> = std::iter::Zip<std::slice::Iter<'a, K>, std::slice::IterMut<'a, V>>;
 /// [`VecMap::into_iter`].
 pub type IntoIter<K, V> = std::iter::Zip<std::vec::IntoIter<K>, std::vec::IntoIter<V>>;
 
@@ -100,7 +100,7 @@ impl<K, V> VecMap<K, V> {
         self.keys.iter().zip(self.values.iter())
     }
 
-    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
+    pub(crate) fn iter_mut(&mut self) -> IterMut<'_, K, V> {
         self.keys.iter().zip(self.values.iter_mut())
     }
 
@@ -117,33 +117,33 @@ impl<K, V> VecMap<K, V> {
     }
 
     #[must_use]
-    pub fn into_keys(self) -> std::vec::IntoIter<K> {
+    pub(crate) fn into_keys(self) -> std::vec::IntoIter<K> {
         self.keys.into_iter()
     }
 
     #[must_use]
-    pub fn into_values(self) -> std::vec::IntoIter<V> {
+    pub(crate) fn into_values(self) -> std::vec::IntoIter<V> {
         self.values.into_iter()
     }
 
     #[must_use]
-    pub fn first_key_value(&self) -> Option<(&K, &V)> {
+    pub(crate) fn first_key_value(&self) -> Option<(&K, &V)> {
         Some((self.keys.first()?, self.values.first()?))
     }
 
     #[must_use]
-    pub fn last_key_value(&self) -> Option<(&K, &V)> {
+    pub(crate) fn last_key_value(&self) -> Option<(&K, &V)> {
         Some((self.keys.last()?, self.values.last()?))
     }
 
-    pub fn pop_first(&mut self) -> Option<(K, V)> {
+    pub(crate) fn pop_first(&mut self) -> Option<(K, V)> {
         if self.is_empty() {
             return None;
         }
         Some((self.keys.remove(0), self.values.remove(0)))
     }
 
-    pub fn pop_last(&mut self) -> Option<(K, V)> {
+    pub(crate) fn pop_last(&mut self) -> Option<(K, V)> {
         Some((self.keys.pop()?, self.values.pop()?))
     }
 
@@ -178,7 +178,7 @@ impl<K: Ord, V> VecMap<K, V> {
         self.search(key).ok().map(|i| &self.values[i])
     }
 
-    pub fn get_key_value<Q: Ord + ?Sized>(&self, key: &Q) -> Option<(&K, &V)>
+    pub(crate) fn get_key_value<Q: Ord + ?Sized>(&self, key: &Q) -> Option<(&K, &V)>
     where
         K: Borrow<Q>,
     {
@@ -228,7 +228,7 @@ impl<K: Ord, V> VecMap<K, V> {
         self.remove_entry(key).map(|(_, v)| v)
     }
 
-    pub fn remove_entry<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<(K, V)>
+    pub(crate) fn remove_entry<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q>,
     {
@@ -244,7 +244,7 @@ impl<K: Ord, V> VecMap<K, V> {
     }
 
     /// The entries whose keys are in `range`, in key order.
-    pub fn range<Q: Ord + ?Sized, R: RangeBounds<Q>>(&self, range: R) -> Iter<'_, K, V>
+    pub(crate) fn range<Q: Ord + ?Sized, R: RangeBounds<Q>>(&self, range: R) -> Iter<'_, K, V>
     where
         K: Borrow<Q>,
     {
@@ -254,7 +254,7 @@ impl<K: Ord, V> VecMap<K, V> {
 
     /// Moves every entry of `other` into this map, `other`'s value winning
     /// for a key both have, as `BTreeMap::append` does.
-    pub fn append(&mut self, other: &mut Self) {
+    pub(crate) fn append(&mut self, other: &mut Self) {
         let keys = std::mem::take(&mut other.keys);
         let values = std::mem::take(&mut other.values);
         self.extend(keys.into_iter().zip(values));
@@ -314,14 +314,14 @@ impl<'a, K: Ord, V> Entry<'a, K, V> {
     }
 
     #[must_use]
-    pub fn and_modify(mut self, f: impl FnOnce(&mut V)) -> Self {
+    pub(crate) fn and_modify(mut self, f: impl FnOnce(&mut V)) -> Self {
         if let Entry::Occupied(e) = &mut self {
             f(e.get_mut());
         }
         self
     }
 
-    pub fn key(&self) -> &K {
+    pub(crate) fn key(&self) -> &K {
         match self {
             Entry::Occupied(e) => e.key(),
             Entry::Vacant(e) => e.key(),
@@ -331,21 +331,21 @@ impl<'a, K: Ord, V> Entry<'a, K, V> {
 
 impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     #[must_use]
-    pub fn key(&self) -> &K {
+    pub(crate) fn key(&self) -> &K {
         &self.map.keys[self.index]
     }
 
     #[must_use]
-    pub fn get(&self) -> &V {
+    pub(crate) fn get(&self) -> &V {
         &self.map.values[self.index]
     }
 
-    pub fn get_mut(&mut self) -> &mut V {
+    pub(crate) fn get_mut(&mut self) -> &mut V {
         &mut self.map.values[self.index]
     }
 
     #[must_use]
-    pub fn into_mut(self) -> &'a mut V {
+    pub(crate) fn into_mut(self) -> &'a mut V {
         &mut self.map.values[self.index]
     }
 
@@ -354,22 +354,22 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     }
 
     #[must_use]
-    pub fn remove(self) -> V {
+    pub(crate) fn remove(self) -> V {
         self.remove_entry().1
     }
 
     #[must_use]
-    pub fn remove_entry(self) -> (K, V) {
+    pub(crate) fn remove_entry(self) -> (K, V) {
         (self.map.keys.remove(self.index), self.map.values.remove(self.index))
     }
 }
 
 impl<'a, K: Ord, V> VacantEntry<'a, K, V> {
-    pub fn key(&self) -> &K {
+    pub(crate) fn key(&self) -> &K {
         &self.key
     }
 
-    pub fn into_key(self) -> K {
+    pub(crate) fn into_key(self) -> K {
         self.key
     }
 
@@ -508,31 +508,31 @@ impl<T> VecSet<T> {
     }
 
     #[must_use]
-    pub fn first(&self) -> Option<&T> {
+    pub(crate) fn first(&self) -> Option<&T> {
         self.items.first()
     }
 
     #[must_use]
-    pub fn last(&self) -> Option<&T> {
+    pub(crate) fn last(&self) -> Option<&T> {
         self.items.last()
     }
 
-    pub fn pop_first(&mut self) -> Option<T> {
+    pub(crate) fn pop_first(&mut self) -> Option<T> {
         if self.is_empty() { None } else { Some(self.items.remove(0)) }
     }
 
-    pub fn pop_last(&mut self) -> Option<T> {
+    pub(crate) fn pop_last(&mut self) -> Option<T> {
         self.items.pop()
     }
 
     /// The items in order, as a slice.
     #[must_use]
-    pub fn as_slice(&self) -> &[T] {
+    pub(crate) fn as_slice(&self) -> &[T] {
         &self.items
     }
 
     /// Keeps the items for which `f` returns true, visiting them in order.
-    pub fn retain(&mut self, f: impl FnMut(&T) -> bool) {
+    pub(crate) fn retain(&mut self, f: impl FnMut(&T) -> bool) {
         self.items.retain(f);
     }
 }
@@ -545,7 +545,7 @@ impl<T: Ord> VecSet<T> {
         search(&self.items, value).is_ok()
     }
 
-    pub fn get<Q: Ord + ?Sized>(&self, value: &Q) -> Option<&T>
+    pub(crate) fn get<Q: Ord + ?Sized>(&self, value: &Q) -> Option<&T>
     where
         T: Borrow<Q>,
     {
@@ -575,7 +575,7 @@ impl<T: Ord> VecSet<T> {
         self.take(value).is_some()
     }
 
-    pub fn take<Q: Ord + ?Sized>(&mut self, value: &Q) -> Option<T>
+    pub(crate) fn take<Q: Ord + ?Sized>(&mut self, value: &Q) -> Option<T>
     where
         T: Borrow<Q>,
     {
@@ -584,7 +584,7 @@ impl<T: Ord> VecSet<T> {
     }
 
     /// The items in `range`, in order.
-    pub fn range<Q: Ord + ?Sized, R: RangeBounds<Q>>(&self, range: R) -> std::slice::Iter<'_, T>
+    pub(crate) fn range<Q: Ord + ?Sized, R: RangeBounds<Q>>(&self, range: R) -> std::slice::Iter<'_, T>
     where
         T: Borrow<Q>,
     {
@@ -592,27 +592,27 @@ impl<T: Ord> VecSet<T> {
     }
 
     /// Moves every item of `other` into this set.
-    pub fn append(&mut self, other: &mut Self) {
+    pub(crate) fn append(&mut self, other: &mut Self) {
         self.extend(std::mem::take(&mut other.items));
     }
 
     /// The items of this set that are not in `other`, in order.
-    pub fn difference<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = &'a T> + 'a {
+    pub(crate) fn difference<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = &'a T> + 'a {
         self.iter().filter(move |item| !other.contains(*item))
     }
 
     /// The items in both sets, in order.
-    pub fn intersection<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = &'a T> + 'a {
+    pub(crate) fn intersection<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = &'a T> + 'a {
         self.iter().filter(move |item| other.contains(*item))
     }
 
     #[must_use]
-    pub fn is_disjoint(&self, other: &Self) -> bool {
+    pub(crate) fn is_disjoint(&self, other: &Self) -> bool {
         self.intersection(other).next().is_none()
     }
 
     #[must_use]
-    pub fn is_subset(&self, other: &Self) -> bool {
+    pub(crate) fn is_subset(&self, other: &Self) -> bool {
         self.len() <= other.len() && self.iter().all(|item| other.contains(item))
     }
 }

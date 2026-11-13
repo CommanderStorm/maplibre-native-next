@@ -27,7 +27,7 @@ impl dyn ShaderProgramBase {
 pub type ShaderProgramBasePtr = Rc<dyn ShaderProgramBase>;
 
 /// The protected `set<T>(attrs, id, i, value)` helper.
-pub fn set_attribute(attrs: &mut VertexAttributeArray, id: usize, i: usize, value: ElementType) -> bool {
+pub(crate) fn set_attribute(attrs: &mut VertexAttributeArray, id: usize, i: usize, value: ElementType) -> bool {
     if let Some(item) = attrs.get_mut(id)
         && i < item.get_count()
     {

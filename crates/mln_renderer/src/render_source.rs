@@ -29,67 +29,67 @@ use crate::tile::tile::{TileBase, TileOperation};
 use crate::tile::tile_observer::TileObserver;
 use crate::tile_parameters::TileParameters;
 
-pub struct SourcePrepareParameters<'a> {
-    pub transform: &'a TransformParameters,
-    pub debug_options: MapDebugOptions,
-    pub image_manager: &'a ImageManager,
-    pub source_name: String,
+pub(crate) struct SourcePrepareParameters<'a> {
+    pub(crate) transform: &'a TransformParameters,
+    pub(crate) debug_options: MapDebugOptions,
+    pub(crate) image_manager: &'a ImageManager,
+    pub(crate) source_name: String,
 }
 
 /// A shared selection of the render tiles of an `Rc<Vec<RenderTile>>`,
 /// which it keeps alive.
 #[derive(Clone)]
-pub struct RenderTiles {
+pub(crate) struct RenderTiles {
     owner: Rc<Vec<RenderTile>>,
     indices: Rc<Vec<usize>>,
 }
 
 impl RenderTiles {
     #[must_use]
-    pub fn new(owner: Rc<Vec<RenderTile>>, indices: Vec<usize>) -> Self {
+    pub(crate) fn new(owner: Rc<Vec<RenderTile>>, indices: Vec<usize>) -> Self {
         RenderTiles { owner, indices: Rc::new(indices) }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &RenderTile> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &RenderTile> + '_ {
         self.indices.iter().map(|&i| &self.owner[i])
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.indices.len()
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
 
     #[must_use]
-    pub fn get(&self, i: usize) -> Option<&RenderTile> {
+    pub(crate) fn get(&self, i: usize) -> Option<&RenderTile> {
         self.indices.get(i).map(|&i| &self.owner[i])
     }
 
     /// The tiles the selection points into.
     #[must_use]
-    pub fn owner(&self) -> &Rc<Vec<RenderTile>> {
+    pub(crate) fn owner(&self) -> &Rc<Vec<RenderTile>> {
         &self.owner
     }
 }
 
 /// Observes the render sources' tiles. The callbacks get the source's id,
 /// which is all the orchestrator reads of the source.
-pub trait RenderSourceObserver {
+pub(crate) trait RenderSourceObserver {
     fn on_tile_changed(&self, _source_id: &str, _tile_id: &OverscaledTileID) {}
     fn on_tile_error(&self, _source_id: &str, _tile_id: &OverscaledTileID, _error: Error) {}
     fn on_tile_action(&self, _source_id: &str, _op: TileOperation, _tile_id: &OverscaledTileID, _tile_source_id: &str) {
     }
 }
 
-pub struct NullRenderSourceObserver;
+pub(crate) struct NullRenderSourceObserver;
 impl RenderSourceObserver for NullRenderSourceObserver {}
 
 /// The `TileObserver` half of `RenderSource`.
-pub struct RenderSourceTileObserver {
+pub(crate) struct RenderSourceTileObserver {
     source_id: String,
     observer: RefCell<Rc<dyn RenderSourceObserver>>,
 }
@@ -115,15 +115,15 @@ impl TileObserver for RenderSourceTileObserver {
 }
 
 /// The data members of `RenderSource`.
-pub struct RenderSourceBase {
-    pub base_impl: Arc<dyn source::Impl>,
-    pub enabled: bool,
+pub(crate) struct RenderSourceBase {
+    pub(crate) base_impl: Arc<dyn source::Impl>,
+    pub(crate) enabled: bool,
     /// `this` as the `TileObserver` of the source's tiles.
     tile_observer: Rc<RenderSourceTileObserver>,
 }
 
 impl RenderSourceBase {
-    pub fn new(impl_: Arc<dyn source::Impl>) -> Self {
+    pub(crate) fn new(impl_: Arc<dyn source::Impl>) -> Self {
         let source_id = impl_.id.clone();
         RenderSourceBase {
             base_impl: impl_,
@@ -137,12 +137,12 @@ impl RenderSourceBase {
 
     /// The source as the observer of its tiles.
     #[must_use]
-    pub fn tile_observer(&self) -> Rc<dyn TileObserver> {
+    pub(crate) fn tile_observer(&self) -> Rc<dyn TileObserver> {
         self.tile_observer.clone()
     }
 }
 
-pub trait RenderSource {
+pub(crate) trait RenderSource {
     fn base(&self) -> &RenderSourceBase;
     fn base_mut(&mut self) -> &mut RenderSourceBase;
 
@@ -292,7 +292,7 @@ pub trait RenderSource {
 
 /// Creates the render source of a style source. Takes no thread pool (see
 /// `TileCache::new`).
-pub fn create(impl_: &Arc<dyn source::Impl>) -> Option<Box<dyn RenderSource>> {
+pub(crate) fn create(impl_: &Arc<dyn source::Impl>) -> Option<Box<dyn RenderSource>> {
     match impl_.type_ {
         // the TileSet isn't available yet, so we can't make different
         // sources by format

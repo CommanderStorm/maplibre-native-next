@@ -10,13 +10,13 @@ use mln_gfx::shaders::segment::SegmentBase;
 
 use crate::drawable::Drawable;
 
-pub struct DrawableBuilder {
+pub(crate) struct DrawableBuilder {
     base: DrawableBuilderBase,
 }
 
 impl DrawableBuilder {
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub(crate) fn new(name: String) -> Self {
         DrawableBuilder { base: DrawableBuilderBase::new(name) }
     }
 }

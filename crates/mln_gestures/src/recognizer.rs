@@ -456,7 +456,7 @@ impl Default for GestureRecognizer {
 
 impl GestureRecognizer {
     #[must_use]
-    pub fn new(options: GestureOptions) -> Self {
+    pub(crate) fn new(options: GestureOptions) -> Self {
         GestureRecognizer {
             options,
             pointers: Vec::new(),
@@ -472,18 +472,18 @@ impl GestureRecognizer {
     }
 
     #[must_use]
-    pub fn options(&self) -> &GestureOptions {
+    pub(crate) fn options(&self) -> &GestureOptions {
         &self.options
     }
 
     /// Takes effect with the next input.
-    pub fn set_options(&mut self, options: GestureOptions) {
+    pub(crate) fn set_options(&mut self, options: GestureOptions) {
         self.options = options;
     }
 
     /// A gesture is under way: hosts keep pointer capture and scrolling off.
     #[must_use]
-    pub fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         !matches!(self.mode, Mode::Idle) || self.scroll.is_some()
     }
 
@@ -506,7 +506,7 @@ impl GestureRecognizer {
     /// the phase the recognizer's own steps get (an update of a gesture under
     /// way, or a gesture of its own), and a step that zooms takes over a
     /// running notch ease. `delta.phase` is ignored.
-    pub fn step(&mut self, camera: &mut dyn GestureCamera, delta: CameraDelta) -> Result<(), CameraError> {
+    pub(crate) fn step(&mut self, camera: &mut dyn GestureCamera, delta: CameraDelta) -> Result<(), CameraError> {
         delta.validate()?;
         self.eased_step(camera, delta);
         Ok(())

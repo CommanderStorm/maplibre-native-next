@@ -37,7 +37,7 @@ pub const fn vec3_dot(a: &Vec3, b: &Vec3) -> f64 {
 }
 
 #[must_use]
-pub const fn vec3_length_sq(a: &Vec3) -> f64 {
+pub(crate) const fn vec3_length_sq(a: &Vec3) -> f64 {
     vec3_dot(a, a)
 }
 
@@ -69,7 +69,7 @@ pub const fn vec3_sub(a: &Vec3, b: &Vec3) -> Vec3 {
 
 /// `vec3Add`.
 #[must_use]
-pub const fn vec3_add(a: &Vec3, b: &Vec3) -> Vec3 {
+pub(crate) const fn vec3_add(a: &Vec3, b: &Vec3) -> Vec3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
@@ -93,7 +93,7 @@ pub mod matrix {
         out[8] = 1.0;
     }
 
-    pub fn translate(out: &mut Mat3, a: &Mat3, x: f64, y: f64) {
+    pub(crate) fn translate(out: &mut Mat3, a: &Mat3, x: f64, y: f64) {
         let a00 = a[0];
         let a01 = a[1];
         let a02 = a[2];
@@ -143,7 +143,7 @@ pub mod matrix {
         out[8] = a22;
     }
 
-    pub fn scale(out: &mut Mat3, a: &Mat3, x: f64, y: f64) {
+    pub(crate) fn scale(out: &mut Mat3, a: &Mat3, x: f64, y: f64) {
         out[0] = x * a[0];
         out[1] = x * a[1];
         out[2] = x * a[2];

@@ -73,7 +73,7 @@ impl BorrowedImages {
     /// producer's) and the target for the host's reads (the consumer's), on
     /// `device`.
     #[must_use]
-    pub fn sync_kinds(device: &Device) -> (SyncKinds, SyncKinds) {
+    pub(crate) fn sync_kinds(device: &Device) -> (SyncKinds, SyncKinds) {
         device.sync_kinds()
     }
 
@@ -440,22 +440,22 @@ impl BorrowedTarget {
     }
 
     /// How many images the ring has.
-    pub fn depth(&self) -> usize {
+    pub(crate) fn depth(&self) -> usize {
         self.images.borrow().images.len()
     }
 
     /// The images' size, in physical pixels.
-    pub fn size(&self) -> Size {
+    pub(crate) fn size(&self) -> Size {
         self.images.borrow().size
     }
 
     /// The images of the ring.
-    pub fn images(&self) -> BorrowedImages {
+    pub(crate) fn images(&self) -> BorrowedImages {
         self.images.borrow().clone()
     }
 
     /// The kind of sync that frames are handed over with.
-    pub fn producer(&self) -> SyncKind {
+    pub(crate) fn producer(&self) -> SyncKind {
         self.producer
     }
 

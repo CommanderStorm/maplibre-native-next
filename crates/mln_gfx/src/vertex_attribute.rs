@@ -13,7 +13,7 @@ use crate::vertex_vector::VertexVectorBasePtr;
 
 /// The value of one vertex attribute element, in C++'s variant order.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ElementType {
+pub(crate) enum ElementType {
     Int(i32),
     UShort8([u16; 8]),
     Int2([i32; 2]),
@@ -51,7 +51,7 @@ pub struct VertexAttribute {
 
 impl VertexAttribute {
     #[must_use]
-    pub fn with_stride(index: i32, data_type: AttributeDataType, count: usize, stride: usize) -> Self {
+    pub(crate) fn with_stride(index: i32, data_type: AttributeDataType, count: usize, stride: usize) -> Self {
         VertexAttribute {
             index,
             stride,
@@ -69,13 +69,13 @@ impl VertexAttribute {
     }
 
     #[must_use]
-    pub fn new(index: i32, data_type: AttributeDataType, count: usize) -> Self {
+    pub(crate) fn new(index: i32, data_type: AttributeDataType, count: usize) -> Self {
         Self::with_stride(index, data_type, count, Self::get_stride_of(data_type))
     }
 
     /// The C++ copy constructor: everything but the raw data and the buffer.
     #[must_use]
-    pub fn copy(&self) -> Self {
+    pub(crate) fn copy(&self) -> Self {
         VertexAttribute {
             index: self.index,
             stride: self.stride,
@@ -115,7 +115,7 @@ impl VertexAttribute {
     pub fn get_index(&self) -> i32 {
         self.index
     }
-    pub fn set_index(&mut self, value: i32) {
+    pub(crate) fn set_index(&mut self, value: i32) {
         self.index = value;
     }
     pub fn get_stride(&self) -> usize {
@@ -125,7 +125,7 @@ impl VertexAttribute {
         self.stride = value;
     }
 
-    pub fn get_count(&self) -> usize {
+    pub(crate) fn get_count(&self) -> usize {
         match &self.shared_raw_data {
             Some(shared) => shared.get_raw_count(),
             None => self.items.len(),
@@ -135,16 +135,16 @@ impl VertexAttribute {
     pub fn get_data_type(&self) -> AttributeDataType {
         self.data_type
     }
-    pub fn get(&self, i: usize) -> &ElementType {
+    pub(crate) fn get(&self, i: usize) -> &ElementType {
         &self.items[i]
     }
-    pub fn reserve(&mut self, count: usize) {
+    pub(crate) fn reserve(&mut self, count: usize) {
         self.items.reserve(count);
     }
 
     /// Sets element `i`, marking the attribute dirty when the value (or its
     /// variant) changes.
-    pub fn set(&mut self, i: usize, value: ElementType) -> &ElementType {
+    pub(crate) fn set(&mut self, i: usize, value: ElementType) -> &ElementType {
         if self.items.len() < i + 1 {
             let n = self.items.len().max(i + 1);
             self.items.resize(n, ElementType::default());
@@ -159,7 +159,7 @@ impl VertexAttribute {
         &self.items[i]
     }
 
-    pub fn set_variant(&mut self, i: usize, value: ElementType) -> &ElementType {
+    pub(crate) fn set_variant(&mut self, i: usize, value: ElementType) -> &ElementType {
         if self.items.len() < i + 1 {
             let n = self.items.len().max(i + 1);
             self.items.resize(n, ElementType::default());
@@ -169,7 +169,7 @@ impl VertexAttribute {
         &self.items[i]
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         if !self.items.is_empty() {
             self.set_dirty(true);
         }
@@ -181,7 +181,7 @@ impl VertexAttribute {
         self.dirty.set(value);
     }
 
-    pub fn is_modified_after(&self, time: Instant) -> bool {
+    pub(crate) fn is_modified_after(&self, time: Instant) -> bool {
         if let Some(shared) = &self.shared_raw_data {
             return shared.is_modified_after(time);
         }
@@ -191,7 +191,7 @@ impl VertexAttribute {
     pub fn get_raw_data(&self) -> &Vec<u8> {
         &self.raw_data
     }
-    pub fn get_raw_data_mut(&mut self) -> &mut Vec<u8> {
+    pub(crate) fn get_raw_data_mut(&mut self) -> &mut Vec<u8> {
         &mut self.raw_data
     }
     pub fn set_raw_data(&mut self, value: Vec<u8>) {
@@ -229,7 +229,7 @@ impl VertexAttribute {
         self.shared_stride = stride;
     }
 
-    pub fn reset_shared_raw_data(&mut self) {
+    pub(crate) fn reset_shared_raw_data(&mut self) {
         self.shared_raw_data = None;
     }
 
@@ -240,12 +240,12 @@ impl VertexAttribute {
         self.buffer = value;
     }
 
-    pub fn is_dirty(&self) -> bool {
+    pub(crate) fn is_dirty(&self) -> bool {
         self.dirty.get()
     }
 }
 
-pub type UniqueVertexAttribute = Box<VertexAttribute>;
+pub(crate) type UniqueVertexAttribute = Box<VertexAttribute>;
 
 /// Vertex attributes by id.
 #[derive(Default)]
@@ -274,7 +274,7 @@ impl VertexAttributeArray {
     }
 
     #[must_use]
-    pub fn get_total_size(&self) -> usize {
+    pub(crate) fn get_total_size(&self) -> usize {
         self.attrs.iter().map(|a| a.as_ref().map_or(0, |a| a.get_stride())).sum()
     }
 
@@ -288,7 +288,7 @@ impl VertexAttributeArray {
         self.attrs.get(id).and_then(|a| a.as_deref())
     }
 
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut VertexAttribute> {
+    pub(crate) fn get_mut(&mut self, id: usize) -> Option<&mut VertexAttribute> {
         self.attrs.get_mut(id).and_then(|a| a.as_deref_mut())
     }
 
@@ -314,7 +314,7 @@ impl VertexAttributeArray {
         self.attrs.iter().any(|attr| attr.as_ref().is_some_and(|a| a.is_modified_after(time)))
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         for attr in &mut self.attrs {
             *attr = None;
         }

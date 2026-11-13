@@ -43,7 +43,7 @@ fn signed_area(ring: &GeometryCoordinates) -> f64 {
 /// version 2 wants, followed by its holes, wound the other way; every ring
 /// is closed.
 #[must_use]
-pub fn fixup_polygons(rings: &GeometryCollection) -> GeometryCollection {
+pub(crate) fn fixup_polygons(rings: &GeometryCollection) -> GeometryCollection {
     let mut overlay = Overlay::new(rings.iter().map(Vec::len).sum());
     for ring in rings.iter() {
         overlay.add_path_iter(ring.iter().map(|p| IntPoint::new(i32::from(p.x), i32::from(p.y))), ShapeType::Subject);
@@ -262,9 +262,9 @@ pub fn to_geometry_collection(geom: &Geometry<i16>) -> GeometryCollection {
     }
 }
 
-pub type GeometryCoordinateFloat = Point<f32>;
-pub type GeometryCoordinatesFloat = Vec<GeometryCoordinateFloat>;
-pub type GeometryCollectionFloat = Vec<GeometryCoordinatesFloat>;
+pub(crate) type GeometryCoordinateFloat = Point<f32>;
+pub(crate) type GeometryCoordinatesFloat = Vec<GeometryCoordinateFloat>;
+pub(crate) type GeometryCollectionFloat = Vec<GeometryCoordinatesFloat>;
 
 /// Replaces each corner of the closed rings of `polygon` with an arc that
 /// starts and ends `desired_corner_distance` tile units from the corner, or

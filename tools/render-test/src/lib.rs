@@ -7,18 +7,18 @@
 //! image as the rendered one.
 
 pub mod file_source;
-pub mod filesystem;
-pub mod jobs;
-pub mod log;
-pub mod manifest_parser;
+pub(crate) mod filesystem;
+pub(crate) mod jobs;
+pub(crate) mod log;
+pub(crate) mod manifest_parser;
 pub mod map;
-pub mod metadata;
-pub mod parser;
+pub(crate) mod metadata;
+pub(crate) mod parser;
 pub mod render_test;
 pub mod runner;
-pub mod style_ops;
-pub mod test_runner_common;
-pub mod watchdog;
+pub(crate) mod style_ops;
+pub(crate) mod test_runner_common;
+pub(crate) mod watchdog;
 
 pub use render_test::run_render_tests;
 

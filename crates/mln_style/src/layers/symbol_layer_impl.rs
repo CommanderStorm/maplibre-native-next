@@ -138,7 +138,7 @@ impl SymbolLayerPaintPropertyOverrides {
     /// Carries a `FormatSectionOverride` wrapper of `text-color` over from
     /// `evaluated` to `updated`.
     // gtests-data: ported for Layer.SymbolLayerOverrides.
-    pub fn update_overrides(
+    pub(crate) fn update_overrides(
         evaluated: &SymbolPaintProperties::PossiblyEvaluated,
         updated: &mut SymbolPaintProperties::PossiblyEvaluated,
     ) {
@@ -159,7 +159,7 @@ impl SymbolLayerPaintPropertyOverrides {
     /// Whether a constant overridable property differs between `lhs` and
     /// `rhs`.
     #[must_use]
-    pub fn has_paint_property_difference(
+    pub(crate) fn has_paint_property_difference(
         lhs: &SymbolPaintProperties::Transitionable,
         rhs: &SymbolPaintProperties::Transitionable,
     ) -> bool {
@@ -172,7 +172,7 @@ impl SymbolLayerPaintPropertyOverrides {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Impl {
-    pub base: ImplBase,
+    pub(crate) base: ImplBase,
     pub layout: SymbolLayoutProperties::Unevaluated,
     pub paint: SymbolPaintProperties::Transitionable,
     #[serde(skip)]
@@ -181,7 +181,7 @@ pub struct Impl {
 
 impl Impl {
     #[must_use]
-    pub fn new(layer_id: String, source_id: String) -> Self {
+    pub(crate) fn new(layer_id: String, source_id: String) -> Self {
         Impl {
             base: ImplBase::new(layer_id, source_id),
             layout: SymbolLayoutProperties::Unevaluated::default(),

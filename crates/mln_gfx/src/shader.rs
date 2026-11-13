@@ -9,4 +9,4 @@ pub trait Shader: Any {
     fn type_name(&self) -> &'static str;
 }
 
-pub type ShaderPtr = Rc<dyn Shader>;
+pub(crate) type ShaderPtr = Rc<dyn Shader>;

@@ -57,7 +57,7 @@ impl<'a> TileProjector<'a> {
     }
 
     #[must_use]
-    pub fn get_projection_data(&self) -> &ProjectionData {
+    pub(crate) fn get_projection_data(&self) -> &ProjectionData {
         &self.data
     }
 }

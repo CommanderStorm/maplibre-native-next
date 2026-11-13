@@ -11,24 +11,24 @@ use mln_util::chrono::{Timestamp, iso8601};
 use crate::geometry::debug_font_data::SIMPLEX;
 
 /// The tile's parse status and timestamps, as text in tile coordinates.
-pub struct DebugBucket {
-    pub renderable: bool,
-    pub complete: bool,
-    pub modified: Option<Timestamp>,
-    pub expires: Option<Timestamp>,
-    pub debug_mode: MapDebugOptions,
-    pub source_name: String,
+pub(crate) struct DebugBucket {
+    pub(crate) renderable: bool,
+    pub(crate) complete: bool,
+    pub(crate) modified: Option<Timestamp>,
+    pub(crate) expires: Option<Timestamp>,
+    pub(crate) debug_mode: MapDebugOptions,
+    pub(crate) source_name: String,
 
     /// The text, one line per entry, empty without `PARSE_STATUS` and
     /// `TIMESTAMPS`.
-    pub text: Vec<String>,
+    pub(crate) text: Vec<String>,
     /// The strokes of the text's glyphs.
-    pub strokes: Vec<GeometryCoordinates>,
+    pub(crate) strokes: Vec<GeometryCoordinates>,
 }
 
 impl DebugBucket {
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         id: &OverscaledTileID,
         renderable: bool,
         complete: bool,

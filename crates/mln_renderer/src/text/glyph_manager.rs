@@ -52,13 +52,13 @@ use crate::text::font_face_engine::{self, FontFaceEngine, FontFaceShaper};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct HBShapeResult {
-    pub str_: Vec<u16>,
-    pub adjusts: Arc<Vec<mln_text::HBShapeAdjust>>,
+    pub(crate) str_: Vec<u16>,
+    pub(crate) adjusts: Arc<Vec<mln_text::HBShapeAdjust>>,
 }
 
-pub type HBShapeResults = VecMap<FontStack, VecMap<GlyphIDType, BTreeMap<Vec<u16>, HBShapeResult>>>;
+pub(crate) type HBShapeResults = VecMap<FontStack, VecMap<GlyphIDType, BTreeMap<Vec<u16>, HBShapeResult>>>;
 
-pub trait GlyphManagerObserver {
+pub(crate) trait GlyphManagerObserver {
     fn on_glyphs_loaded(&self, _font_stack: &FontStack, _range: &GlyphRange) {}
     fn on_glyphs_error(&self, _font_stack: &FontStack, _range: &GlyphRange, _error: Error) {}
     fn on_glyphs_requested(&self, _font_stack: &FontStack, _range: &GlyphRange) {}
@@ -67,7 +67,7 @@ pub trait GlyphManagerObserver {
 struct NullObserver;
 impl GlyphManagerObserver for NullObserver {}
 
-pub trait GlyphRequestor {
+pub(crate) trait GlyphRequestor {
     fn on_glyphs_available(&self, glyphs: GlyphMap, requests: HBShapeRequests);
 
     /// Asks the requestor to request the glyphs it got as missing again,
@@ -76,9 +76,9 @@ pub trait GlyphRequestor {
 }
 
 /// A requestor's identity (`GlyphRequestor*`).
-pub type GlyphRequestorKey = usize;
+pub(crate) type GlyphRequestorKey = usize;
 
-pub fn glyph_requestor_key<T: ?Sized>(requestor: &Rc<T>) -> GlyphRequestorKey {
+pub(crate) fn glyph_requestor_key<T: ?Sized>(requestor: &Rc<T>) -> GlyphRequestorKey {
     Rc::as_ptr(requestor).cast::<()>() as usize
 }
 
@@ -136,7 +136,7 @@ impl EngineReadiness {
     }
 }
 
-pub struct GlyphManager {
+pub(crate) struct GlyphManager {
     self_weak: Weak<GlyphManager>,
     glyph_url: RefCell<String>,
     entries: RefCell<HashMap<FontStack, Entry>>,
@@ -163,13 +163,13 @@ pub struct GlyphManager {
 impl GlyphManager {
     /// A manager with a glyph cache of its own.
     #[must_use]
-    pub fn new(local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>) -> Rc<GlyphManager> {
+    pub(crate) fn new(local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>) -> Rc<GlyphManager> {
         Self::with_glyph_cache(local_glyph_rasterizer, Arc::default())
     }
 
     /// A manager that uses `glyph_cache`: managers given the same cache share
     /// the glyphs they parse from glyph PBFs.
-    pub fn with_glyph_cache(
+    pub(crate) fn with_glyph_cache(
         local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>,
         glyph_cache: Arc<GlyphCache>,
     ) -> Rc<GlyphManager> {
@@ -178,7 +178,7 @@ impl GlyphManager {
 
     /// A manager whose font faces load with `engine` instead of the one
     /// `set_font_face_engine` set.
-    pub fn with_font_face_engine(
+    pub(crate) fn with_font_face_engine(
         local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>,
         engine: Arc<dyn FontFaceEngine>,
     ) -> Rc<GlyphManager> {
@@ -210,13 +210,13 @@ impl GlyphManager {
         })
     }
 
-    pub fn set_url(&self, url: &str) {
+    pub(crate) fn set_url(&self, url: &str) {
         if *self.glyph_url.borrow() != url {
             *self.glyph_url.borrow_mut() = url.to_owned();
         }
     }
 
-    pub fn set_observer(&self, observer: Option<Rc<dyn GlyphManagerObserver>>) {
+    pub(crate) fn set_observer(&self, observer: Option<Rc<dyn GlyphManagerObserver>>) {
         *self.observer.borrow_mut() = observer.unwrap_or_else(|| Rc::new(NullObserver));
     }
 
@@ -225,7 +225,7 @@ impl GlyphManager {
     /// glyphs are already locally available, `GlyphManager` provides them
     /// immediately. Otherwise, it requests each range needed from the
     /// `FileSource`, and notifies the requestor when all are complete.
-    pub fn get_glyphs(
+    pub(crate) fn get_glyphs(
         &self,
         requestor: &Rc<dyn GlyphRequestor>,
         glyph_dependencies: GlyphDependencies,
@@ -484,7 +484,7 @@ impl GlyphManager {
     /// Asks each requestor answered without the glyphs of a failed range to
     /// request them again. Its request is what requests the range again, so a
     /// range is requested once however it came to be needed.
-    pub fn retry_failed_requests(&self) {
+    pub(crate) fn retry_failed_requests(&self) {
         let requestors = std::mem::take(&mut *self.requestors_missing_glyphs.borrow_mut());
         for requestor in requestors.into_values() {
             if let Some(requestor) = requestor.upgrade() {
@@ -494,7 +494,7 @@ impl GlyphManager {
     }
 
     /// Removes the requestor with this identity key.
-    pub fn remove_requestor_key(&self, key: GlyphRequestorKey) {
+    pub(crate) fn remove_requestor_key(&self, key: GlyphRequestorKey) {
         self.requestors_missing_glyphs.borrow_mut().remove(&key);
         let mut entries = self.entries.borrow_mut();
         for entry in entries.values_mut() {
@@ -505,11 +505,11 @@ impl GlyphManager {
     }
 
     /// `evict(keep)`: remove glyphs for all but the supplied font stacks.
-    pub fn evict(&self, keep: &VecSet<FontStack>) {
+    pub(crate) fn evict(&self, keep: &VecSet<FontStack>) {
         self.entries.borrow_mut().retain(|font_stack, _| keep.contains(font_stack));
     }
 
-    pub fn get_glyph(&self, font_stack: &FontStack, glyph_id: GlyphID) -> Arc<Glyph> {
+    pub(crate) fn get_glyph(&self, font_stack: &FontStack, glyph_id: GlyphID) -> Arc<Glyph> {
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(font_stack.clone()).or_default();
         if let Some(glyph) = entry.find_glyph(glyph_id) {
@@ -531,7 +531,7 @@ impl GlyphManager {
 
     /// Sets the style's font faces. Once a style has font faces, the engine
     /// gets ready to load them while their files download.
-    pub fn set_font_faces(&self, faces: Option<Arc<FontFaces>>) {
+    pub(crate) fn set_font_faces(&self, faces: Option<Arc<FontFaces>>) {
         let has_faces = faces.as_ref().is_some_and(|faces| !faces.is_empty());
         *self.font_faces.borrow_mut() = faces;
         if has_faces {
@@ -592,11 +592,11 @@ impl GlyphManager {
         }
     }
 
-    pub fn get_font_faces(&self) -> Option<Arc<FontFaces>> {
+    pub(crate) fn get_font_faces(&self) -> Option<Arc<FontFaces>> {
         self.font_faces.borrow().clone()
     }
 
-    pub fn get_hb_shaper(&self, font_stack: &FontStack, type_: GlyphIDType) -> Option<Rc<dyn FontFaceShaper>> {
+    pub(crate) fn get_hb_shaper(&self, font_stack: &FontStack, type_: GlyphIDType) -> Option<Rc<dyn FontFaceShaper>> {
         self.hb_shapers.borrow().get(font_stack).and_then(|shapers| shapers.get(&type_)).cloned()
     }
 
@@ -613,7 +613,7 @@ impl GlyphManager {
         true
     }
 
-    pub fn hb_shaping(
+    pub(crate) fn hb_shaping(
         &self,
         text: &[u16],
         rtl: bool,
@@ -627,7 +627,7 @@ impl GlyphManager {
         }
     }
 
-    pub fn get_font_face_url(&self, type_: GlyphIDType) -> String {
+    pub(crate) fn get_font_face_url(&self, type_: GlyphIDType) -> String {
         if let Some(faces) = &*self.font_faces.borrow() {
             for face in faces.iter() {
                 if face.type_ == type_ {
@@ -649,4 +649,4 @@ impl GlyphManager {
 }
 
 /// The glyph ids of a dependency set, re-exported for the worker.
-pub type GlyphIDSet = GlyphIDs;
+pub(crate) type GlyphIDSet = GlyphIDs;

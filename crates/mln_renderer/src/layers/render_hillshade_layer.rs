@@ -70,7 +70,7 @@ const HILLSHADE_SHADER_GROUP_NAME: &str = "HillshadeShader";
 /// its vertex attributes were built from.
 struct HillshadeDrawableGeometryTime(Instant);
 
-pub struct RenderHillshadeLayer {
+pub(crate) struct RenderHillshadeLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: HillshadePaintProperties::Unevaluated,
@@ -91,7 +91,7 @@ pub struct RenderHillshadeLayer {
 }
 
 impl RenderHillshadeLayer {
-    pub fn new(impl_: Arc<HillshadeLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<HillshadeLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(HillshadeLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

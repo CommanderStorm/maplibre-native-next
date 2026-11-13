@@ -82,36 +82,36 @@ const SYMBOL_TEXT_AND_ICON_SHADER_NAME: &str = "SymbolTextAndIconShader";
 const POS_OFFSET_ATTRIB_NAME: &str = "a_pos_offset";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SymbolType {
+pub(crate) enum SymbolType {
     Text,
     IconRGBA,
     IconSDF,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SymbolPropertyValues {
-    pub pitch_alignment: AlignmentType,
-    pub rotation_alignment: AlignmentType,
-    pub keep_upright: bool,
-    pub translate: [f32; 2],
-    pub translate_anchor: TranslateAnchorType,
-    pub has_halo: bool,
-    pub has_fill: bool,
+pub(crate) struct SymbolPropertyValues {
+    pub(crate) pitch_alignment: AlignmentType,
+    pub(crate) rotation_alignment: AlignmentType,
+    pub(crate) keep_upright: bool,
+    pub(crate) translate: [f32; 2],
+    pub(crate) translate_anchor: TranslateAnchorType,
+    pub(crate) has_halo: bool,
+    pub(crate) has_fill: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SymbolDrawableData {
-    pub is_halo: bool,
-    pub bucket_variable_placement: bool,
-    pub symbol_type: SymbolType,
-    pub pitch_alignment: AlignmentType,
-    pub rotation_alignment: AlignmentType,
-    pub placement: SymbolPlacementType,
-    pub text_fit: IconTextFitType,
-    pub is_offset: bool,
+pub(crate) struct SymbolDrawableData {
+    pub(crate) is_halo: bool,
+    pub(crate) bucket_variable_placement: bool,
+    pub(crate) symbol_type: SymbolType,
+    pub(crate) pitch_alignment: AlignmentType,
+    pub(crate) rotation_alignment: AlignmentType,
+    pub(crate) placement: SymbolPlacementType,
+    pub(crate) text_fit: IconTextFitType,
+    pub(crate) is_offset: bool,
     /// The bucket segment the drawable draws (`sortFeaturesByKey`), or all
     /// of them.
-    pub segment: Option<usize>,
+    pub(crate) segment: Option<usize>,
 }
 
 /// The bucket change counters a tile's drawables reflect.
@@ -135,7 +135,7 @@ impl TileVersions {
 }
 
 #[must_use]
-pub fn icon_property_values(
+pub(crate) fn icon_property_values(
     evaluated: &SymbolPaintProperties::PossiblyEvaluated,
     layout: &SymbolLayoutProperties::PossiblyEvaluated,
 ) -> SymbolPropertyValues {
@@ -152,7 +152,7 @@ pub fn icon_property_values(
 }
 
 #[must_use]
-pub fn text_property_values(
+pub(crate) fn text_property_values(
     evaluated: &SymbolPaintProperties::PossiblyEvaluated,
     layout: &SymbolLayoutProperties::PossiblyEvaluated,
 ) -> SymbolPropertyValues {
@@ -826,7 +826,7 @@ impl SegmentGroup {
     }
 }
 
-pub struct RenderSymbolLayer {
+pub(crate) struct RenderSymbolLayer {
     base: RenderLayerBase,
     unevaluated: SymbolPaintProperties::Unevaluated,
     has_format_section_overrides: bool,
@@ -848,7 +848,7 @@ pub struct RenderSymbolLayer {
 }
 
 impl RenderSymbolLayer {
-    pub fn new(impl_: Arc<SymbolLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<SymbolLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(SymbolLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

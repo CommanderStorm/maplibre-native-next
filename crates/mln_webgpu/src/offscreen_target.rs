@@ -31,11 +31,11 @@ impl OffscreenTarget {
     }
 
     /// The backend the target draws on.
-    pub fn backend(&self) -> &Rc<RendererBackend> {
+    pub(crate) fn backend(&self) -> &Rc<RendererBackend> {
         &self.backend
     }
 
-    pub fn size(&self) -> Size {
+    pub(crate) fn size(&self) -> Size {
         self.size.get()
     }
 

@@ -21,7 +21,7 @@
 // 3. This notice may not be removed or altered from any source distribution.
 
 pub type Mat4 = [f64; 16];
-pub type Matf4 = [f32; 16];
+pub(crate) type Matf4 = [f32; 16];
 
 /// Matrix operations on `Mat4`.
 ///
@@ -58,12 +58,12 @@ pub mod matrix {
     }
 
     #[must_use]
-    pub const fn identity4() -> Mat4 {
+    pub(crate) const fn identity4() -> Mat4 {
         [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     }
 
     #[must_use]
-    pub const fn identity4f() -> Matf4 {
+    pub(crate) const fn identity4f() -> Matf4 {
         [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     }
 
@@ -170,7 +170,7 @@ pub mod matrix {
         out[15] = 0.0;
     }
 
-    pub fn copy(out: &mut Mat4, a: &Mat4) {
+    pub(crate) fn copy(out: &mut Mat4, a: &Mat4) {
         *out = *a;
     }
 
@@ -405,7 +405,7 @@ pub mod matrix {
         result
     }
 
-    pub fn diffsplit(out_value: &mut Matf4, out_diff: &mut Matf4, source: &Mat4) {
+    pub(crate) fn diffsplit(out_value: &mut Matf4, out_diff: &mut Matf4, source: &Mat4) {
         for i in 0..16 {
             out_value[i] = source[i] as f32;
             // double - float in double, then narrowed to float

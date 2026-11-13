@@ -40,7 +40,7 @@ impl dyn RenderPass {
         (self as &dyn Any).downcast_ref()
     }
 
-    pub fn create_debug_group(&self, name: &str) -> DebugGroup<'_> {
+    pub(crate) fn create_debug_group(&self, name: &str) -> DebugGroup<'_> {
         DebugGroup::new(self, name)
     }
 }

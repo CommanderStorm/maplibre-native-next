@@ -6,9 +6,9 @@
 /// layer's prerender. End each pass begun on `encoder` before the call
 /// returns, and leave the encoder in place.
 pub struct CustomLayerEncoder {
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub encoder: wgpu::CommandEncoder,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) encoder: wgpu::CommandEncoder,
 }
 
 /// The map's render pass at a custom layer's place in the style.
@@ -18,7 +18,7 @@ pub struct CustomLayerEncoder {
 /// again. Leave `pass` in place.
 pub struct CustomLayerPass {
     pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub(crate) queue: wgpu::Queue,
     pub pass: wgpu::RenderPass<'static>,
     pub color_format: wgpu::TextureFormat,
     /// None when the pass has no depth-stencil attachment.

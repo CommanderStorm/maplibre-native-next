@@ -12,7 +12,7 @@ pub struct DrawMode {
 impl DrawMode {
     #[allow(non_snake_case)]
     #[must_use]
-    pub fn Points(point_size: f32) -> DrawMode {
+    pub(crate) fn Points(point_size: f32) -> DrawMode {
         debug_assert!(point_size > 0.0);
         DrawMode { type_: DrawModeType::Points, size: point_size }
     }
@@ -26,7 +26,7 @@ impl DrawMode {
 
     #[allow(non_snake_case)]
     #[must_use]
-    pub fn LineStrip(line_width: f32) -> DrawMode {
+    pub(crate) fn LineStrip(line_width: f32) -> DrawMode {
         debug_assert!(line_width > 0.0);
         DrawMode { type_: DrawModeType::LineStrip, size: line_width }
     }
@@ -39,12 +39,12 @@ impl DrawMode {
 
     #[allow(non_snake_case)]
     #[must_use]
-    pub fn TriangleStrip() -> DrawMode {
+    pub(crate) fn TriangleStrip() -> DrawMode {
         DrawMode { type_: DrawModeType::TriangleStrip, size: 0.0 }
     }
 
     #[must_use]
-    pub fn buffer_group_size(&self) -> usize {
+    pub(crate) fn buffer_group_size(&self) -> usize {
         match self.type_ {
             DrawModeType::Lines => 2,
             DrawModeType::Triangles => 3,

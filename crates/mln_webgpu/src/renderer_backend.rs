@@ -21,7 +21,7 @@ use crate::shaders::shader_group::ShaderGroup;
 use crate::shaders::shader_source::shader_source;
 use crate::writes::Writes;
 
-pub struct BackendImpl {
+pub(crate) struct BackendImpl {
     device: wgpu::Device,
     queue: wgpu::Queue,
     /// `None` for no format, C++'s `Undefined`.
@@ -47,22 +47,22 @@ impl BackendImpl {
             uniform_page: RefCell::new(None),
         }
     }
-    pub fn device(&self) -> &wgpu::Device {
+    pub(crate) fn device(&self) -> &wgpu::Device {
         &self.device
     }
-    pub fn queue(&self) -> &wgpu::Queue {
+    pub(crate) fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
-    pub fn set_depth_stencil_format(&self, format: Option<wgpu::TextureFormat>) {
+    pub(crate) fn set_depth_stencil_format(&self, format: Option<wgpu::TextureFormat>) {
         self.depth_stencil_format.set(format);
     }
-    pub fn get_depth_stencil_format(&self) -> Option<wgpu::TextureFormat> {
+    pub(crate) fn get_depth_stencil_format(&self) -> Option<wgpu::TextureFormat> {
         self.depth_stencil_format.get()
     }
-    pub fn set_color_format(&self, format: Option<wgpu::TextureFormat>) {
+    pub(crate) fn set_color_format(&self, format: Option<wgpu::TextureFormat>) {
         self.color_format.set(format);
     }
-    pub fn get_color_format(&self) -> Option<wgpu::TextureFormat> {
+    pub(crate) fn get_color_format(&self) -> Option<wgpu::TextureFormat> {
         self.color_format.get()
     }
 
@@ -206,12 +206,12 @@ impl RendererBackend {
 
     /// The backend's context, made on first use. Call inside a
     /// `BackendScope`.
-    pub fn webgpu_context(&self) -> Option<Rc<Context>> {
+    pub(crate) fn webgpu_context(&self) -> Option<Rc<Context>> {
         let context = renderer_backend::RendererBackend::get_context(self);
         context.downcast_ref::<Context>().map(Context::rc)
     }
 
-    pub fn backend_impl(&self) -> &Rc<BackendImpl> {
+    pub(crate) fn backend_impl(&self) -> &Rc<BackendImpl> {
         &self.impl_
     }
 
@@ -225,7 +225,7 @@ impl RendererBackend {
         }
     }
 
-    pub fn create_context(&self) -> Rc<Context> {
+    pub(crate) fn create_context(&self) -> Rc<Context> {
         Context::new(self.impl_.clone())
     }
 
@@ -234,7 +234,7 @@ impl RendererBackend {
     /// C++ registers all 31 types; a type whose WGSL is not part of this
     /// build is skipped.
     /// A duplicate registration is an error, as in C++ (which throws).
-    pub fn init_shaders(&self, registry: &ShaderRegistry, program_parameters: &ProgramParameters) {
+    pub(crate) fn init_shaders(&self, registry: &ShaderRegistry, program_parameters: &ProgramParameters) {
         for &shader_id in REGISTERED_SHADERS {
             let Some(source) = shader_source(shader_id) else {
                 continue;
@@ -246,16 +246,16 @@ impl RendererBackend {
         }
     }
 
-    pub fn set_depth_stencil_format(&self, format: Option<wgpu::TextureFormat>) {
+    pub(crate) fn set_depth_stencil_format(&self, format: Option<wgpu::TextureFormat>) {
         self.impl_.set_depth_stencil_format(format);
     }
-    pub fn get_depth_stencil_format(&self) -> Option<wgpu::TextureFormat> {
+    pub(crate) fn get_depth_stencil_format(&self) -> Option<wgpu::TextureFormat> {
         self.impl_.get_depth_stencil_format()
     }
-    pub fn set_color_format(&self, format: Option<wgpu::TextureFormat>) {
+    pub(crate) fn set_color_format(&self, format: Option<wgpu::TextureFormat>) {
         self.impl_.set_color_format(format);
     }
-    pub fn get_color_format(&self) -> Option<wgpu::TextureFormat> {
+    pub(crate) fn get_color_format(&self) -> Option<wgpu::TextureFormat> {
         self.impl_.get_color_format()
     }
 }

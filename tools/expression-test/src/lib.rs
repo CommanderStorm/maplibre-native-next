@@ -1,9 +1,9 @@
 //! Runs the expression tests (`metrics/integration/expression-tests`) with
 //! the C++ runner's rules.
 
-pub mod parser;
+pub(crate) mod parser;
 pub mod runner;
-pub mod test_runner_common;
+pub(crate) mod test_runner_common;
 
 use std::path::{Path, PathBuf};
 

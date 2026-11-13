@@ -111,7 +111,7 @@ fn get_char_glyph_id_type(
 }
 
 #[must_use]
-pub fn section_options_to_value(options: &SectionOptions) -> Value {
+pub(crate) fn section_options_to_value(options: &SectionOptions) -> Value {
     let mut result = mln_expression::value::ObjectType::new();
     // TODO: Data driven properties that can be overridden on per section
     // basis. TextOpacity TextHaloColor TextHaloWidth TextHaloBlur
@@ -220,11 +220,11 @@ fn evaluate_radial_offset(anchor: SymbolAnchorType, radial_offset: f32) -> [f32;
     result
 }
 
-pub struct SymbolLayout {
-    pub layer_paint_properties: VecMap<String, Arc<dyn LayerProperties>>,
-    pub bucket_leader_id: String,
-    pub symbol_instances: Vec<SymbolInstance>,
-    pub sort_key_ranges: Vec<SortKeyRange>,
+pub(crate) struct SymbolLayout {
+    pub(crate) layer_paint_properties: VecMap<String, Arc<dyn LayerProperties>>,
+    pub(crate) bucket_leader_id: String,
+    pub(crate) symbol_instances: Vec<SymbolInstance>,
+    pub(crate) sort_key_ranges: Vec<SortKeyRange>,
 
     compare_text: VecMap<Vec<u16>, Vec<Anchor>>,
 
@@ -266,9 +266,9 @@ pub struct SymbolLayout {
 }
 
 impl SymbolLayout {
-    pub const INVALID_OFFSET_VALUE: f32 = f32::MAX;
+    pub(crate) const INVALID_OFFSET_VALUE: f32 = f32::MAX;
 
-    pub fn new(
+    pub(crate) fn new(
         parameters: &BucketParameters,
         layers: &[Arc<dyn LayerProperties>],
         source_layer: SourceLayer,
@@ -585,7 +585,7 @@ impl SymbolLayout {
     }
 
     #[must_use]
-    pub fn evaluate_variable_offset(anchor: SymbolAnchorType, mut offset: [f32; 2]) -> [f32; 2] {
+    pub(crate) fn evaluate_variable_offset(anchor: SymbolAnchorType, mut offset: [f32; 2]) -> [f32; 2] {
         if offset[1] == Self::INVALID_OFFSET_VALUE {
             return evaluate_radial_offset(anchor, offset[0]);
         }
@@ -944,7 +944,7 @@ impl SymbolLayout {
     /// The tile distances of `line`'s vertices from `anchor`, computed as GL
     /// JS's `addToLineVertexArray` does, without building a line array.
     #[must_use]
-    pub fn calculate_tile_distances(line: &GeometryCoordinates, anchor: &Anchor) -> Vec<f32> {
+    pub(crate) fn calculate_tile_distances(line: &GeometryCoordinates, anchor: &Anchor) -> Vec<f32> {
         let mut tile_distances = vec![0.0_f32; line.len()];
         if let Some(segment) = anchor.segment {
             debug_assert!(segment < line.len());

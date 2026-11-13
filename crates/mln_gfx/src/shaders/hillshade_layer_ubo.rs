@@ -5,7 +5,7 @@ pub const MAX_ILLUMINATION_SOURCES: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
-pub enum HillshadeMethod {
+pub(crate) enum HillshadeMethod {
     Standard = 0,
     Combined = 1,
     Igor = 2,

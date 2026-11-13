@@ -179,12 +179,12 @@ impl Image {
     }
 
     #[must_use]
-    pub fn from_impl(base_impl: Arc<Impl>) -> Self {
+    pub(crate) fn from_impl(base_impl: Arc<Impl>) -> Self {
         Image { base_impl }
     }
 
     #[must_use]
-    pub fn get_id(&self) -> String {
+    pub(crate) fn get_id(&self) -> String {
         self.base_impl.id.clone()
     }
 
@@ -199,7 +199,7 @@ impl Image {
     }
 
     #[must_use]
-    pub fn is_sdf(&self) -> bool {
+    pub(crate) fn is_sdf(&self) -> bool {
         self.base_impl.sdf
     }
 
@@ -219,12 +219,12 @@ impl Image {
     }
 
     #[must_use]
-    pub fn get_text_fit_width(&self) -> &Option<TextFit> {
+    pub(crate) fn get_text_fit_width(&self) -> &Option<TextFit> {
         &self.base_impl.text_fit_width
     }
 
     #[must_use]
-    pub fn get_text_fit_height(&self) -> &Option<TextFit> {
+    pub(crate) fn get_text_fit_height(&self) -> &Option<TextFit> {
         &self.base_impl.text_fit_height
     }
 }

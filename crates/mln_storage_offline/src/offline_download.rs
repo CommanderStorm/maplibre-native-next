@@ -178,13 +178,13 @@ pub struct OfflineDownload {
 /// A weak reference to an `OfflineDownload` (for observers that call back
 /// into it, as C++ observers capture the download by reference).
 #[derive(Clone)]
-pub struct WeakOfflineDownload {
+pub(crate) struct WeakOfflineDownload {
     inner: Weak<Inner>,
 }
 
 impl WeakOfflineDownload {
     /// Sets the download's state, if the download still exists.
-    pub fn set_state(&self, state: OfflineRegionDownloadState) {
+    pub(crate) fn set_state(&self, state: OfflineRegionDownloadState) {
         if let Some(inner) = self.inner.upgrade() {
             inner.set_state(state);
         }
@@ -192,7 +192,7 @@ impl WeakOfflineDownload {
 
     /// The download's status, if the download still exists.
     #[must_use]
-    pub fn get_status(&self) -> Option<OfflineRegionStatus> {
+    pub(crate) fn get_status(&self) -> Option<OfflineRegionStatus> {
         self.inner.upgrade().map(|inner| inner.get_status())
     }
 }
@@ -226,7 +226,7 @@ impl OfflineDownload {
 
     /// A weak reference, for observers that call back into the download.
     #[must_use]
-    pub fn downgrade(&self) -> WeakOfflineDownload {
+    pub(crate) fn downgrade(&self) -> WeakOfflineDownload {
         WeakOfflineDownload { inner: Rc::downgrade(&self.inner) }
     }
 
@@ -239,7 +239,7 @@ impl OfflineDownload {
     }
 
     #[must_use]
-    pub fn get_status(&self) -> OfflineRegionStatus {
+    pub(crate) fn get_status(&self) -> OfflineRegionStatus {
         self.inner.get_status()
     }
 }

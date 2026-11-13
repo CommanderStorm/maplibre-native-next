@@ -28,7 +28,7 @@ use crate::vertex_attribute::VertexAttributeArrayPtr;
 use crate::vertex_vector::VertexVector;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
+pub(crate) enum Mode {
     /// building primitive drawables. Not implemented
     Primitives,
     /// building drawables for thick polylines
@@ -41,13 +41,13 @@ pub enum Mode {
     Custom,
 }
 
-pub type VT = [i16; 2];
+pub(crate) type VT = [i16; 2];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LineLayoutVertex {
-    pub a1: [i16; 2],
-    pub a2: [u8; 4],
+pub(crate) struct LineLayoutVertex {
+    pub(crate) a1: [i16; 2],
+    pub(crate) a2: [u8; 4],
 }
 
 pub struct DrawableBuilderImpl {
@@ -60,11 +60,11 @@ pub struct DrawableBuilderImpl {
     /// Starts as `Invalid` (255), as C++ initializes it to
     /// `static_cast<AttributeDataType>(-1)`.
     pub raw_vertices_type: AttributeDataType,
-    pub color_mode: ColorMode,
-    pub cull_face_mode: CullFaceMode,
+    pub(crate) color_mode: ColorMode,
+    pub(crate) cull_face_mode: CullFaceMode,
     mode: Mode,
-    pub polyline_vertices: Vec<LineLayoutVertex>,
-    pub polyline_indexes: Vec<u16>,
+    pub(crate) polyline_vertices: Vec<LineLayoutVertex>,
+    pub(crate) polyline_indexes: Vec<u16>,
 }
 
 impl Default for DrawableBuilderImpl {
@@ -87,7 +87,7 @@ impl Default for DrawableBuilderImpl {
 }
 
 impl DrawableBuilderImpl {
-    pub fn check_and_set_mode(&mut self, target: Mode) -> bool {
+    pub(crate) fn check_and_set_mode(&mut self, target: Mode) -> bool {
         if target != self.mode && self.vertex_count() != 0 {
             // C++ logs "DrawableBuilder mode mismatch. Target is <target>,
             // current is <mode>" and asserts.
@@ -98,21 +98,21 @@ impl DrawableBuilderImpl {
         true
     }
 
-    pub fn get_mode(&self) -> Mode {
+    pub(crate) fn get_mode(&self) -> Mode {
         self.mode
     }
 
     /// Returns whether the mode is `value`. Despite the name it sets
     /// nothing, as in C++.
-    pub fn set_mode(&self, value: Mode) -> bool {
+    pub(crate) fn set_mode(&self, value: Mode) -> bool {
         self.mode == value
     }
 
-    pub fn vertex_count(&self) -> usize {
+    pub(crate) fn vertex_count(&self) -> usize {
         self.raw_vertices_count.max(self.vertices.elements()).max(self.polyline_vertices.len())
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.vertices.clear();
         self.raw_vertices.clear();
         self.raw_vertices_count = 0;
@@ -123,7 +123,7 @@ impl DrawableBuilderImpl {
     }
 
     #[must_use]
-    pub fn layout_vertex(
+    pub(crate) fn layout_vertex(
         p: Point<i16>,
         e: Point<f64>,
         round: bool,
@@ -158,27 +158,27 @@ impl DrawableBuilderImpl {
 
 /// The data members of `gfx::DrawableBuilder`.
 pub struct DrawableBuilderBase {
-    pub name: String,
+    pub(crate) name: String,
     pub drawable_name: String,
     pub vertex_attr_id: usize,
-    pub render_pass: RenderPass,
-    pub enabled: bool,
-    pub enable_color: bool,
-    pub enable_stencil: bool,
-    pub enable_depth: bool,
-    pub is_3d: bool,
-    pub line_width: f32,
-    pub draw_priority: DrawPriority,
-    pub sub_layer_index: i32,
-    pub depth_type: DepthMaskType,
-    pub shader: Option<ShaderProgramBasePtr>,
+    pub(crate) render_pass: RenderPass,
+    pub(crate) enabled: bool,
+    pub(crate) enable_color: bool,
+    pub(crate) enable_stencil: bool,
+    pub(crate) enable_depth: bool,
+    pub(crate) is_3d: bool,
+    pub(crate) line_width: f32,
+    pub(crate) draw_priority: DrawPriority,
+    pub(crate) sub_layer_index: i32,
+    pub(crate) depth_type: DepthMaskType,
+    pub(crate) shader: Option<ShaderProgramBasePtr>,
     pub current_drawable: Option<UniqueDrawable>,
-    pub drawables: Vec<UniqueDrawable>,
+    pub(crate) drawables: Vec<UniqueDrawable>,
     pub textures: Textures,
-    pub tweakers: Vec<DrawableTweakerPtr>,
-    pub vertex_attrs: Option<VertexAttributeArrayPtr>,
-    pub instance_attrs: Option<VertexAttributeArrayPtr>,
-    pub origin: Option<Point<f64>>,
+    pub(crate) tweakers: Vec<DrawableTweakerPtr>,
+    pub(crate) vertex_attrs: Option<VertexAttributeArrayPtr>,
+    pub(crate) instance_attrs: Option<VertexAttributeArrayPtr>,
+    pub(crate) origin: Option<Point<f64>>,
     pub impl_: DrawableBuilderImpl,
 }
 

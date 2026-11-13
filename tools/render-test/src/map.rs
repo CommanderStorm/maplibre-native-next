@@ -24,18 +24,18 @@ fn map_mode(mode: MapMode) -> mln_map::MapMode {
     }
 }
 
-pub struct Impl {
-    pub frontend: HeadlessFrontend,
+pub(crate) struct Impl {
+    pub(crate) frontend: HeadlessFrontend,
     /// The `ProxyFileSource` over the cache database at the resource
     /// options' cache path.
-    pub file_source: Option<Arc<dyn FileSource>>,
-    pub map: Map,
+    pub(crate) file_source: Option<Arc<dyn FileSource>>,
+    pub(crate) map: Map,
 }
 
 impl Impl {
     /// A frontend, file source and map for a test with `metadata`, loading
     /// through `file_sources`.
-    pub fn new(
+    pub(crate) fn new(
         metadata: &TestMetadata,
         file_sources: &FileSourceManager,
         resource_options: &ResourceOptions,

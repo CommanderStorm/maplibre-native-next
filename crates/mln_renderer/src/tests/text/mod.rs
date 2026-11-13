@@ -18,13 +18,13 @@ use mln_util::logging::{Event, EventSeverity, Log, Observer};
 /// A path of the C++ repository, in the copy of its files these tests read
 /// (testdata/).
 #[must_use]
-pub fn cpp_path(relative: &str) -> PathBuf {
+pub(crate) fn cpp_path(relative: &str) -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(relative)
 }
 
 /// Reads a C++ test fixture.
 #[must_use]
-pub fn read_file(relative: &str) -> Vec<u8> {
+pub(crate) fn read_file(relative: &str) -> Vec<u8> {
     let path = cpp_path(relative);
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
@@ -38,11 +38,11 @@ impl Observer for NullObserver {
 }
 
 /// Silences the calling thread's log until dropped.
-pub struct SquelchLog;
+pub(crate) struct SquelchLog;
 
 impl SquelchLog {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let _ = Log::set_thread_observer(Some(Box::new(NullObserver)));
         SquelchLog
     }

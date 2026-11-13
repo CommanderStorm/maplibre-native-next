@@ -41,16 +41,16 @@ pub mod uniform_buffer;
 pub mod upload_pass;
 pub mod vertex_buffer_resource;
 
-pub use borrowed_target::{BorrowedTarget, BorrowedTextures, PendingReads};
-pub use context::Context;
-pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
+pub(crate) use borrowed_target::{BorrowedTarget, BorrowedTextures, PendingReads};
+pub(crate) use context::Context;
+pub(crate) use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 pub use device::Device;
-pub use exported_target::ExportedTarget;
-pub use objc2;
-pub use objc2_metal;
+pub(crate) use exported_target::ExportedTarget;
+pub(crate) use objc2;
+pub(crate) use objc2_metal;
 pub use offscreen_target::OffscreenTarget;
 pub use renderer_backend::RendererBackend;
-pub use surface_target::{Layer, SurfaceTarget};
+pub(crate) use surface_target::{Layer, SurfaceTarget};
 
 // MTLCreateSystemDefaultDevice returns nil in a process that doesn't link
 // CoreGraphics, such as a command-line tool.

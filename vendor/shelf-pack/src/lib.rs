@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-pub const SHELF_PACK_VERSION: &str = "2.1.1";
+pub(crate) const SHELF_PACK_VERSION: &str = "2.1.1";
 
 /// `Bin`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,8 +19,8 @@ pub struct Bin {
     pub id: i32,
     pub w: i32,
     pub h: i32,
-    pub maxw: i32,
-    pub maxh: i32,
+    pub(crate) maxw: i32,
+    pub(crate) maxh: i32,
     pub x: i32,
     pub y: i32,
     refcount_: i32,
@@ -35,13 +35,13 @@ impl Default for Bin {
 impl Bin {
     /// `Bin(id, w, h)` (the other arguments default to -1).
     #[must_use]
-    pub fn new(id: i32, w: i32, h: i32) -> Self {
+    pub(crate) fn new(id: i32, w: i32, h: i32) -> Self {
         Bin::with_all(id, w, h, -1, -1, -1, -1)
     }
 
     /// `Bin(id, w, h, maxw, maxh, x, y)`; `maxw`/`maxh` of -1 mean `w`/`h`.
     #[must_use]
-    pub fn with_all(id: i32, w: i32, h: i32, maxw: i32, maxh: i32, x: i32, y: i32) -> Self {
+    pub(crate) fn with_all(id: i32, w: i32, h: i32, maxw: i32, maxh: i32, x: i32, y: i32) -> Self {
         let mut bin = Bin { id, w, h, maxw, maxh, x, y, refcount_: 0 };
         if bin.maxw == -1 {
             bin.maxw = bin.w;
@@ -67,7 +67,7 @@ pub struct BinRef {
 
 /// `Shelf`
 #[derive(Clone, Debug)]
-pub struct Shelf {
+pub(crate) struct Shelf {
     x_: i32,
     y_: i32,
     w_: i32,
@@ -78,7 +78,7 @@ pub struct Shelf {
 
 impl Shelf {
     #[must_use]
-    pub fn new(y1: i32, w1: i32, h1: i32) -> Self {
+    pub(crate) fn new(y1: i32, w1: i32, h1: i32) -> Self {
         Shelf { x_: 0, y_: y1, w_: w1, h_: h1, wfree_: w1, bins_: VecDeque::new() }
     }
 
@@ -94,30 +94,30 @@ impl Shelf {
         Some(self.bins_.len() - 1)
     }
 
-    pub fn resize(&mut self, w1: i32) -> bool {
+    pub(crate) fn resize(&mut self, w1: i32) -> bool {
         self.wfree_ = self.wfree_.wrapping_add(w1.wrapping_sub(self.w_));
         self.w_ = w1;
         true
     }
 
     #[must_use]
-    pub fn x(&self) -> i32 {
+    pub(crate) fn x(&self) -> i32 {
         self.x_
     }
     #[must_use]
-    pub fn y(&self) -> i32 {
+    pub(crate) fn y(&self) -> i32 {
         self.y_
     }
     #[must_use]
-    pub fn w(&self) -> i32 {
+    pub(crate) fn w(&self) -> i32 {
         self.w_
     }
     #[must_use]
-    pub fn h(&self) -> i32 {
+    pub(crate) fn h(&self) -> i32 {
         self.h_
     }
     #[must_use]
-    pub fn wfree(&self) -> i32 {
+    pub(crate) fn wfree(&self) -> i32 {
         self.wfree_
     }
 }
@@ -130,8 +130,8 @@ pub struct ShelfPackOptions {
 
 /// `ShelfPack::PackOptions`
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PackOptions {
-    pub in_place: bool,
+pub(crate) struct PackOptions {
+    pub(crate) in_place: bool,
 }
 
 /// `ShelfPack`
@@ -181,7 +181,7 @@ impl ShelfPack {
     }
 
     /// `pack(bins, options)`
-    pub fn pack(&mut self, bins: &mut [Bin], options: PackOptions) -> Vec<BinRef> {
+    pub(crate) fn pack(&mut self, bins: &mut [Bin], options: PackOptions) -> Vec<BinRef> {
         let mut results = Vec::new();
 
         for bin in bins.iter_mut() {
@@ -314,7 +314,7 @@ impl ShelfPack {
     }
 
     /// `shrink()`
-    pub fn shrink(&mut self) {
+    pub(crate) fn shrink(&mut self) {
         if !self.shelves_.is_empty() {
             let mut w2: i32 = 0;
             let mut h2: i32 = 0;
@@ -336,7 +336,7 @@ impl ShelfPack {
     }
 
     /// `ref(bin)`
-    pub fn ref_(&mut self, r: BinRef) -> i32 {
+    pub(crate) fn ref_(&mut self, r: BinRef) -> i32 {
         let bin = self.bin_mut(r);
         bin.refcount_ = bin.refcount_.wrapping_add(1);
         let (refcount, h) = (bin.refcount_, bin.h);
@@ -369,7 +369,7 @@ impl ShelfPack {
     }
 
     /// `clear()`
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.shelves_.clear();
         self.freebins_.clear();
         self.usedbins_.clear();
@@ -378,7 +378,7 @@ impl ShelfPack {
     }
 
     /// `resize(w, h)`
-    pub fn resize(&mut self, w: i32, h: i32) -> bool {
+    pub(crate) fn resize(&mut self, w: i32, h: i32) -> bool {
         self.width_ = w;
         self.height_ = h;
         for shelf in &mut self.shelves_ {
@@ -399,13 +399,13 @@ impl ShelfPack {
 
     /// The bin-height histogram (`stats_`, private in C++).
     #[must_use]
-    pub fn stats(&self) -> &BTreeMap<i32, i32> {
+    pub(crate) fn stats(&self) -> &BTreeMap<i32, i32> {
         &self.stats_
     }
 
     /// The shelves (`shelves_`, private in C++).
     #[must_use]
-    pub fn shelves(&self) -> &VecDeque<Shelf> {
+    pub(crate) fn shelves(&self) -> &VecDeque<Shelf> {
         &self.shelves_
     }
 

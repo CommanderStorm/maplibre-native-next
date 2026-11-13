@@ -18,7 +18,7 @@ pub struct CustomLayerEncoder {
 impl CustomLayerEncoder {
     /// The GL functions of the current context.
     #[must_use]
-    pub fn gl(&self) -> &Gl {
+    pub(crate) fn gl(&self) -> &Gl {
         self.context.gl()
     }
 }
@@ -38,7 +38,7 @@ pub struct CustomLayerPass {
     /// The framebuffer the map draws into, none for the default one.
     pub framebuffer: Option<FramebufferID>,
     /// Its size in pixels.
-    pub size: Size,
+    pub(crate) size: Size,
 }
 
 impl CustomLayerPass {

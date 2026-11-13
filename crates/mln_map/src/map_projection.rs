@@ -24,7 +24,7 @@ impl MapProjection {
         Self::from_state(map.get_transform_state())
     }
 
-    pub fn from_state(state: TransformState) -> Self {
+    pub(crate) fn from_state(state: TransformState) -> Self {
         MapProjection { state }
     }
 
@@ -73,7 +73,7 @@ impl MapProjection {
     /// with the inset.
     /// Fails as [`Map::camera_for_lat_lngs`](crate::Map::camera_for_lat_lngs)
     /// does.
-    pub fn set_visible_coordinates(&mut self, lat_lngs: &[LatLng], padding: &EdgeInsets) -> Result<(), Error> {
+    pub(crate) fn set_visible_coordinates(&mut self, lat_lngs: &[LatLng], padding: &EdgeInsets) -> Result<(), Error> {
         let mut transform = self.transform();
         let camera = CameraOptions {
             bearing: Some(mln_math::rad2deg(-transform.get_bearing())),

@@ -35,7 +35,7 @@ use crate::paint_parameters::PaintParameters;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum LineType {
+pub(crate) enum LineType {
     Simple,
     Gradient,
     Pattern,
@@ -45,7 +45,7 @@ pub enum LineType {
 
 impl LineType {
     #[must_use]
-    pub fn from_type(type_: usize) -> Option<LineType> {
+    pub(crate) fn from_type(type_: usize) -> Option<LineType> {
         match type_ {
             0 => Some(LineType::Simple),
             1 => Some(LineType::Gradient),
@@ -59,11 +59,11 @@ impl LineType {
 
 /// A line drawable's data: the line cap its dash pattern was built for.
 #[derive(Clone, Copy, Debug)]
-pub struct LineDrawableData {
-    pub line_pattern_cap: LinePatternCap,
+pub(crate) struct LineDrawableData {
+    pub(crate) line_pattern_cap: LinePatternCap,
 }
 
-pub struct LineLayerTweaker {
+pub(crate) struct LineLayerTweaker {
     base: LayerTweakerBase,
     evaluated_props_uniform_buffer: Option<UniformBufferPtr>,
     drawable_uniform_buffer: Option<UniformBufferPtr>,
@@ -74,7 +74,7 @@ pub struct LineLayerTweaker {
 }
 
 impl LineLayerTweaker {
-    pub fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
+    pub(crate) fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
         LineLayerTweaker {
             base: LayerTweakerBase::new(id, properties),
             evaluated_props_uniform_buffer: None,

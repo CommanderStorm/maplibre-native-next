@@ -128,7 +128,7 @@ pub(crate) fn get_lat_range(id: &UnwrappedTileID) -> [f32; 2] {
     [latlng0.latitude() as f32, latlng1.latitude() as f32]
 }
 
-pub struct HillshadeLayerTweaker {
+pub(crate) struct HillshadeLayerTweaker {
     base: LayerTweakerBase,
     evaluated_props_uniform_buffer: Option<UniformBufferPtr>,
     drawable_uniform_buffer: Option<UniformBufferPtr>,
@@ -136,7 +136,7 @@ pub struct HillshadeLayerTweaker {
 }
 
 impl HillshadeLayerTweaker {
-    pub fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
+    pub(crate) fn new(id: String, properties: Arc<dyn LayerProperties>) -> Self {
         HillshadeLayerTweaker {
             base: LayerTweakerBase::new(id, properties),
             evaluated_props_uniform_buffer: None,

@@ -63,24 +63,24 @@ fn record(size: i64) {
 }
 
 /// Starts the peak over again from the bytes live now.
-pub fn reset_peak() {
+pub(crate) fn reset_peak() {
     PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
 }
 
 /// The most heap bytes live at once since [`reset_peak`], in MiB.
-pub fn peak_heap_mib() -> f64 {
+pub(crate) fn peak_heap_mib() -> f64 {
     PEAK.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0)
 }
 
 /// The heap bytes live now, in MiB.
-pub fn live_heap_mib() -> f64 {
+pub(crate) fn live_heap_mib() -> f64 {
     LIVE.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0)
 }
 
 /// The CPU time of every thread of the process so far.
 #[cfg(unix)]
 #[must_use]
-pub fn process_cpu() -> Duration {
+pub(crate) fn process_cpu() -> Duration {
     let mut time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // SAFETY: `time` is a valid timespec for the call to fill.
     let status = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &raw mut time) };
@@ -133,15 +133,15 @@ pub fn process_counters() -> Option<Counters> {
 /// far, or `None` where the system doesn't count them.
 #[cfg(not(target_os = "macos"))]
 #[must_use]
-pub fn process_counters() -> Option<Counters> {
+pub(crate) fn process_counters() -> Option<Counters> {
     None
 }
 
 /// What [`process_counters`] reads.
 #[derive(Clone, Copy)]
-pub struct Counters {
-    pub instructions: u64,
-    pub cycles: u64,
+pub(crate) struct Counters {
+    pub(crate) instructions: u64,
+    pub(crate) cycles: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -170,7 +170,7 @@ impl Reading {
 /// `peak_heap_mib` is the most heap live at once from the meter's creation
 /// on, setup between iterations included. `minstr` and `mcycles` are left
 /// out where [`process_counters`] has none.
-pub struct Meter {
+pub(crate) struct Meter {
     started: Option<Reading>,
     wall: Vec<f64>,
     cpu: Vec<f64>,
@@ -184,7 +184,7 @@ impl Meter {
     /// A meter whose peak heap starts from what is live now, after the
     /// case's setup.
     #[must_use]
-    pub fn new() -> Meter {
+    pub(crate) fn new() -> Meter {
         reset_peak();
         Meter {
             started: None,
@@ -198,7 +198,7 @@ impl Meter {
     }
 
     /// Times `work` as one iteration.
-    pub fn time<R>(&mut self, work: impl FnOnce() -> R) -> R {
+    pub(crate) fn time<R>(&mut self, work: impl FnOnce() -> R) -> R {
         self.start();
         let result = work();
         self.stop();
@@ -206,13 +206,13 @@ impl Meter {
     }
 
     /// Starts an iteration, for one that [`Meter::time`] can't wrap.
-    pub fn start(&mut self) {
+    pub(crate) fn start(&mut self) {
         assert!(self.started.is_none(), "an iteration is already running");
         self.started = Some(Reading::now());
     }
 
     /// Ends the iteration [`Meter::start`] started.
-    pub fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         let end = Reading::now();
         let start = self.started.take().expect("no iteration is running");
         self.wall.push(ms(end.wall - start.wall));
@@ -227,13 +227,13 @@ impl Meter {
 
     /// Each iteration's wall time so far, in ms.
     #[must_use]
-    pub fn times(&self) -> &[f64] {
+    pub(crate) fn times(&self) -> &[f64] {
         &self.wall
     }
 
     /// The iterations' metrics; all but `mcycles` and `alloc_kib` lead.
     #[must_use]
-    pub fn finish(self) -> Metrics {
+    pub(crate) fn finish(self) -> Metrics {
         let mut metrics = Metrics::default();
         metrics.lead("time_ms", median(&self.wall));
         metrics.lead("cpu_ms", median(&self.cpu));
@@ -256,7 +256,7 @@ impl Default for Meter {
 }
 
 #[must_use]
-pub fn ms(duration: Duration) -> f64 {
+pub(crate) fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 

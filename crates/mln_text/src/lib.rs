@@ -6,28 +6,30 @@
 //! skrifa. `harfbuzz_impl.rs` says where HarfRust's shaping differs from
 //! HarfBuzz's.
 
-pub mod bidi;
+pub(crate) mod bidi;
 #[cfg(target_family = "wasm")]
 mod browser_glyph_rasterizer;
-pub mod freetype;
-pub mod ft;
+pub(crate) mod freetype;
+pub(crate) mod ft;
 pub mod glyph;
 pub mod glyph_cache;
 pub mod glyph_pbf;
-pub mod harfbuzz;
-pub mod harfbuzz_impl;
-pub mod hb_ft;
-pub mod icu;
+pub(crate) mod harfbuzz;
+pub(crate) mod harfbuzz_impl;
+pub(crate) mod hb_ft;
+pub(crate) mod icu;
 pub mod local_glyph_rasterizer;
 mod rasterize;
 pub mod shaping;
 #[cfg(test)]
 mod shaping_test;
 pub mod tagged_string;
-pub mod woff;
+pub(crate) mod woff;
 
-pub use bidi::{BiDi, StyledText, apply_arabic_shaping, starts_right_to_left};
-pub use freetype::{FreeTypeFace, FreeTypeLibrary};
+pub use bidi::{BiDi, apply_arabic_shaping, starts_right_to_left};
+pub(crate) use bidi::StyledText;
+pub use freetype::FreeTypeLibrary;
+pub(crate) use freetype::FreeTypeFace;
 pub use glyph::{
     Glyph, GlyphID, GlyphIDType, GlyphMap, GlyphMetrics, GlyphPosition, GlyphPositions, GlyphRange, PositionedGlyph,
     PositionedLine, Shaping, WritingModeType,

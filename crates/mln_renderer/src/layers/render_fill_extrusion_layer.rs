@@ -215,7 +215,7 @@ fn create_builder(
     builder
 }
 
-pub struct RenderFillExtrusionLayer {
+pub(crate) struct RenderFillExtrusionLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: FillExtrusionPaintProperties::Unevaluated,
@@ -231,7 +231,7 @@ pub struct RenderFillExtrusionLayer {
 }
 
 impl RenderFillExtrusionLayer {
-    pub fn new(impl_: Arc<FillExtrusionLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<FillExtrusionLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(FillExtrusionLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

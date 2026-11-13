@@ -53,7 +53,7 @@ impl IndexVectorBase {
 
     /// The C++ copy constructor: the buffer is not copied.
     #[must_use]
-    pub fn copy(&self) -> Self {
+    pub(crate) fn copy(&self) -> Self {
         IndexVectorBase {
             v: self.v.clone(),
             #[cfg(target_family = "wasm")]
@@ -127,13 +127,13 @@ impl IndexVectorBase {
         }
     }
     #[must_use]
-    pub fn is_released(&self) -> bool {
+    pub(crate) fn is_released(&self) -> bool {
         self.released
     }
-    pub fn reserve(&mut self, count: usize) {
+    pub(crate) fn reserve(&mut self, count: usize) {
         self.v.reserve(count);
     }
-    pub fn extend(&mut self, n: usize, val: u16) {
+    pub(crate) fn extend(&mut self, n: usize, val: u16) {
         debug_assert!(!self.released);
         self.v.resize(self.v.len() + n, val);
         self.dirty = true;
@@ -144,7 +144,7 @@ impl IndexVectorBase {
         &mut self.v[n]
     }
     #[must_use]
-    pub fn at(&self, n: usize) -> u16 {
+    pub(crate) fn at(&self, n: usize) -> u16 {
         self.v[n]
     }
     /// The element count, which stays when the CPU copy is freed.
@@ -153,14 +153,14 @@ impl IndexVectorBase {
         self.v.len() + self.host_count() + self.freed_count
     }
     #[must_use]
-    pub fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         self.elements() * std::mem::size_of::<u16>()
     }
     #[must_use]
     pub fn empty(&self) -> bool {
         self.elements() == 0
     }
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.dirty = true;
         self.v.clear();
         #[cfg(target_family = "wasm")]
@@ -171,7 +171,7 @@ impl IndexVectorBase {
         self.buffer = None;
     }
     /// Indicate that this shared index vector will no longer be updated.
-    pub fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         self.released = true;
         // If we've already created a buffer, we don't need the raw data any more.
         if self.buffer.is_some() && !self.dirty {
@@ -199,7 +199,7 @@ impl IndexVectorBase {
 
     /// Appends `indexes`, whose count must be a multiple of `mode`'s group
     /// size.
-    pub fn emplace_back_group(&mut self, mode: DrawMode, indexes: &[u16]) {
+    pub(crate) fn emplace_back_group(&mut self, mode: DrawMode, indexes: &[u16]) {
         debug_assert!(indexes.len().is_multiple_of(mode.buffer_group_size()), "wrong buffer element count");
         debug_assert!(!self.released);
         self.v.extend_from_slice(indexes);

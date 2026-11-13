@@ -47,7 +47,7 @@ fn add_pattern_if_needed(id: &str, params: &LayerPrepareParameters<'_>) {
     }
 }
 
-pub struct RenderBackgroundLayer {
+pub(crate) struct RenderBackgroundLayer {
     base: RenderLayerBase,
     unevaluated: BackgroundPaintProperties::Unevaluated,
     plain_shader: Option<ShaderProgramBasePtr>,
@@ -55,7 +55,7 @@ pub struct RenderBackgroundLayer {
 }
 
 impl RenderBackgroundLayer {
-    pub fn new(impl_: Arc<BackgroundLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<BackgroundLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(BackgroundLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

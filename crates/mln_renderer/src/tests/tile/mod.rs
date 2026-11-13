@@ -24,20 +24,20 @@ use mln_util::tileset::Tileset;
 
 /// The fixture shared by `RasterTileTest` and `RasterDEMTileTest`
 /// (`test/tile/raster_tile.test.cpp`, `raster_dem_tile.test.cpp`).
-pub struct RasterTileTest {
+pub(crate) struct RasterTileTest {
     // C++ uses a FakeFileSource whose requests never answer; the
     // asynchronous stub answers only when the run loop runs, and these tests
     // never run it.
     file_source: Arc<StubFileSource>,
     transform_state: TransformState,
-    pub run_loop: mln_actor::RunLoop,
+    pub(crate) run_loop: mln_actor::RunLoop,
     thread_pool: TaggedScheduler,
-    pub tileset: Tileset,
+    pub(crate) tileset: Tileset,
 }
 
 impl RasterTileTest {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         RasterTileTest {
             file_source: Arc::new(StubFileSource::new(ResponseType::Asynchronous)),
             transform_state: TransformState::default(),
@@ -53,7 +53,7 @@ impl RasterTileTest {
         }
     }
 
-    pub fn tile_parameters(&self) -> TileParameters<'_> {
+    pub(crate) fn tile_parameters(&self) -> TileParameters<'_> {
         let file_source: Arc<dyn mln_storage::FileSource> = self.file_source.clone();
         TileParameters {
             pixel_ratio: 1.0,
@@ -90,14 +90,14 @@ impl Default for RasterTileTest {
 /// Port-only: a transport whose workers are in `count` worker instances on
 /// threads, reached only through the worker codec.
 #[must_use]
-pub fn serializing_transport(count: usize) -> std::rc::Rc<crate::tile::worker_codec::SerializingTransport> {
+pub(crate) fn serializing_transport(count: usize) -> std::rc::Rc<crate::tile::worker_codec::SerializingTransport> {
     use crate::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
     SerializingTransport::new(|replies| Box::new(ThreadWorkerInstances::new(count, &replies)))
 }
 
 /// Port-only: an opaque PNG whose pixels differ from their neighbours.
 #[must_use]
-pub fn png(width: u32, height: u32) -> mln_storage::Data {
+pub(crate) fn png(width: u32, height: u32) -> mln_storage::Data {
     let mut image = mln_util::image::PremultipliedImage::new(mln_util::size::Size::new(width, height));
     for (i, pixel) in image.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         pixel.copy_from_slice(&[(i % 251) as u8, (i / 7 % 253) as u8, (i * 3 % 255) as u8, 255]);
@@ -107,7 +107,7 @@ pub fn png(width: u32, height: u32) -> mln_storage::Data {
 
 /// Port-only: an observer that records the tiles' errors.
 #[derive(Default)]
-pub struct ErrorObserver(pub std::cell::RefCell<Vec<String>>);
+pub(crate) struct ErrorObserver(pub(crate) std::cell::RefCell<Vec<String>>);
 
 impl crate::tile::tile_observer::TileObserver for ErrorObserver {
     fn on_tile_error(&self, _tile: &crate::tile::TileBase, error: mln_util::error::Error) {

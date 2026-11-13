@@ -60,12 +60,12 @@ pub fn literal(value: Value) -> Box<dyn Expression> {
 }
 
 #[must_use]
-pub fn literal_numbers(value: &[f64]) -> Box<dyn Expression> {
+pub(crate) fn literal_numbers(value: &[f64]) -> Box<dyn Expression> {
     literal(Value::Array(value.iter().map(|v| Value::Number(*v)).collect()))
 }
 
 #[must_use]
-pub fn literal_strings(value: &[&str]) -> Box<dyn Expression> {
+pub(crate) fn literal_strings(value: &[&str]) -> Box<dyn Expression> {
     literal(Value::Array(value.iter().map(|v| Value::String((*v).to_owned())).collect()))
 }
 
@@ -172,7 +172,7 @@ pub fn gt(lhs: Box<dyn Expression>, rhs: Box<dyn Expression>) -> Box<dyn Express
 }
 
 #[must_use]
-pub fn lt(lhs: Box<dyn Expression>, rhs: Box<dyn Expression>) -> Box<dyn Expression> {
+pub(crate) fn lt(lhs: Box<dyn Expression>, rhs: Box<dyn Expression>) -> Box<dyn Expression> {
     Box::new(BasicComparison::new("<".to_owned(), lhs, rhs))
 }
 
@@ -201,7 +201,7 @@ pub fn exponential(base: f64) -> Interpolator {
 }
 
 #[must_use]
-pub fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64) -> Interpolator {
+pub(crate) fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64) -> Interpolator {
     CubicBezierInterpolator::new(x1, y1, x2, y2).into()
 }
 
@@ -239,7 +239,7 @@ pub fn format(input: Box<dyn Expression>) -> Box<dyn Expression> {
 }
 
 #[must_use]
-pub fn image_str(value: &str) -> Box<dyn Expression> {
+pub(crate) fn image_str(value: &str) -> Box<dyn Expression> {
     Box::new(Literal::new(Value::Image(Image::new(value))))
 }
 

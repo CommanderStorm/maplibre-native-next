@@ -30,7 +30,7 @@ impl OffscreenTarget {
         OffscreenTarget { backend, size: Cell::new(size), image: RefCell::new(None) }
     }
 
-    pub fn size(&self) -> Size {
+    pub(crate) fn size(&self) -> Size {
         self.size.get()
     }
 

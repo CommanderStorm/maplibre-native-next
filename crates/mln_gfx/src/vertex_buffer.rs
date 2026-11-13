@@ -20,7 +20,7 @@ pub type UniqueVertexBufferResource = Rc<dyn VertexBufferResource>;
 pub trait IndexBufferResource: Any {}
 
 pub struct IndexBuffer {
-    pub elements: usize,
+    pub(crate) elements: usize,
     resource: Box<dyn IndexBufferResource>,
 }
 

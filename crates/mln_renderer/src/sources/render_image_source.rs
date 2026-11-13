@@ -163,15 +163,15 @@ fn build_image_mesh(bucket: &RasterBucket, corners: &GeometryCoordinates, cells:
     bucket.set_geometry(vertices, indices, segments);
 }
 
-pub struct ImageSourceRenderData {
-    pub bucket: Option<Arc<RasterBucket>>,
-    pub tile_ids: Vec<UnwrappedTileID>,
+pub(crate) struct ImageSourceRenderData {
+    pub(crate) bucket: Option<Arc<RasterBucket>>,
+    pub(crate) tile_ids: Vec<UnwrappedTileID>,
     name: String,
 }
 
 impl ImageSourceRenderData {
     #[must_use]
-    pub fn new(bucket: Option<Arc<RasterBucket>>, tile_ids: Vec<UnwrappedTileID>, name: String) -> Self {
+    pub(crate) fn new(bucket: Option<Arc<RasterBucket>>, tile_ids: Vec<UnwrappedTileID>, name: String) -> Self {
         ImageSourceRenderData { bucket, tile_ids, name }
     }
 }
@@ -211,7 +211,7 @@ impl RenderItem for ImageSourceRenderItem {
     }
 }
 
-pub struct RenderImageSource {
+pub(crate) struct RenderImageSource {
     base: RenderSourceBase,
     bucket: Option<Arc<RasterBucket>>,
     render_data: Option<Rc<ImageSourceRenderData>>,
@@ -222,7 +222,7 @@ pub struct RenderImageSource {
 
 impl RenderImageSource {
     #[must_use]
-    pub fn new(impl_: Arc<image_source::Impl>) -> Self {
+    pub(crate) fn new(impl_: Arc<image_source::Impl>) -> Self {
         let impl_: Arc<dyn source::Impl> = impl_;
         RenderImageSource {
             base: RenderSourceBase::new(impl_),

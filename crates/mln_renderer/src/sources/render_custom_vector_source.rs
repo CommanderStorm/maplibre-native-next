@@ -15,14 +15,14 @@ use crate::tile::custom_tile::CustomVectorTile;
 use crate::tile::tile::Tile;
 use crate::tile_parameters::TileParameters;
 
-pub struct RenderCustomVectorSource {
+pub(crate) struct RenderCustomVectorSource {
     tile_source: RenderTileSource,
     fast_pfor_enabled: bool,
 }
 
 impl RenderCustomVectorSource {
     #[must_use]
-    pub fn new(impl_: Arc<custom_vector_source::Impl>) -> Self {
+    pub(crate) fn new(impl_: Arc<custom_vector_source::Impl>) -> Self {
         let impl_: Arc<dyn source::Impl> = impl_;
         RenderCustomVectorSource { tile_source: RenderTileSource::new(impl_), fast_pfor_enabled: false }
     }
@@ -31,7 +31,7 @@ impl RenderCustomVectorSource {
         downcast_arc::<custom_vector_source::Impl>(&self.tile_source.base.base_impl)
     }
 
-    pub fn tile_source(&self) -> &RenderTileSource {
+    pub(crate) fn tile_source(&self) -> &RenderTileSource {
         &self.tile_source
     }
 }

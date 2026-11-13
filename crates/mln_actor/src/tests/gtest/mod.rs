@@ -30,11 +30,11 @@ use parking_lot::Mutex;
 /// gtest `EXPECT_*` from other threads: failures are recorded and the test
 /// thread checks them with `assert_none`.
 #[derive(Clone, Default)]
-pub struct Failures(Arc<Mutex<Vec<String>>>);
+pub(crate) struct Failures(Arc<Mutex<Vec<String>>>);
 
 impl Failures {
     #[track_caller]
-    pub fn expect(&self, condition: bool, what: &str) {
+    pub(crate) fn expect(&self, condition: bool, what: &str) {
         if !condition {
             let location = std::panic::Location::caller();
             self.0.lock().push(format!("{location}: {what}"));
@@ -42,7 +42,7 @@ impl Failures {
     }
 
     #[track_caller]
-    pub fn assert_none(&self) {
+    pub(crate) fn assert_none(&self) {
         let failures = self.0.lock();
         assert!(failures.is_empty(), "failures on other threads:\n{}", failures.join("\n"));
     }
@@ -50,18 +50,18 @@ impl Failures {
 
 #[track_caller]
 #[must_use]
-pub fn get<T>(future: &mpsc::Receiver<T>) -> T {
+pub(crate) fn get<T>(future: &mpsc::Receiver<T>) -> T {
     future.recv_timeout(Duration::from_secs(60)).expect("future not ready after 60 s")
 }
 
 /// Blocks until `future` is fulfilled; panics after 60 seconds.
 #[track_caller]
-pub fn wait(future: &mpsc::Receiver<()>) {
+pub(crate) fn wait(future: &mpsc::Receiver<()>) {
     future.recv_timeout(Duration::from_secs(60)).expect("future not ready after 60 s");
 }
 
 /// Waits up to `timeout` for `future`'s value; `None` on timeout.
 #[must_use]
-pub fn wait_for<T>(future: &mpsc::Receiver<T>, timeout: Duration) -> Option<T> {
+pub(crate) fn wait_for<T>(future: &mpsc::Receiver<T>, timeout: Duration) -> Option<T> {
     future.recv_timeout(timeout).ok()
 }

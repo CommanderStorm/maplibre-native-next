@@ -65,7 +65,7 @@ fn impl_cast(impl_: &Arc<dyn layer::Impl>) -> &ColorReliefLayerImpl {
 
 const COLOR_RELIEF_SHADER_GROUP_NAME: &str = "ColorReliefShader";
 
-pub struct RenderColorReliefLayer {
+pub(crate) struct RenderColorReliefLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: ColorReliefPaintProperties::Unevaluated,
@@ -98,7 +98,7 @@ pub struct RenderColorReliefLayer {
 }
 
 impl RenderColorReliefLayer {
-    pub fn new(impl_: Arc<ColorReliefLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<ColorReliefLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(ColorReliefLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

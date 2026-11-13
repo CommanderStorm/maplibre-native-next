@@ -26,7 +26,7 @@ pub struct ResourceError {
     /// An error message from the request handler, e.g. a server message or a
     /// system message informing the user about the reason for the failure.
     pub message: String,
-    pub retry_after: Option<Timestamp>,
+    pub(crate) retry_after: Option<Timestamp>,
 }
 
 impl ResourceError {
@@ -77,7 +77,7 @@ impl Response {
     }
 
     #[must_use]
-    pub fn is_fresh(&self) -> bool {
+    pub(crate) fn is_fresh(&self) -> bool {
         match self.expires {
             Some(expires) => expires > now(),
             None => self.error.is_none(),

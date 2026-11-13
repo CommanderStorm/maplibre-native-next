@@ -10,13 +10,13 @@ use crate::simplify::simplify;
 use crate::types::{VtFeature, VtFeatures, VtGeometry, VtLineString, VtLinearRing, VtPoint, VtPolygon};
 
 /// `project` (the visitor that converts to projected `vt_geometry`).
-pub struct Project {
-    pub tolerance: f64,
+pub(crate) struct Project {
+    pub(crate) tolerance: f64,
 }
 
 impl Project {
     #[must_use]
-    pub fn point(&self, p: &Point<f64>) -> VtPoint {
+    pub(crate) fn point(&self, p: &Point<f64>) -> VtPoint {
         let sine = (p.y * PI / 180.0).sin();
         let x = p.x / 360.0 + 0.5;
         // std::max(std::min(y, 1.0), 0.0)
@@ -27,7 +27,7 @@ impl Project {
     }
 
     #[must_use]
-    pub fn line_string(&self, points: &LineString<f64>) -> VtLineString {
+    pub(crate) fn line_string(&self, points: &LineString<f64>) -> VtLineString {
         let mut result = VtLineString::default();
         let len = points.len();
 
@@ -56,7 +56,7 @@ impl Project {
     }
 
     #[must_use]
-    pub fn linear_ring(&self, ring: &LinearRing<f64>) -> VtLinearRing {
+    pub(crate) fn linear_ring(&self, ring: &LinearRing<f64>) -> VtLinearRing {
         let mut result = VtLinearRing::default();
         let (Some(first), Some(last)) = (ring.first(), ring.last()) else {
             return result;
@@ -89,12 +89,12 @@ impl Project {
     }
 
     #[must_use]
-    pub fn polygon(&self, rings: &[LinearRing<f64>]) -> VtPolygon {
+    pub(crate) fn polygon(&self, rings: &[LinearRing<f64>]) -> VtPolygon {
         rings.iter().map(|r| self.linear_ring(r)).collect()
     }
 
     #[must_use]
-    pub fn geometry(&self, geometry: &Geometry<f64>) -> VtGeometry {
+    pub(crate) fn geometry(&self, geometry: &Geometry<f64>) -> VtGeometry {
         match geometry {
             Geometry::Empty => VtGeometry::Empty,
             Geometry::Point(p) => VtGeometry::Point(self.point(p)),
@@ -116,7 +116,7 @@ impl Project {
 
 /// `convert(features, tolerance, generateId)`
 #[must_use]
-pub fn convert(features: &FeatureCollection<f64>, tolerance: f64, generate_id: bool) -> VtFeatures {
+pub(crate) fn convert(features: &FeatureCollection<f64>, tolerance: f64, generate_id: bool) -> VtFeatures {
     let mut projected = VtFeatures::with_capacity(features.len());
     let mut gen_id: u64 = 0;
     for feature in features {

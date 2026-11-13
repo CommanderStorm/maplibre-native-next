@@ -34,7 +34,7 @@ pub enum Payload {
 
 impl Payload {
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             Payload::Bytes(bytes) => bytes.len(),
             #[cfg(target_family = "wasm")]
@@ -43,7 +43,7 @@ impl Payload {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
@@ -65,7 +65,7 @@ impl From<Vec<u8>> for Payload {
 }
 
 /// The smallest array that travels as a payload.
-pub const PAYLOAD_MIN: usize = 4096;
+pub(crate) const PAYLOAD_MIN: usize = 4096;
 
 thread_local! {
     /// While `encode` runs: the payloads so far.
@@ -110,11 +110,11 @@ enum Read {
 mod inline {
     use serde::{Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(bytes: &&[u8], serializer: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(bytes: &&[u8], serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_bytes(bytes)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
         struct Visitor;
         impl serde::de::Visitor<'_> for Visitor {
             type Value = Vec<u8>;

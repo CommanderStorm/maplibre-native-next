@@ -168,7 +168,7 @@ struct DrawableImpl {
     bind_groups_shader: Option<ShaderProgramBasePtr>,
 }
 
-pub struct Drawable {
+pub(crate) struct Drawable {
     base: DrawableBase,
     impl_: DrawableImpl,
 }
@@ -179,7 +179,7 @@ thread_local! {
 
 impl Drawable {
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub(crate) fn new(name: String) -> Self {
         Drawable {
             base: DrawableBase::new(name),
             impl_: DrawableImpl {
@@ -204,14 +204,14 @@ impl Drawable {
         }
     }
 
-    pub fn set_depth_mode_for_3d(&mut self, value: &DepthMode) {
+    pub(crate) fn set_depth_mode_for_3d(&mut self, value: &DepthMode) {
         if self.impl_.depth_mode.func != value.func || self.impl_.depth_mode.mask != value.mask {
             self.impl_.pipeline_state = None;
         }
         self.impl_.depth_mode = *value;
     }
 
-    pub fn set_stencil_mode_for_3d(&mut self, value: &StencilMode) {
+    pub(crate) fn set_stencil_mode_for_3d(&mut self, value: &StencilMode) {
         let new_hash = hash_stencil_mode(value);
         let m = &self.impl_.stencil_mode;
         if !self.impl_.stencil_mode_hash_valid
@@ -228,11 +228,11 @@ impl Drawable {
         self.impl_.stencil_mode_hash = new_hash;
     }
 
-    pub fn set_vertex_attr_id(&mut self, id: usize) {
+    pub(crate) fn set_vertex_attr_id(&mut self, id: usize) {
         self.impl_.vertex_attr_id = id;
     }
 
-    pub fn upload(&mut self, upload_pass: &UploadPass) {
+    pub(crate) fn upload(&mut self, upload_pass: &UploadPass) {
         let Some(shader) = self.base.shader.clone() else {
             eprintln!("Missing shader for drawable {}/{}", self.base.unique_id, self.base.name);
             debug_assert!(false);

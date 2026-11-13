@@ -74,7 +74,7 @@ impl LatLng {
 
     /// The top left corner of the tile `z/x/y`.
     #[must_use]
-    pub fn from_canonical_tile(z: u8, x: u32, y: u32) -> Self {
+    pub(crate) fn from_canonical_tile(z: u8, x: u32, y: u32) -> Self {
         LatLng::new_unchecked(lat_(z, i64::from(y)), lon_(z, i64::from(x)))
     }
 
@@ -287,7 +287,7 @@ impl LatLngBounds {
     }
 
     #[must_use]
-    pub fn contains_bounds(&self, area: &LatLngBounds, wrap: WrapMode) -> bool {
+    pub(crate) fn contains_bounds(&self, area: &LatLngBounds, wrap: WrapMode) -> bool {
         let contains_area_latitude = area.north() <= self.north() && area.south() >= self.south();
         if !contains_area_latitude {
             return false;
@@ -309,7 +309,7 @@ impl LatLngBounds {
     }
 
     #[must_use]
-    pub fn intersects(&self, area: LatLngBounds, wrap: WrapMode) -> bool {
+    pub(crate) fn intersects(&self, area: LatLngBounds, wrap: WrapMode) -> bool {
         let latitude_intersects = area.north() > self.south() && area.south() < self.north();
         if !latitude_intersects {
             return false;

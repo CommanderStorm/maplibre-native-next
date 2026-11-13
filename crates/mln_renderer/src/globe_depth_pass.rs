@@ -28,7 +28,7 @@ const GLOBE_DEPTH_SHADER_NAME: &str = "GlobeDepthShader";
 /// that 3D geometry behind the horizon is hidden by the globe the way the 2D
 /// layers are by their clip Z.
 #[derive(Default)]
-pub struct GlobeDepthPass {
+pub(crate) struct GlobeDepthPass {
     layer_group: Option<LayerGroupBasePtr>,
     shader: Option<ShaderProgramBasePtr>,
     projection_uniform_buffer: Option<UniformBufferPtr>,
@@ -38,7 +38,7 @@ pub struct GlobeDepthPass {
 impl GlobeDepthPass {
     /// `needed` is whether any layer draws 3D geometry this frame; without
     /// one the planet's depth is never read.
-    pub fn update(
+    pub(crate) fn update(
         &mut self,
         shaders: &ShaderRegistry,
         context: &dyn Context,
@@ -154,7 +154,7 @@ impl GlobeDepthPass {
     }
 
     #[must_use]
-    pub fn get_layer_group(&self) -> Option<&LayerGroupBasePtr> {
+    pub(crate) fn get_layer_group(&self) -> Option<&LayerGroupBasePtr> {
         self.layer_group.as_ref()
     }
 }

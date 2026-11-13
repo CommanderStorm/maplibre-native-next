@@ -77,7 +77,7 @@ pub(crate) fn activate_render_target(
     }
 }
 
-pub struct RenderHeatmapLayer {
+pub(crate) struct RenderHeatmapLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: HeatmapPaintProperties::Unevaluated,
@@ -100,7 +100,7 @@ pub struct RenderHeatmapLayer {
 }
 
 impl RenderHeatmapLayer {
-    pub fn new(impl_: Arc<HeatmapLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<HeatmapLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(HeatmapLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

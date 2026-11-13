@@ -37,38 +37,38 @@
 // OpenGL through glow is the FFI here.
 #![allow(unsafe_code)]
 
-pub mod command_encoder;
-pub mod context;
-pub mod custom_layer;
-pub mod draw_target;
-pub mod drawable;
-pub mod drawable_builder;
-pub mod enums;
-pub mod layer_group;
-pub mod offscreen_texture;
-pub mod render_pass;
-pub mod renderer_backend;
-pub mod shaders;
-pub mod state;
-pub mod texture2d;
-pub mod types;
-pub mod uniform_buffer;
-pub mod upload_pass;
-pub mod vertex_array;
-pub mod vertex_buffer_resource;
+pub(crate) mod command_encoder;
+pub(crate) mod context;
+pub(crate) mod custom_layer;
+pub(crate) mod draw_target;
+pub(crate) mod drawable;
+pub(crate) mod drawable_builder;
+pub(crate) mod enums;
+pub(crate) mod layer_group;
+pub(crate) mod offscreen_texture;
+pub(crate) mod render_pass;
+pub(crate) mod renderer_backend;
+pub(crate) mod shaders;
+pub(crate) mod state;
+pub(crate) mod texture2d;
+pub(crate) mod types;
+pub(crate) mod uniform_buffer;
+pub(crate) mod upload_pass;
+pub(crate) mod vertex_array;
+pub(crate) mod vertex_buffer_resource;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub mod borrowed_target;
+pub(crate) mod borrowed_target;
 #[cfg(target_arch = "wasm32")]
 pub mod canvas_target;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod device;
+pub(crate) mod device;
 #[cfg(not(target_arch = "wasm32"))]
 mod egl;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod exported_target;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod offscreen_target;
+pub(crate) mod offscreen_target;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod surface_target;
 #[cfg(windows)]
@@ -80,7 +80,7 @@ pub mod wgl_surface_target;
 pub use borrowed_target::{BorrowedTarget, BorrowedTextures, HostSurface, HostSurfaceTarget};
 #[cfg(target_arch = "wasm32")]
 pub use canvas_target::{CanvasTarget, WebCanvas};
-pub use context::Context;
+pub(crate) use context::Context;
 pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::{Api, Device, DeviceOptions};
@@ -92,7 +92,7 @@ pub use renderer_backend::RendererBackend;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub use surface_target::SurfaceTarget;
 #[cfg(windows)]
-pub use wgl_surface_target::SurfaceTarget;
+pub(crate) use wgl_surface_target::SurfaceTarget;
 
 #[cfg(test)]
 mod tests;

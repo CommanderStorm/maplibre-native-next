@@ -74,7 +74,7 @@ struct GlobeClipMesh {
     index_count: u32,
 }
 
-pub struct Context {
+pub(crate) struct Context {
     base: ContextBase,
     backend: Rc<BackendImpl>,
     weak_self: Weak<Context>,
@@ -121,7 +121,7 @@ fn clip_mask_depth_mode() -> DepthMode {
 }
 
 impl Context {
-    pub fn new(backend: Rc<BackendImpl>) -> Rc<Context> {
+    pub(crate) fn new(backend: Rc<BackendImpl>) -> Rc<Context> {
         Rc::new_cyclic(|weak| Context {
             base: ContextBase::default(),
             backend,
@@ -184,7 +184,7 @@ impl Context {
 
     /// The owning `Rc` (resources keep the context alive, as the C++
     /// `Context&` members assume).
-    pub fn rc(&self) -> Rc<Context> {
+    pub(crate) fn rc(&self) -> Rc<Context> {
         self.weak_self.upgrade().expect("webgpu::Context used after drop")
     }
 
@@ -192,11 +192,11 @@ impl Context {
         self.weak_self.clone()
     }
 
-    pub fn get_backend(&self) -> &Rc<BackendImpl> {
+    pub(crate) fn get_backend(&self) -> &Rc<BackendImpl> {
         &self.backend
     }
 
-    pub fn rendering_stats_mut(&self) -> RefMut<'_, RenderingStats> {
+    pub(crate) fn rendering_stats_mut(&self) -> RefMut<'_, RenderingStats> {
         GfxContext::rendering_stats(self)
     }
 
@@ -224,7 +224,7 @@ impl Context {
         stats.buffer_update_bytes = stats.buffer_update_bytes.wrapping_add(bytes);
     }
 
-    pub fn create_offscreen_texture_with(
+    pub(crate) fn create_offscreen_texture_with(
         &self,
         size: Size,
         type_: TextureChannelDataType,
@@ -235,7 +235,7 @@ impl Context {
     }
 
     /// Creates a texture, of the concrete type.
-    pub fn create_webgpu_texture_2d(&self) -> Rc<RefCell<Texture2D>> {
+    pub(crate) fn create_webgpu_texture_2d(&self) -> Rc<RefCell<Texture2D>> {
         Rc::new(RefCell::new(Texture2D::new(self.rc())))
     }
 
@@ -272,7 +272,7 @@ impl Context {
 
     /// The four corners of the tile extent as short2. They are written out
     /// here because C++'s `RenderStaticData` is a renderer type.
-    pub fn get_tile_vertex_buffer(&self) -> (wgpu::Buffer, u64) {
+    pub(crate) fn get_tile_vertex_buffer(&self) -> (wgpu::Buffer, u64) {
         let mut cached = self.tile_vertex_buffer.borrow_mut();
         cached
             .get_or_insert_with(|| {
@@ -284,7 +284,7 @@ impl Context {
     }
 
     /// The indices of the two triangles of a tile quad.
-    pub fn get_tile_index_buffer(&self) -> (wgpu::Buffer, u64) {
+    pub(crate) fn get_tile_index_buffer(&self) -> (wgpu::Buffer, u64) {
         let mut cached = self.tile_index_buffer.borrow_mut();
         cached
             .get_or_insert_with(|| {
@@ -630,7 +630,7 @@ impl Context {
     }
 
     /// Creates a uniform buffer holding `data`, of the concrete type.
-    pub fn create_webgpu_uniform_buffer(&self, data: &[u8]) -> Rc<UniformBuffer> {
+    pub(crate) fn create_webgpu_uniform_buffer(&self, data: &[u8]) -> Rc<UniformBuffer> {
         Rc::new(UniformBuffer::new(self, Some(data), data.len()))
     }
 }

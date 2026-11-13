@@ -58,7 +58,7 @@ fn impl_cast(impl_: &Arc<dyn layer::Impl>) -> &FillLayerImpl {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum FillVariant {
+pub(crate) enum FillVariant {
     Fill,
     FillPattern,
     FillOutline,
@@ -70,7 +70,7 @@ impl FillVariant {
     /// The fill variant of a drawable type; `None` for other types, which the
     /// tweaker handles in its fallback arm.
     #[must_use]
-    pub fn from_type(type_: usize) -> Option<FillVariant> {
+    pub(crate) fn from_type(type_: usize) -> Option<FillVariant> {
         match type_ {
             0 => Some(FillVariant::Fill),
             1 => Some(FillVariant::FillPattern),
@@ -191,7 +191,7 @@ fn read_fill_attributes(
     );
 }
 
-pub struct RenderFillLayer {
+pub(crate) struct RenderFillLayer {
     base: RenderLayerBase,
     // Paint properties
     unevaluated: FillPaintProperties::Unevaluated,
@@ -204,7 +204,7 @@ pub struct RenderFillLayer {
 }
 
 impl RenderFillLayer {
-    pub fn new(impl_: Arc<FillLayerImpl>) -> Self {
+    pub(crate) fn new(impl_: Arc<FillLayerImpl>) -> Self {
         let unevaluated = impl_.paint.untransitioned();
         let properties: Arc<dyn LayerProperties> = Arc::new(FillLayerProperties::new(impl_));
         let mut base = RenderLayerBase::new(properties);

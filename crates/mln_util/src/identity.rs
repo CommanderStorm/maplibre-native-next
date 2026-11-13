@@ -25,7 +25,7 @@ impl SimpleIdentity {
     }
 
     #[must_use]
-    pub fn id(&self) -> i64 {
+    pub(crate) fn id(&self) -> i64 {
         self.unique_id
     }
 

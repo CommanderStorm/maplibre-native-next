@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
-pub enum AttributeSource {
+pub(crate) enum AttributeSource {
     Constant,
     PerVertex,
     Computed,
@@ -10,7 +10,7 @@ pub enum AttributeSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
-pub enum ExpressionFunction {
+pub(crate) enum ExpressionFunction {
     Constant,
     Linear,
     Exponential,

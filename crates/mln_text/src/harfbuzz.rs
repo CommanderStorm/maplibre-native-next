@@ -54,7 +54,7 @@ impl HBShaper {
     }
 
     /// The implementation, for tests.
-    pub fn impl_(&self) -> &Impl {
+    pub(crate) fn impl_(&self) -> &Impl {
         &self.impl_
     }
 }

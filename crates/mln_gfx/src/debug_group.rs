@@ -6,12 +6,12 @@ pub trait DebugGroupTarget {
 }
 
 /// A debug group, pushed on creation and popped on drop.
-pub struct DebugGroup<'a> {
+pub(crate) struct DebugGroup<'a> {
     target: Option<&'a dyn DebugGroupTarget>,
 }
 
 impl<'a> DebugGroup<'a> {
-    pub fn new(target: &'a dyn DebugGroupTarget, name: &str) -> Self {
+    pub(crate) fn new(target: &'a dyn DebugGroupTarget, name: &str) -> Self {
         target.push_debug_group(name);
         DebugGroup { target: Some(target) }
     }

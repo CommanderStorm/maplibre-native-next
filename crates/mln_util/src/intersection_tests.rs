@@ -11,7 +11,7 @@ use crate::math::{dist_sqr_i16, dist_sqr_i16_f32};
 type GeometryCoordinate = Point<i16>;
 
 #[must_use]
-pub fn polygon_contains_point(ring: &[GeometryCoordinate], p: &GeometryCoordinate) -> bool {
+pub(crate) fn polygon_contains_point(ring: &[GeometryCoordinate], p: &GeometryCoordinate) -> bool {
     let mut c = false;
     if ring.is_empty() {
         // C++ dereferences `ring.end() - 1` (undefined for an empty ring);

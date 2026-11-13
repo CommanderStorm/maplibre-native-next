@@ -95,7 +95,7 @@ fn color_components(color: &Color) -> [f32; 4] {
 /// The planar sky is rendered before style layers. The physical atmosphere is rendered
 /// after them, against the globe depth prepass, so the planet correctly occludes it.
 #[derive(Default)]
-pub struct SkyPass {
+pub(crate) struct SkyPass {
     sky_layer_group: Option<LayerGroupBasePtr>,
     atmosphere_layer_group: Option<LayerGroupBasePtr>,
     sky_shader: Option<ShaderProgramBasePtr>,
@@ -104,7 +104,7 @@ pub struct SkyPass {
 
 impl SkyPass {
     #[allow(clippy::too_many_arguments)]
-    pub fn update(
+    pub(crate) fn update(
         &mut self,
         shaders: &ShaderRegistry,
         context: &dyn Context,
@@ -208,17 +208,17 @@ impl SkyPass {
     }
 
     #[must_use]
-    pub fn get_sky_layer_group(&self) -> Option<&LayerGroupBasePtr> {
+    pub(crate) fn get_sky_layer_group(&self) -> Option<&LayerGroupBasePtr> {
         self.sky_layer_group.as_ref()
     }
 
     #[must_use]
-    pub fn get_atmosphere_layer_group(&self) -> Option<&LayerGroupBasePtr> {
+    pub(crate) fn get_atmosphere_layer_group(&self) -> Option<&LayerGroupBasePtr> {
         self.atmosphere_layer_group.as_ref()
     }
 
     #[must_use]
-    pub fn has_atmosphere(&self) -> bool {
+    pub(crate) fn has_atmosphere(&self) -> bool {
         self.atmosphere_layer_group.as_ref().is_some_and(|group| !group.borrow().empty())
     }
 }

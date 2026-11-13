@@ -11,12 +11,12 @@
 #[cfg(target_family = "wasm")]
 mod browser_decoder;
 pub mod decoder;
-pub mod image;
+pub(crate) mod image;
 #[cfg(not(target_family = "wasm"))]
-pub mod jpeg_reader;
-pub mod png_reader;
+pub(crate) mod jpeg_reader;
+pub(crate) mod png_reader;
 pub mod png_writer;
-pub mod webp_reader;
+pub(crate) mod webp_reader;
 
 pub use image::decode_image;
 pub use png_reader::decode_png;

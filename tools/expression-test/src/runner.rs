@@ -12,10 +12,10 @@ use crate::test_runner_common::{color_output_equal, deep_equal, deep_equal_opt, 
 #[derive(Clone, Debug, Default)]
 pub struct TestRunOutput {
     pub id: String,
-    pub passed: bool,
+    pub(crate) passed: bool,
     pub text: String,
-    pub expression: String,
-    pub serialized: String,
+    pub(crate) expression: String,
+    pub(crate) serialized: String,
     /// When the test fails only because some inputs evaluate differently,
     /// their indices in the fixture's `inputs`; empty otherwise.
     pub failed_inputs: Vec<usize>,
@@ -28,7 +28,7 @@ pub struct TestStats {
     pub errored: Vec<TestRunOutput>,
     pub ignore_passed: Vec<TestRunOutput>,
     pub ignore_failed: Vec<TestRunOutput>,
-    pub ids: Vec<String>,
+    pub(crate) ids: Vec<String>,
 }
 
 impl TestStats {
@@ -126,7 +126,7 @@ fn evaluate_expression(data_inputs: &[crate::parser::Input], expression: &dyn Ex
     result.outputs = Some(Value::Array(outputs));
 }
 
-pub fn run_expression_test(data: &mut TestData, id: &str) -> TestRunOutput {
+pub(crate) fn run_expression_test(data: &mut TestData, id: &str) -> TestRunOutput {
     let mut output = TestRunOutput { id: id.to_owned(), ..Default::default() };
 
     // Parse expression
