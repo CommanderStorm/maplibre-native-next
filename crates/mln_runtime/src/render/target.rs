@@ -604,6 +604,25 @@ impl Surface {
         Ok(())
     }
 
+    /// Fails with [`ErrorKind::InvalidArgument`](mln_util::ErrorKind) for a
+    /// Win32 window whose pixel format isn't the library's when OpenGL
+    /// presents to it: on `device`, or without a device, in a build whose
+    /// first backend is OpenGL. Windows doesn't let a pixel format change.
+    /// A session that falls back to OpenGL because Vulkan is missing finds
+    /// out as it starts.
+    #[cfg_attr(not(all(feature = "gl", windows)), allow(clippy::unnecessary_wraps))]
+    pub(crate) fn check_pixel_format(&self, device: Option<&Device>) -> Result<(), Error> {
+        #[cfg(all(feature = "gl", windows))]
+        if let SurfaceKind::Window(window) = &self.kind
+            && device.map_or(cfg!(not(feature = "vulkan")), |device| device.backend() == BackendType::OpenGL)
+        {
+            mln_gl::SurfaceTarget::check_window(&**window)?;
+        }
+        #[cfg(not(all(feature = "gl", windows)))]
+        let _ = (self, device);
+        Ok(())
+    }
+
     /// The window, for a surface of one.
     #[allow(clippy::match_wildcard_for_single_variants)]
     pub(crate) fn host_window(&self) -> Option<Arc<dyn Window>> {
