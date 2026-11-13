@@ -4,13 +4,13 @@
 //! `mln_map_types` and is re-exported here.
 
 mod feature_state;
-pub(crate) mod map;
-pub(crate) mod map_event;
-pub(crate) mod map_options;
-pub(crate) mod map_snapshot;
+mod map;
+mod map_event;
+mod map_options;
+mod map_snapshot;
 // gtests-core: MapProjection (test/map/map.test.cpp).
-pub(crate) mod map_projection;
-pub(crate) mod rendering_stats_view;
+mod map_projection;
+mod rendering_stats_view;
 pub mod transform;
 
 pub use map::Map;

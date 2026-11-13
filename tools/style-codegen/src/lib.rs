@@ -8,14 +8,14 @@
 //! checked in; the `generated_code_test` fails when it differs from fresh
 //! generator output.
 
-pub(crate) mod defaults;
-pub(crate) mod emit_layer;
-pub(crate) mod emit_properties;
-pub(crate) mod emit_root_properties;
-pub(crate) mod json;
-pub(crate) mod spec;
-pub(crate) mod types;
-pub(crate) mod writer;
+mod defaults;
+mod emit_layer;
+mod emit_properties;
+mod emit_root_properties;
+mod json;
+mod spec;
+mod types;
+mod writer;
 
 /// One output file, relative to `crates/mln_style/src`.
 #[derive(Clone, Debug, PartialEq, Eq)]

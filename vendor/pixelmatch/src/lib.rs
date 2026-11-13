@@ -9,7 +9,7 @@
 //! same `size_t` neighbourhood logic. Images are RGBA, 4 bytes per pixel,
 //! row-major, `width * height * 4` bytes.
 
-pub(crate) mod detail {
+mod detail {
     /// Blend semi-transparent color with white.
     ///
     /// C++: `uint8_t blend(uint8_t c, double a) { return 255 + (c - 255) * a; }`

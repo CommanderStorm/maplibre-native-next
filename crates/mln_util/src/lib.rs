@@ -2,15 +2,15 @@
 //! time, strings, URLs, logging, threading helpers and more, one module per
 //! file.
 
-pub(crate) mod color;
+mod color;
 pub mod compression;
 pub mod constants;
 pub mod geo;
 pub mod interpolate;
-pub(crate) mod padding;
+mod padding;
 pub mod range;
 pub mod string;
-pub(crate) mod unitbezier;
+mod unitbezier;
 
 pub use color::{Color, ColorSpace};
 pub use error::{Error, ErrorKind, ParseEnumError};

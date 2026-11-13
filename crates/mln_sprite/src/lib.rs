@@ -2,8 +2,8 @@
 //! through a `FileSource` and parses them on the thread pool, and the sprite
 //! parser.
 
-pub(crate) mod sprite_loader;
-pub(crate) mod sprite_loader_observer;
+mod sprite_loader;
+mod sprite_loader_observer;
 pub mod sprite_parser;
 
 pub use sprite_loader::SpriteLoader;

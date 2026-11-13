@@ -33,8 +33,7 @@ use mln_util::image::PremultipliedImage;
 use mln_util::logging::{Event, EventSeverity, Log, Observer};
 use mln_util::size::Size;
 use mln_vec_map::VecMap;
-use mln_webgpu::upload_pass::UploadPass as WebGpuUploadPass;
-use mln_webgpu::{Device, OffscreenTarget};
+use mln_webgpu::{Device, OffscreenTarget, UploadPass as WebGpuUploadPass};
 use parking_lot::Mutex;
 
 use crate::bucket::Bucket;

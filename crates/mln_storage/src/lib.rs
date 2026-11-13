@@ -12,26 +12,26 @@
 
 #[cfg(target_os = "android")]
 pub mod android;
-pub(crate) mod asset_file_source;
-pub(crate) mod async_request;
+mod asset_file_source;
+mod async_request;
 #[cfg(feature = "sqlite")]
 pub mod database_file_source;
 #[cfg(target_family = "wasm")]
 mod fetch_transport;
 pub mod file_source;
-pub(crate) mod file_source_manager;
-pub(crate) mod file_source_request;
-pub(crate) mod http_file_source;
+mod file_source_manager;
+mod file_source_request;
+mod http_file_source;
 pub mod http_header_transform;
-pub(crate) mod http_timeout;
+mod http_timeout;
 mod json_document;
-pub(crate) mod local_file_request;
-pub(crate) mod local_file_source;
-pub(crate) mod main_resource_loader;
+mod local_file_request;
+mod local_file_source;
+mod main_resource_loader;
 #[cfg(feature = "sqlite")]
-pub(crate) mod mbtiles_file_source;
+mod mbtiles_file_source;
 #[cfg(feature = "sqlite")]
-pub(crate) mod merge_sideloaded;
+mod merge_sideloaded;
 pub mod network_status;
 #[cfg(target_vendor = "apple")]
 mod nsurlsession_transport;
@@ -39,11 +39,11 @@ pub mod offline;
 #[cfg(feature = "sqlite")]
 pub mod offline_database;
 #[cfg(feature = "sqlite")]
-pub(crate) mod offline_schema;
+mod offline_schema;
 pub mod online_file_source;
-pub(crate) mod pmtiles_file_source;
+mod pmtiles_file_source;
 pub mod resource;
-pub(crate) mod resource_options;
+mod resource_options;
 pub mod resource_transform;
 pub mod response;
 #[cfg(feature = "sqlite")]

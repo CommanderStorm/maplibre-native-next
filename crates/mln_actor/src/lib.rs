@@ -6,16 +6,16 @@
 //! ([`scheduler::install_cooperative`]) and runs its tasks on that thread.
 
 pub mod actor;
-pub(crate) mod actor_ref;
-pub(crate) mod async_task;
+mod actor_ref;
+mod async_task;
 pub mod cooperative_scheduler;
 mod established_actor;
-pub(crate) mod local_object;
-pub(crate) mod mailbox;
-pub(crate) mod run_loop;
+mod local_object;
+mod mailbox;
+mod run_loop;
 pub mod scheduler;
-pub(crate) mod thread;
-pub(crate) mod thread_pool;
+mod thread;
+mod thread_pool;
 pub mod timer;
 
 pub use actor_ref::ActorRef;

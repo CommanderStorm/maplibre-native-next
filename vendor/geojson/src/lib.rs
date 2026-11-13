@@ -7,7 +7,7 @@
 // rapidjson documents become `serde_json::Value`s, as everywhere in the port
 // (`mln_conversion::Convertible`), and stringify writes them with serde_json.
 
-pub(crate) mod geojson_impl;
+mod geojson_impl;
 
 pub use feature::{Feature, Identifier, PropertyMap, Value};
 pub use geojson_impl::{

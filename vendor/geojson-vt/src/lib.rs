@@ -5,15 +5,15 @@
 // `geojsonvt::geojson` is the same variant as `mapbox::geojson::geojson`
 // (`mln::GeoJSON`): //vendor/geojson's `GeoJSON`.
 
-pub(crate) mod clip;
-pub(crate) mod convert;
-pub(crate) mod simplify;
-pub(crate) mod tile;
-pub(crate) mod types;
-pub(crate) mod wrap;
+mod clip;
+mod convert;
+mod simplify;
+mod tile;
+mod types;
+mod wrap;
 
 /// `mapbox::geojsonvt::detail`
-pub(crate) mod detail {
+mod detail {
     pub(crate) use crate::clip::clip;
     pub(crate) use crate::convert::convert;
     pub(crate) use crate::tile::InternalTile;

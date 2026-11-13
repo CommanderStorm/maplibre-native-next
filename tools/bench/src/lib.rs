@@ -8,10 +8,10 @@
 
 pub mod cases;
 pub mod compare;
-pub(crate) mod latency;
+mod latency;
 pub mod meter;
 pub mod scene;
-pub(crate) mod stats;
+mod stats;
 
 use std::path::PathBuf;
 

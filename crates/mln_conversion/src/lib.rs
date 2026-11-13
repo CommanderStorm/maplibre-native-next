@@ -4,9 +4,9 @@
 //!
 //! The typed converters (`Converter<T>`) live in `mln_style`.
 
-pub(crate) mod conversion;
+mod conversion;
 pub mod get_json_type;
-pub(crate) mod json_conversion;
+mod json_conversion;
 pub mod value_conversion;
 
 pub use conversion::{Convertible, Error, to_geojson};

@@ -37,38 +37,38 @@
 // OpenGL through glow is the FFI here.
 #![allow(unsafe_code)]
 
-pub(crate) mod command_encoder;
-pub(crate) mod context;
-pub(crate) mod custom_layer;
-pub(crate) mod draw_target;
-pub(crate) mod drawable;
-pub(crate) mod drawable_builder;
-pub(crate) mod enums;
-pub(crate) mod layer_group;
-pub(crate) mod offscreen_texture;
-pub(crate) mod render_pass;
-pub(crate) mod renderer_backend;
-pub(crate) mod shaders;
-pub(crate) mod state;
-pub(crate) mod texture2d;
-pub(crate) mod types;
-pub(crate) mod uniform_buffer;
-pub(crate) mod upload_pass;
-pub(crate) mod vertex_array;
-pub(crate) mod vertex_buffer_resource;
+mod command_encoder;
+mod context;
+mod custom_layer;
+mod draw_target;
+mod drawable;
+mod drawable_builder;
+mod enums;
+mod layer_group;
+mod offscreen_texture;
+mod render_pass;
+mod renderer_backend;
+mod shaders;
+mod state;
+mod texture2d;
+mod types;
+mod uniform_buffer;
+mod upload_pass;
+mod vertex_array;
+mod vertex_buffer_resource;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod borrowed_target;
+mod borrowed_target;
 #[cfg(target_arch = "wasm32")]
 pub mod canvas_target;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod device;
+mod device;
 #[cfg(not(target_arch = "wasm32"))]
 mod egl;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod exported_target;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod offscreen_target;
+mod offscreen_target;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod surface_target;
 #[cfg(windows)]

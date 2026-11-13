@@ -17,9 +17,9 @@
 
 mod error;
 pub mod geometry_tile_data;
-pub(crate) mod mlt;
-pub(crate) mod vector_mlt_tile_data;
-pub(crate) mod vector_mvt_tile_data;
+mod mlt;
+mod vector_mlt_tile_data;
+mod vector_mvt_tile_data;
 
 pub(crate) use error::Error;
 pub use geometry_tile_data::{
