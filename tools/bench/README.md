@@ -117,6 +117,10 @@ machine, trust `minstr` and `allocs` over the times. To see how much your
 machine's numbers vary, compare a commit with itself, which should give no
 verdicts.
 
+## Nightly
+
+Every night, CI's `bench-nightly` workflow compares main with main as it was a day earlier, over every case, on lavapipe. When a case gets a worse verdict, `nightly.py` opens the issue "Nightly benchmarks: main got worse" with the report, or comments on it when it's open already, and a night without one closes it. The workflow runs only in louwers/mln-rs, and its `workflow_dispatch` takes another base.
+
 ## On an Android device
 
 `just bench-android <ndk>` (`android.py`) compares the WebGPU and Vulkan
