@@ -174,7 +174,6 @@ fn add_subdivided_polygon(
 /// Every ring keeps its outline: the tile's triangles cut every hole, so
 /// the earcut path's limit on holes doesn't apply. The C++ draws no outline
 /// of such a polygon and draws its triangles unchecked.
-#[allow(clippy::too_many_arguments)]
 fn add_tessellated_polygon(
     geometry: &GeometryCollection,
     fill_vertices: &mut Vec<FillLayoutVertex>,
@@ -216,7 +215,10 @@ fn add_tessellated_polygon(
 ///
 /// Without subdivision, a geometry that carries triangles is filled with
 /// them, and triangulated only when they can't be drawn.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fill, outline and basic-outline buffers that one pass over the geometry fills, each with its indexes and segments"
+)]
 pub(crate) fn generate_fill_and_outline_buffers(
     geometry: &GeometryCollection,
     fill_vertices: &mut Vec<FillLayoutVertex>,
