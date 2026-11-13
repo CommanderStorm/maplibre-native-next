@@ -39,8 +39,8 @@ pub(crate) enum LineType {
     Simple,
     Gradient,
     Pattern,
-    SDF,
-    GradientSDF,
+    Sdf,
+    GradientSdf,
 }
 
 impl LineType {
@@ -50,8 +50,8 @@ impl LineType {
             0 => Some(LineType::Simple),
             1 => Some(LineType::Gradient),
             2 => Some(LineType::Pattern),
-            3 => Some(LineType::SDF),
-            4 => Some(LineType::GradientSDF),
+            3 => Some(LineType::Sdf),
+            4 => Some(LineType::GradientSdf),
             _ => None,
         }
     }
@@ -295,7 +295,7 @@ impl LayerTweaker for LineLayerTweaker {
                     });
                 }
 
-                Some(line_type @ (LineType::SDF | LineType::GradientSDF)) => {
+                Some(line_type @ (LineType::Sdf | LineType::GradientSdf)) => {
                     let line_pattern_cap = drawable
                         .get_data()
                         .and_then(|d| d.downcast_ref::<LineDrawableData>())
@@ -310,7 +310,7 @@ impl LayerTweaker for LineLayerTweaker {
 
                         // The gradient variant keeps its ramp in the image
                         // slot, so the dash atlas takes the second.
-                        let dash_texture_id = if line_type == LineType::GradientSDF {
+                        let dash_texture_id = if line_type == LineType::GradientSdf {
                             ID_LINE_DASH_TEXTURE
                         } else {
                             ID_LINE_IMAGE_TEXTURE

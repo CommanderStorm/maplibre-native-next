@@ -34,7 +34,7 @@ impl DebugBucket {
         modified: Option<Timestamp>,
         expires: Option<Timestamp>,
         debug_mode: MapDebugOptions,
-        source_name: String,
+        source_name: &str,
     ) -> Self {
         let mut text = Vec::new();
         let mut strokes = Vec::new();
@@ -109,7 +109,7 @@ mod tests {
 
     fn bucket(debug_mode: MapDebugOptions, modified: Option<Timestamp>, expires: Option<Timestamp>) -> DebugBucket {
         let id = OverscaledTileID::new(3, 0, CanonicalTileID::new(2, 1, 3));
-        DebugBucket::new(&id, true, false, modified, expires, debug_mode, "streets".to_owned())
+        DebugBucket::new(&id, true, false, modified, expires, debug_mode, "streets")
     }
 
     #[test]

@@ -160,7 +160,7 @@ impl RenderTile {
                 tile_base.modified.get(),
                 tile_base.expires.get(),
                 parameters.debug_options,
-                parameters.source_name.clone(),
+                &parameters.source_name,
             )));
         } else if parameters.debug_options == MapDebugOptions::NO_DEBUG {
             self.debug_bucket = None;

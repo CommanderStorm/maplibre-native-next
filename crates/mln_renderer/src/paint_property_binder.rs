@@ -566,6 +566,7 @@ impl CrossFadedPaintPropertyBinder<Image> {
 
     /// The zoom interpolation factors, always (0, 0) for pattern binders.
     #[must_use]
+    #[expect(clippy::unused_self, reason = "the paint property macros call it on every binder alike")]
     pub(crate) fn interpolation_factor(&self, _current_zoom: f32) -> (f32, f32) {
         (0.0, 0.0)
     }

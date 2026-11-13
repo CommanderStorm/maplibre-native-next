@@ -68,6 +68,7 @@ pub(crate) struct DrawableBinders {
 }
 
 /// The value for `Drawable::set_binders`.
+#[expect(clippy::unnecessary_wraps, reason = "the value of a `Drawable` setter, which takes an `Option`")]
 pub(crate) fn drawable_binders_slot(bucket: &BucketPtr, layer_id: &str) -> Option<Rc<dyn Any>> {
     Some(Rc::new(DrawableBinders {
         bucket: bucket.clone(),

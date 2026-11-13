@@ -114,6 +114,7 @@ pub(crate) struct MBTilesFileSourceThread {
 
 impl MBTilesFileSourceThread {
     /// Generate a tilejson resource from .mbtiles file
+    #[expect(clippy::unused_self, reason = "the file source's actor calls it on its thread's object")]
     pub(crate) fn request_tilejson(&self, resource: &Resource, req: &ActorRef<FileSourceRequestState>) {
         let response = match Self::tilejson(resource) {
             Ok(response) => response,

@@ -118,7 +118,7 @@ fn evaluate_expression(data_inputs: &[crate::parser::Input], expression: &dyn Ex
                 outputs.push(Value::Object(error));
             }
             Ok(v) => {
-                let value = expression_value_to_value(&v).expect("output value");
+                let value = expression_value_to_value(&v);
                 outputs.push(value);
             }
         }
@@ -164,7 +164,8 @@ pub(crate) fn run_expression_test(data: &mut TestData, id: &str) -> TestRunOutpu
     let mut round_trip_diff = Some(Vec::new());
 
     if data.expected.compiled.success {
-        serialization_ok = compile_ok && deep_equal_opt(data.result.serialized.as_ref(), data.expected.serialized.as_ref());
+        serialization_ok =
+            compile_ok && deep_equal_opt(data.result.serialized.as_ref(), data.expected.serialized.as_ref());
         recompile_ok = compile_ok && data.recompiled.compiled == data.expected.compiled;
         round_trip_diff = differing_inputs(data.recompiled.outputs.as_ref(), data.expected.outputs.as_ref(), is_color);
         round_trip_ok = recompile_ok && round_trip_diff.as_ref().is_some_and(Vec::is_empty);

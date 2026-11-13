@@ -38,6 +38,11 @@ impl HostBytes {
         self.len
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// The array, or `None` on a thread other than the one that made it.
     #[must_use]
     pub fn array(&self) -> Option<js_sys::Uint8Array> {

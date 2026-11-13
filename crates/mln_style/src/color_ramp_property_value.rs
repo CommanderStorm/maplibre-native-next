@@ -86,6 +86,7 @@ impl ColorRampPropertyValue {
     }
 
     #[must_use]
+    #[expect(clippy::unused_self, reason = "matches `PropertyValue::has_data_driven_property_difference`")]
     pub(crate) fn has_data_driven_property_difference(&self, _other: &ColorRampPropertyValue) -> bool {
         false
     }

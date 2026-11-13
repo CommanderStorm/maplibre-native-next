@@ -2677,6 +2677,7 @@ pub(crate) fn update_vertices(
 }
 
 impl SymbolBucket {
+    #[expect(clippy::unused_self, reason = "a bucket places its symbols, as the C++ `Placement` asks each bucket")]
     pub(crate) fn place(&self, placement: &mut Placement, data: &BucketPlacementData, seen_ids: &mut BTreeSet<u32>) {
         placement.place_symbol_bucket(data, seen_ids);
     }

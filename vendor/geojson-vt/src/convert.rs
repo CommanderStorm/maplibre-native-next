@@ -16,7 +16,7 @@ pub(crate) struct Project {
 
 impl Project {
     #[must_use]
-    pub(crate) fn point(&self, p: &Point<f64>) -> VtPoint {
+    pub(crate) fn point(p: &Point<f64>) -> VtPoint {
         let sine = (p.y * PI / 180.0).sin();
         let x = p.x / 360.0 + 0.5;
         // std::max(std::min(y, 1.0), 0.0)
@@ -38,7 +38,7 @@ impl Project {
         result.reserve(len);
 
         for p in points {
-            result.push(self.point(p));
+            result.push(Self::point(p));
         }
 
         for i in 0..len - 1 {
@@ -65,12 +65,12 @@ impl Project {
         result.reserve(ring.len() + 1);
 
         for p in ring {
-            result.push(self.point(p));
+            result.push(Self::point(p));
         }
         // GeoJSON requires rings to be closed. One that isn't is closed
         // here, so that an outline draws its last edge.
         if first != last {
-            result.push(self.point(first));
+            result.push(Self::point(first));
         }
         let len = result.len();
 
@@ -97,8 +97,8 @@ impl Project {
     pub(crate) fn geometry(&self, geometry: &Geometry<f64>) -> VtGeometry {
         match geometry {
             Geometry::Empty => VtGeometry::Empty,
-            Geometry::Point(p) => VtGeometry::Point(self.point(p)),
-            Geometry::MultiPoint(points) => VtGeometry::MultiPoint(points.iter().map(|p| self.point(p)).collect()),
+            Geometry::Point(p) => VtGeometry::Point(Self::point(p)),
+            Geometry::MultiPoint(points) => VtGeometry::MultiPoint(points.iter().map(Self::point).collect()),
             Geometry::LineString(points) => VtGeometry::LineString(self.line_string(points)),
             Geometry::MultiLineString(lines) => {
                 VtGeometry::MultiLineString(lines.iter().map(|l| self.line_string(l)).collect())

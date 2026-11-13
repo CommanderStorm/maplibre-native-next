@@ -82,6 +82,7 @@ pub trait LayerTweaker {
 
 /// The value for `Drawable::set_layer_tweaker` (C++
 /// `drawable->setLayerTweaker(layerTweaker)`).
+#[expect(clippy::unnecessary_wraps, reason = "the value of a `Drawable` setter, which takes an `Option`")]
 pub(crate) fn layer_tweaker_slot(tweaker: &LayerTweakerPtr) -> Option<Rc<dyn Any>> {
     Some(Rc::new(tweaker.clone()) as Rc<dyn Any>)
 }

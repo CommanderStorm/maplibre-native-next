@@ -383,6 +383,7 @@ impl RendererBackend {
 
     /// Registers one shader group per built-in shader. A duplicate
     /// registration is an error, which C++ throws and this logs.
+    #[expect(clippy::unused_self, reason = "each backend registers its shaders through its own `init_shaders`")]
     pub(crate) fn init_shaders(&self, registry: &ShaderRegistry, program_parameters: &ProgramParameters) {
         for &shader_id in REGISTERED_SHADERS {
             let Some(source) = shader_source(shader_id) else {

@@ -151,6 +151,7 @@ impl CircleLayout {
     }
 
     #[must_use]
+    #[expect(clippy::unused_self, reason = "matches the other layouts' `has_dependencies`")]
     pub(crate) fn has_dependencies(&self) -> bool {
         false
     }

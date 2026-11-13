@@ -682,6 +682,7 @@ impl SymbolBucket {
 
     /// The indices into `symbol_instances` of a sort key range, or all
     /// `count` of them if `range` is `None` or invalid.
+    #[expect(clippy::unused_self, reason = "the bucket's view of its sort key ranges")]
     pub(crate) fn get_symbols(&self, range: Option<&SortKeyRange>, count: usize) -> std::ops::Range<usize> {
         match range {
             Some(range) if range.start < range.end && range.end <= count => range.start..range.end,

@@ -151,6 +151,7 @@ impl BiDi {
     /// Given text in logical ordering and a set of line break points,
     /// return a set of lines in visual order with bidi and line breaking
     /// applied.
+    #[expect(clippy::unused_self, reason = "the shaper threads one `BiDi` through, as the C++ shaping API does")]
     pub(crate) fn process_text(
         &mut self,
         input: &[u16],
@@ -189,6 +190,8 @@ impl BiDi {
 
     /// Splits text in logical order into lines at the line break points and
     /// at the ends of paragraphs, without reordering it.
+    #[expect(clippy::unused_self, reason = "the shaper threads one `BiDi` through, as the C++ shaping API does")]
+    #[expect(clippy::unnecessary_wraps, reason = "fails as the other line splitters do, which its callers treat alike")]
     pub(crate) fn split_styled_text(
         &mut self,
         input: &StyledText,
@@ -215,6 +218,7 @@ impl BiDi {
     /// a right-to-left run keeps the order of the text in the styles that
     /// `block_styles` marks, which a shaper already laid out in visual
     /// order.
+    #[expect(clippy::unused_self, reason = "the shaper threads one `BiDi` through, as the C++ shaping API does")]
     pub(crate) fn process_styled_text_with_blocks(
         &mut self,
         input: &StyledText,

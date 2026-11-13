@@ -167,6 +167,12 @@ pub struct DrawableBuilderBase {
     pub impl_: DrawableBuilderImpl,
 }
 
+impl Default for DrawableBuilderBase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DrawableBuilderBase {
     #[must_use]
     pub fn new() -> Self {

@@ -789,7 +789,7 @@ impl RenderLayer for RenderLineLayer {
 
                     builder.flush(context);
                     for drawable in builder.clear_drawables() {
-                        add_drawable(drawable, LineType::GradientSDF);
+                        add_drawable(drawable, LineType::GradientSdf);
                     }
                 }
             } else if has_dasharray {
@@ -817,7 +817,7 @@ impl RenderLayer for RenderLineLayer {
 
                 builder.flush(context);
                 for drawable in builder.clear_drawables() {
-                    add_drawable(drawable, LineType::SDF);
+                    add_drawable(drawable, LineType::Sdf);
                 }
             } else if !self.unevaluated.get::<LinePattern>().is_undefined() {
                 // pattern line (conformance)

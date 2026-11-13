@@ -480,9 +480,9 @@ pub(crate) fn compiled_to_value(compiled: &Compiled) -> Value {
 
 /// Serializes an expression value to the JS format the tests expect; colors
 /// and formatted values have their own forms.
-pub(crate) fn expression_value_to_value(expr_value: &mln_expression::Value) -> Option<Value> {
+pub(crate) fn expression_value_to_value(expr_value: &mln_expression::Value) -> Value {
     use mln_expression::value::to_mbgl_value;
-    Some(match expr_value {
+    match expr_value {
         mln_expression::Value::Color(c) => Value::Array(vec![
             Value::Double(f64::from(c.r)),
             Value::Double(f64::from(c.g)),
@@ -495,7 +495,7 @@ pub(crate) fn expression_value_to_value(expr_value: &mln_expression::Value) -> O
             Value::Object(value_map.iter().map(|(k, v)| (k.clone(), to_mbgl_value(v))).collect())
         }
         v => to_mbgl_value(v),
-    })
+    }
 }
 
 pub(crate) fn parse_expression(

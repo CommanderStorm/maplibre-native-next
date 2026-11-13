@@ -22,6 +22,7 @@ fn upscale(x: i64) -> i64 {
 
 /// A contour command in 26.6, as `FT_Outline_Decompose` emits them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(clippy::enum_variant_names, reason = "FreeType's names for the outline commands")]
 pub(crate) enum Segment {
     MoveTo(i64, i64),
     LineTo(i64, i64),

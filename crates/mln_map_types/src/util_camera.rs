@@ -153,6 +153,7 @@ impl Camera {
     }
 
     #[must_use]
+    #[expect(clippy::unused_self, reason = "a camera's projection, beside its other matrices")]
     pub(crate) fn get_camera_to_clip_perspective(&self, fovy: f64, aspect_ratio: f64, near_z: f64, far_z: f64) -> Mat4 {
         let mut projection = [0.0; 16];
         matrix::perspective(&mut projection, fovy, aspect_ratio, near_z, far_z);

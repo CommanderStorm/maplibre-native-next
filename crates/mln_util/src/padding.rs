@@ -44,7 +44,7 @@ impl Padding {
 
     /// The edges as `[top, right, bottom, left]`, promoted to `f64`.
     #[must_use]
-    pub(crate) fn to_array(&self) -> [f64; 4] {
+    pub(crate) fn to_array(self) -> [f64; 4] {
         [f64::from(self.top), f64::from(self.right), f64::from(self.bottom), f64::from(self.left)]
     }
 

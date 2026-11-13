@@ -275,34 +275,36 @@ pub(crate) trait RenderSource {
 
 /// Creates the render source of a style source. Takes no thread pool (see
 /// `TileCache::new`).
-pub(crate) fn create(impl_: &Arc<dyn source::Impl>) -> Option<Box<dyn RenderSource>> {
+pub(crate) fn create(impl_: &Arc<dyn source::Impl>) -> Box<dyn RenderSource> {
     match impl_.type_ {
         // the TileSet isn't available yet, so we can't make different
         // sources by format
-        SourceType::Vector => Some(Box::new(RenderVectorSource::new(source::downcast_arc::<tile_source::Impl>(impl_)))),
-        SourceType::Raster => Some(Box::new(RenderRasterSource::new(source::downcast_arc::<tile_source::Impl>(impl_)))),
+        SourceType::Vector => Box::new(RenderVectorSource::new(source::downcast_arc::<tile_source::Impl>(impl_))),
+        SourceType::Raster => Box::new(RenderRasterSource::new(source::downcast_arc::<tile_source::Impl>(impl_))),
         // dem-heatmap
-        SourceType::RasterDEM => Some(Box::new(crate::sources::render_raster_dem_source::RenderRasterDEMSource::new(
-            source::downcast_arc::<tile_source::Impl>(impl_),
-        ))),
+        SourceType::RasterDEM => {
+            Box::new(crate::sources::render_raster_dem_source::RenderRasterDEMSource::new(source::downcast_arc::<
+                tile_source::Impl,
+            >(impl_)))
+        }
         SourceType::GeoJSON => {
-            Some(Box::new(RenderGeoJSONSource::new(source::downcast_arc::<geojson_source_impl::Impl>(impl_))))
+            Box::new(RenderGeoJSONSource::new(source::downcast_arc::<geojson_source_impl::Impl>(impl_)))
         }
         // conformance
         SourceType::Image => {
-            Some(Box::new(crate::sources::render_image_source::RenderImageSource::new(source::downcast_arc::<
+            Box::new(crate::sources::render_image_source::RenderImageSource::new(source::downcast_arc::<
                 mln_style::sources::image_source::Impl,
-            >(impl_))))
+            >(impl_)))
         }
         SourceType::CustomVector => {
-            Some(Box::new(crate::sources::render_custom_geometry_source::RenderCustomGeometrySource::new(
+            Box::new(crate::sources::render_custom_geometry_source::RenderCustomGeometrySource::new(
                 source::downcast_arc::<mln_style::sources::custom_geometry_source::Impl>(impl_),
-            )))
+            ))
         }
         SourceType::CustomMVTVector => {
-            Some(Box::new(crate::sources::render_custom_vector_source::RenderCustomVectorSource::new(
+            Box::new(crate::sources::render_custom_vector_source::RenderCustomVectorSource::new(
                 source::downcast_arc::<mln_style::sources::custom_vector_source::Impl>(impl_),
-            )))
+            ))
         }
     }
 }

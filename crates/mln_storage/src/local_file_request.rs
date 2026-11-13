@@ -10,6 +10,7 @@ use crate::response::{Reason, ResourceError, Response};
 /// The path bytes as they are (POSIX paths are bytes; on other platforms
 /// invalid UTF-8 is an error, as `std::filesystem`'s UTF-8 conversion throws
 /// there).
+#[cfg_attr(unix, expect(clippy::unnecessary_wraps, reason = "only a non-Unix path can fail to convert"))]
 pub(crate) fn path_from_utf8(path: &[u8]) -> Result<PathBuf, String> {
     #[cfg(unix)]
     {

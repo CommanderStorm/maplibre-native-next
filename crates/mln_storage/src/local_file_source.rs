@@ -37,6 +37,7 @@ fn path_from_file_url(url: &str) -> Vec<u8> {
 pub(crate) struct LocalFileSourceThread;
 
 impl LocalFileSourceThread {
+    #[expect(clippy::unused_self, reason = "the file source's actor calls it on its thread's object")]
     pub(crate) fn request(&self, resource: &Resource, req: &ActorRef<FileSourceRequestState>) {
         if !accepts_url(&resource.url) {
             let mut response = Response::new();

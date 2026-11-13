@@ -613,13 +613,12 @@ impl RenderOrchestrator {
 
         // Create render sources for newly added sources.
         for (id, impl_) in &source_diff.added {
-            if let Some(mut render_source) = render_source::create(impl_) {
-                render_source.set_observer(self.source_observer.clone());
-                render_source.set_cache_enabled(self.tile_cache_enabled);
-                render_source.set_fast_pfor_enabled(update_parameters.fast_pfor_enabled);
-                // `emplace` keeps an existing entry.
-                self.render_sources.entry(id.clone()).or_insert(render_source);
-            }
+            let mut render_source = render_source::create(impl_);
+            render_source.set_observer(self.source_observer.clone());
+            render_source.set_cache_enabled(self.tile_cache_enabled);
+            render_source.set_fast_pfor_enabled(update_parameters.fast_pfor_enabled);
+            // `emplace` keeps an existing entry.
+            self.render_sources.entry(id.clone()).or_insert(render_source);
         }
 
         // The update carries the map's whole feature state, so a render

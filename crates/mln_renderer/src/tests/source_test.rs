@@ -227,7 +227,7 @@ fn run_tile_case(
     let source = kind.source(tiles_tileset());
     source.load_description(&*file_source);
 
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     render_source.set_observer(observer);
     let fs: Arc<dyn FileSource> = file_source;
     render_source.update(
@@ -404,7 +404,7 @@ fn tile_out_of_view_keeps_loading() {
     let layers = Tiled::Vector.layers();
     let source = Tiled::Vector.source(tiles_tileset());
     source.load_description(&*file_source);
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     let fs: Arc<dyn FileSource> = file_source;
     // Requests made so far, after an update with the camera at `bearing`.
     let mut turn = |test: &mut SourceTest, bearing: f64, needs_relayout: bool| {
@@ -534,7 +534,7 @@ fn tile_attribution(kind: Tiled, attribution: &'static str) {
     source.set_observer(Some(observer.clone()));
     source.load_description(&*file_source);
 
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     let fs: Arc<dyn FileSource> = file_source.clone();
     render_source.update(
         source.base_impl(),
@@ -580,7 +580,7 @@ fn custom_geometry_case(
         Arc::new(LineLayerProperties::new(downcast_arc::<LineLayerImpl>(&layer.base_impl())));
     let layers = vec![layer_properties];
 
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     render_source.set_observer(observer);
     render_source.update(source.base_impl(), &layers, true, true, &test.tile_parameters(MapMode::Continuous));
     (source, render_source)
@@ -660,7 +660,7 @@ fn custom_vector_source_set_tile_data() {
     let layer_properties: Arc<dyn LayerProperties> =
         Arc::new(LineLayerProperties::new(downcast_arc::<LineLayerImpl>(&layer.base_impl())));
 
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     render_source.set_observer(observer);
     render_source.update(
         source.base_impl(),
@@ -684,7 +684,7 @@ fn empty_tileset() {
     let source =
         VectorSource::new("source", UrlOrTileset::Tileset(Tileset::default()), None, None, VectorEncoding::Mapbox);
     source.load_description(&*file_source);
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     let errors = observe_tile_errors(&mut *render_source);
 
     let layers = Tiled::Vector.layers();
@@ -717,7 +717,7 @@ fn empty_raster_tilesets_make_no_tiles() {
         let file_source = Arc::new(StubFileSource::new(ResponseType::Asynchronous));
         let source = kind.source(UrlOrTileset::Tileset(Tileset::default()));
         source.load_description(&*file_source);
-        let mut render_source = render_source::create(&source.base_impl()).unwrap();
+        let mut render_source = render_source::create(&source.base_impl());
         let errors = observe_tile_errors(&mut *render_source);
 
         let fs: Arc<dyn FileSource> = file_source;
@@ -995,8 +995,7 @@ fn set_max_parent_overscale_factor() {
     let base_impl = source.base_impl();
 
     let observer = Rc::new(StubRenderSourceObserver::default());
-    let render_source: Rc<RefCell<Box<dyn RenderSource>>> =
-        Rc::new(RefCell::new(render_source::create(&base_impl).unwrap()));
+    let render_source: Rc<RefCell<Box<dyn RenderSource>>> = Rc::new(RefCell::new(render_source::create(&base_impl)));
     render_source.borrow_mut().set_observer(observer.clone());
     let fs: Arc<dyn FileSource> = file_source.clone();
     render_source.borrow_mut().update(
@@ -1051,7 +1050,7 @@ fn raster_dem_tile_rounds_covering_zoom() {
     source.load_description(&*file_source);
 
     let observer = Rc::new(StubRenderSourceObserver::default());
-    let mut render_source = render_source::create(&source.base_impl()).unwrap();
+    let mut render_source = render_source::create(&source.base_impl());
     render_source.set_observer(observer.clone());
     let fs: Arc<dyn FileSource> = file_source.clone();
     render_source.update(

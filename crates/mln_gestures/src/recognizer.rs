@@ -458,6 +458,7 @@ impl Default for GestureRecognizer {
 
 impl GestureRecognizer {
     #[must_use]
+    #[expect(clippy::large_types_passed_by_value, reason = "the recognizer keeps the options")]
     pub(crate) fn new(options: GestureOptions) -> Self {
         GestureRecognizer {
             options,

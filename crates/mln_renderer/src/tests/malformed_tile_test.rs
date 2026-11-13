@@ -121,7 +121,7 @@ fn load(tile: Vec<u8>, layers: &[Arc<dyn LayerProperties>]) -> Outcome {
     let source = VectorSource::new("source", UrlOrTileset::Tileset(tileset), None, None, VectorEncoding::Mapbox);
     mln_style::source::Source::load_description(&source, &*file_source);
     let base_impl = mln_style::source::Source::base_impl(&source);
-    let mut render_source = render_source::create(&base_impl).unwrap();
+    let mut render_source = render_source::create(&base_impl);
     render_source.set_observer(observer.clone());
     let file_source: Arc<dyn FileSource> = file_source;
     // A loaded sprite with the icon "v" answers the symbol layer's request.

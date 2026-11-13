@@ -106,6 +106,7 @@ impl RenderingStatsView {
     }
 
     /// `destroy(style)`: removes the layer and the source.
+    #[expect(clippy::unused_self, reason = "the view removes what it added, as its `create` does")]
     pub(crate) fn destroy(&self, style: &mut Style) {
         style.remove_layer(RENDERING_STATS_LAYER_ID);
         style.remove_source(RENDERING_STATS_SOURCE_ID);
