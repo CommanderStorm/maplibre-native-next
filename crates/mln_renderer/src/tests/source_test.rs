@@ -11,7 +11,7 @@ use mln_map_types::{
 };
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
-use mln_storage::{AsyncRequest, Callback, FileSource, Kind, Resource, ResourceOptions, Response};
+use mln_storage::{AsyncRequest, Callback, FileSource, Kind, RequestOrder, Resource, ResourceOptions, Response};
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;
 use mln_style::layers::circle_layer::Impl as CircleLayerImpl;
@@ -352,10 +352,11 @@ fn tile_cancel(kind: Tiled) {
 }
 
 /// A file source whose tile requests never answer, as tiles in flight: it
-/// records each request's tile and each cancellation.
+/// records each request's tile and order, and each cancellation.
 #[derive(Default)]
 struct PendingTileSource {
     requested: Arc<Mutex<Vec<(i8, i32, i32)>>>,
+    orders: Arc<Mutex<Vec<RequestOrder>>>,
     cancelled: Arc<Mutex<Vec<(i8, i32, i32)>>>,
 }
 
@@ -377,6 +378,7 @@ impl FileSource for PendingTileSource {
         let data = resource.tile_data.as_ref().expect("only tiles are requested");
         let tile = (data.z, data.x, data.y);
         self.requested.lock().push(tile);
+        self.orders.lock().push(resource.order.clone());
         Box::new(PendingTileRequest { tile, cancelled: self.cancelled.clone() })
     }
 
@@ -425,6 +427,66 @@ fn tile_out_of_view_keeps_loading() {
     let back = turn(&mut test, 0.0, false);
     assert_eq!(turned, back, "no tile is requested again");
     assert!(cancelled.lock().is_empty(), "no request is cancelled");
+}
+
+/// The requests for a view's tiles stand in the order the view needs them:
+/// the coarse cover's, then the ideal cover's from the centre outwards. A
+/// tile that leaves the view while it loads, and goes on loading next to it,
+/// stands behind them all until the view comes back to it.
+#[test]
+fn tile_requests_follow_the_view() {
+    const UNWANTED: u32 = u32::MAX;
+    let mut test = SourceTest::new();
+    // One ideal tile wide and several tall, so that a move of one tile to
+    // the side leaves every ideal tile behind, next to the new ones.
+    test.transform.resize(Size::new(256, 1024)).unwrap();
+    let file_source = Arc::new(PendingTileSource::default());
+    let (requested, orders) = (file_source.requested.clone(), file_source.orders.clone());
+    let layers = Tiled::Vector.layers();
+    let source = Tiled::Vector.source(tiles_tileset());
+    source.load_description(&*file_source);
+    let mut render_source = render_source::create(&source.base_impl());
+    let fs: Arc<dyn FileSource> = file_source;
+    // The tiles requested so far and where their requests stand now, after
+    // an update with the camera at `center`.
+    let mut look_at = |test: &mut SourceTest, center: LatLng, needs_relayout: bool| {
+        test.transform.jump_to(&CameraOptions { center: Some(center), zoom: Some(6.0), ..Default::default() });
+        let mut parameters = test.tile_parameters_with(MapMode::Continuous, Some(fs.clone()));
+        parameters.prefetch_zoom_delta = 4;
+        render_source.update(source.base_impl(), &layers, true, needs_relayout, &parameters);
+        let orders: Vec<u32> = orders.lock().iter().map(RequestOrder::get).collect();
+        (requested.lock().clone(), orders)
+    };
+
+    // The middle of the zoom 6 tile column `x`.
+    let column = |x: f64| LatLng::new(20.0, -180.0 + (x + 0.5) * 360.0 / 64.0).unwrap();
+    let here = column(35.0);
+    let (tiles, first) = look_at(&mut test, here, true);
+    let coarse: Vec<u32> = tiles.iter().zip(&first).filter(|(tile, _)| tile.0 == 2).map(|(_, order)| *order).collect();
+    let ideal: Vec<u32> = tiles.iter().zip(&first).filter(|(tile, _)| tile.0 == 6).map(|(_, order)| *order).collect();
+    assert_eq!(coarse.len() + ideal.len(), tiles.len());
+    assert!(!coarse.is_empty() && ideal.len() > 1, "the view has coarse tiles and several ideal ones");
+    assert!(coarse.iter().all(|order| *order > 0), "a tile's request comes after the requests that set no order");
+    assert!(coarse.iter().max() < ideal.iter().min(), "the coarse tiles come first");
+    assert!(ideal.is_sorted_by(|a, b| a < b), "the ideal tiles come in the cover's order");
+    assert!(ideal.iter().all(|order| *order < UNWANTED));
+
+    let first_tiles = tiles;
+    let (tiles, second) = look_at(&mut test, column(36.0), false);
+    assert!(tiles.len() > first.len(), "the new view needs other tiles");
+    for ((tile, before), after) in first_tiles.iter().zip(&first).zip(&second) {
+        if tile.0 == 6 {
+            assert_eq!(*after, UNWANTED, "the tiles left behind come last");
+        } else {
+            assert_eq!(after, before, "the coarse tile stays in view");
+        }
+    }
+    assert!(second[first.len()..].iter().all(|order| *order < UNWANTED));
+
+    let (back_tiles, back) = look_at(&mut test, here, false);
+    assert_eq!(back_tiles, tiles, "no tile is requested again");
+    assert_eq!(back[..first.len()], first, "the first view's tiles stand as they did");
+    assert!(back[first.len()..].iter().all(|order| *order == UNWANTED));
 }
 
 // gtest: Source.RasterTileEmpty

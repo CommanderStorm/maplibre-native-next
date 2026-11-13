@@ -64,7 +64,7 @@ pub use main_resource_loader::MainResourceLoader;
 #[cfg(feature = "sqlite")]
 pub use offline_database::OfflineDatabase;
 pub use online_file_source::OnlineFileSource;
-pub use resource::{Kind, LoadingMethod, Resource, StoragePolicy};
+pub use resource::{Kind, LoadingMethod, RequestOrder, Resource, StoragePolicy};
 pub use resource_options::ResourceOptions;
 pub use response::{Data, ResourceError, Response};
 
