@@ -12,7 +12,8 @@ pub trait VertexBufferBase: Any {}
 impl dyn VertexBufferBase {
     /// The concrete type behind this trait object, if it is a `T`.
     pub fn downcast_ref<T: VertexBufferBase>(&self) -> Option<&T> {
-        (self as &dyn Any).downcast_ref()
+        let any: &dyn Any = self;
+        any.downcast_ref()
     }
 }
 
@@ -59,7 +60,7 @@ pub trait VertexVectorBase: Any {
     /// Drop the CPU copy of the data. Vectors that keep their data leave it be.
     fn free_raw_data(&self) {}
 
-    fn get_buffer(&self) -> std::cell::Ref<'_, Option<Box<dyn VertexBufferBase>>> {
+    fn get_buffer(&self) -> Ref<'_, Option<Box<dyn VertexBufferBase>>> {
         self.vertex_vector_base().buffer.borrow()
     }
     fn set_buffer(&self, value: Option<Box<dyn VertexBufferBase>>) {
@@ -220,7 +221,7 @@ impl<V: bytemuck::Pod> VertexVectorBase for VertexVector<V> {
         Ref::map(self.v.borrow(), |v| bytemuck::cast_slice(v.as_slice()))
     }
     fn get_raw_size(&self) -> usize {
-        std::mem::size_of::<V>()
+        size_of::<V>()
     }
     fn get_raw_count(&self) -> usize {
         self.elements()
