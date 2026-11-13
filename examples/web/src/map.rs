@@ -176,7 +176,7 @@ impl WebMap {
         };
         let device = mln_webgpu::Device::from_wgpu(Some(instance), device, queue, Some(format));
         let webgpu_backend = Rc::new(mln_webgpu::RendererBackend::new(&device));
-        let target = Target::new(webgpu_backend.clone(), surface, physical(size, pixel_ratio), options)
+        let target = Target::new(Rc::clone(&webgpu_backend), surface, physical(size, pixel_ratio), options)
             .map_err(|e| js_error(format!("WebGPU surface: {e}")))?;
         WebMap::build(
             webgpu_backend,
@@ -575,7 +575,7 @@ impl WebMap {
         let between_frames_ms = Rc::new(Cell::new(0.0));
         let between_frames = {
             let run_loop = run_loop.clone();
-            let spent = between_frames_ms.clone();
+            let spent = Rc::clone(&between_frames_ms);
             pump::add(move || {
                 let start = Instant::now();
                 run_loop.run_once();
@@ -583,9 +583,9 @@ impl WebMap {
                 true
             })
         };
-        let mut renderer = Renderer::new(backend.clone(), pixel_ratio as f32, local_ideograph_font_family);
+        let mut renderer = Renderer::new(Rc::clone(&backend), pixel_ratio as f32, local_ideograph_font_family);
         let received = Rc::new(Cell::new(0));
-        let count = received.clone();
+        let count = Rc::clone(&received);
         let transport = tile_workers::transport(
             ports.iter().map(JsCast::unchecked_into).collect(),
             move |_| count.set(count.get() + 1),
