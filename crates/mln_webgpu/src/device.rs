@@ -40,7 +40,7 @@ pub struct Device {
 /// Records in `lost` why `device` is lost, once it is.
 fn watch_for_loss(device: &wgpu::Device) -> Arc<OnceLock<String>> {
     let lost = Arc::new(OnceLock::new());
-    let record = lost.clone();
+    let record = Arc::clone(&lost);
     device.set_device_lost_callback(move |reason, message| {
         let _ = record.set(format!("the WebGPU device was lost ({reason:?}): {message}"));
     });
