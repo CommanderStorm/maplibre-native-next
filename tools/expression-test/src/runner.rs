@@ -131,7 +131,7 @@ pub(crate) fn run_expression_test(data: &mut TestData, id: &str) -> TestRunOutpu
 
     // Parse expression
     let document_expression = data.document["expression"].clone();
-    let parsed_expression = parse_expression(&document_expression, &data.spec, &mut data.result);
+    let parsed_expression = parse_expression(&document_expression, data.spec.as_ref(), &mut data.result);
     output.expression = to_json(data.result.expression.as_ref().unwrap_or(&Value::Null));
 
     // Evaluate expression
@@ -141,7 +141,7 @@ pub(crate) fn run_expression_test(data: &mut TestData, id: &str) -> TestRunOutpu
 
         // round trip
         let document = to_document(data.result.serialized.as_ref().expect("serialized"));
-        let recompiled_expression = parse_expression(&document, &data.spec, &mut data.recompiled);
+        let recompiled_expression = parse_expression(&document, data.spec.as_ref(), &mut data.recompiled);
         if let Some(recompiled) = &recompiled_expression {
             evaluate_expression(&data.inputs, &**recompiled, &mut data.recompiled);
             rewrite_roundtripped_type(
@@ -164,7 +164,7 @@ pub(crate) fn run_expression_test(data: &mut TestData, id: &str) -> TestRunOutpu
     let mut round_trip_diff = Some(Vec::new());
 
     if data.expected.compiled.success {
-        serialization_ok = compile_ok && deep_equal_opt(&data.result.serialized, &data.expected.serialized);
+        serialization_ok = compile_ok && deep_equal_opt(data.result.serialized.as_ref(), data.expected.serialized.as_ref());
         recompile_ok = compile_ok && data.recompiled.compiled == data.expected.compiled;
         round_trip_diff = differing_inputs(data.recompiled.outputs.as_ref(), data.expected.outputs.as_ref(), is_color);
         round_trip_ok = recompile_ok && round_trip_diff.as_ref().is_some_and(Vec::is_empty);

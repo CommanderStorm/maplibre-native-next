@@ -508,18 +508,18 @@ fn fill_extrusion_roof_beyond_the_index_limit_keeps_its_granularity() {
 // gtest: TileMesh.QuadAndGrid
 #[test]
 fn quad_and_grid() {
-    let quad = create_tile_mesh(&TileMeshOptions { granularity: 1, ..TileMeshOptions::default() });
+    let quad = create_tile_mesh(TileMeshOptions { granularity: 1, ..TileMeshOptions::default() });
     assert_eq!(4, quad.vertices.len() / 2);
     assert_eq!(6, quad.indices.len());
 
     let grid =
-        create_tile_mesh(&TileMeshOptions { granularity: 4, generate_borders: true, ..TileMeshOptions::default() });
+        create_tile_mesh(TileMeshOptions { granularity: 4, generate_borders: true, ..TileMeshOptions::default() });
     assert_eq!(7 * 7, grid.vertices.len() / 2);
     assert_eq!(6 * 6 * 6, grid.indices.len());
     assert_eq!(-EXTENT_I16 / 128, grid.vertices[0]);
     assert_eq!(EXTENT_I16 + EXTENT_I16 / 128, grid.vertices[(7 * 7 - 1) * 2]);
 
-    let polar = create_tile_mesh(&TileMeshOptions {
+    let polar = create_tile_mesh(TileMeshOptions {
         granularity: 2,
         extend_to_north_pole: true,
         extend_to_south_pole: true,
@@ -542,7 +542,7 @@ fn granularity_past_the_index_limit_throws() {
     // EXPECT_THROW(..., std::invalid_argument): the port panics with the
     // C++ exception's message.
     const TOO_LARGE: &str = "Tile mesh granularity is too large for 16 bit indices.";
-    let throws = |options: TileMeshOptions| panic_message(move || drop(create_tile_mesh(&options)));
+    let throws = |options: TileMeshOptions| panic_message(move || drop(create_tile_mesh(options)));
     assert_eq!(None, throws(TileMeshOptions { granularity: 255, ..TileMeshOptions::default() }));
     assert_eq!(Some(TOO_LARGE.to_owned()), throws(TileMeshOptions { granularity: 256, ..TileMeshOptions::default() }));
     assert_eq!(
@@ -612,7 +612,7 @@ fn globe_mask_keeps_the_uncovered_parts() {
     assert_eq!(33, north_pole);
 
     let full = GlobeTestMesh::new(&tile, &mask(&[(0, 0, 0)]), globe_test_vertex);
-    let grid = create_tile_mesh(&TileMeshOptions {
+    let grid = create_tile_mesh(TileMeshOptions {
         granularity: SubdivisionGranularitySetting::globe().tile.get_granularity_for_zoom_level(1),
         extend_to_north_pole: true,
         ..TileMeshOptions::default()

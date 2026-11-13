@@ -18,7 +18,7 @@ impl Rotation {
     const PERIOD: f64 = 360.0;
 
     #[must_use]
-    pub(crate) const fn period(&self) -> f64 {
+    pub(crate) const fn period(self) -> f64 {
         Self::PERIOD
     }
 

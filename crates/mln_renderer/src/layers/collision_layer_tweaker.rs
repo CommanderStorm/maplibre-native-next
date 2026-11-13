@@ -66,7 +66,7 @@ impl LayerTweaker for CollisionLayerTweaker {
             let projection = get_projection_data(
                 &tile_id,
                 parameters,
-                &data.translate,
+                data.translate,
                 data.translate_anchor,
                 NEAR_CLIPPED,
                 IN_VIEWPORT_PIXEL_UNITS,

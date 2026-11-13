@@ -79,7 +79,7 @@ impl GlyphID {
 
     /// The `hash` member of the union (x86-64 / arm64 are little endian).
     #[must_use]
-    pub(crate) fn hash(&self) -> u32 {
+    pub(crate) fn hash(self) -> u32 {
         (u32::from(self.type_.0) << 16) | u32::from(self.code)
     }
 }

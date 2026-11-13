@@ -109,7 +109,7 @@ impl SkyPass {
         shaders: &ShaderRegistry,
         context: &dyn Context,
         state: &TransformState,
-        viewport_size: &Size,
+        viewport_size: Size,
         pixel_ratio: f32,
         evaluated: Option<&EvaluatedSky>,
         light: &EvaluatedLight,

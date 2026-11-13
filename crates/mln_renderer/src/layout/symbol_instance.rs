@@ -107,11 +107,11 @@ impl SymbolInstanceSharedData {
     pub(crate) fn new(
         line: GeometryCoordinates,
         shaped_text_orientations: &ShapedTextOrientations,
-        shaped_icon: &Option<PositionedIcon>,
-        vertically_shaped_icon: &Option<PositionedIcon>,
+        shaped_icon: Option<&PositionedIcon>,
+        vertically_shaped_icon: Option<&PositionedIcon>,
         layout: &SymbolLayoutProperties::Evaluated,
         text_placement: SymbolPlacementType,
-        text_offset: &[f32; 2],
+        text_offset: [f32; 2],
         image_map: &ImageMap,
         icon_rotation: f32,
         icon_type: SymbolContent,
@@ -129,7 +129,7 @@ impl SymbolInstanceSharedData {
         }
 
         let quads = |shaping: &Shaping| {
-            get_glyph_quads(shaping, *text_offset, layout, text_placement, image_map, allow_vertical_placement)
+            get_glyph_quads(shaping, text_offset, layout, text_placement, image_map, allow_vertical_placement)
         };
 
         let mut single_line_initialized = false;
@@ -218,8 +218,8 @@ impl SymbolInstance {
         anchor: Anchor,
         shared_data: Arc<SymbolInstanceSharedData>,
         shaped_text_orientations: &ShapedTextOrientations,
-        shaped_icon: &Option<PositionedIcon>,
-        vertically_shaped_icon: &Option<PositionedIcon>,
+        shaped_icon: Option<&PositionedIcon>,
+        vertically_shaped_icon: Option<&PositionedIcon>,
         text_box_scale: f32,
         text_padding: f32,
         text_placement: SymbolPlacementType,
@@ -234,7 +234,7 @@ impl SymbolInstance {
         overscaling: f32,
         icon_rotation: f32,
         text_rotation: f32,
-        text_variable_anchor_offset: &Option<VariableAnchorOffsetCollection>,
+        text_variable_anchor_offset: Option<&VariableAnchorOffsetCollection>,
         allow_vertical_placement: bool,
         icon_type: SymbolContent,
     ) -> Self {
@@ -256,7 +256,7 @@ impl SymbolInstance {
         let icon_collision_feature = CollisionFeature::new_icon(
             &shared_data.line,
             &anchor,
-            shaped_icon.as_ref(),
+            shaped_icon,
             icon_box_scale,
             &icon_padding,
             indexed_feature,
@@ -287,7 +287,7 @@ impl SymbolInstance {
                 vertical_icon_collision_feature = Some(CollisionFeature::new_icon(
                     &shared_data.line,
                     &anchor,
-                    vertically_shaped_icon.as_ref(),
+                    vertically_shaped_icon,
                     icon_box_scale,
                     &icon_padding,
                     indexed_feature,
@@ -339,7 +339,7 @@ impl SymbolInstance {
             placed_icon_index: None,
             placed_vertical_icon_index: None,
             text_box_scale,
-            text_variable_anchor_offset: text_variable_anchor_offset.clone(),
+            text_variable_anchor_offset: text_variable_anchor_offset.cloned(),
             single_line: shaped_text_orientations.single_line,
             cross_tile_id: 0,
         }
@@ -375,12 +375,12 @@ impl SymbolInstance {
         &self.shared().vertical_glyph_quads
     }
     #[must_use]
-    pub(crate) fn icon_quads(&self) -> &Option<SymbolQuads> {
-        &self.shared().icon_quads
+    pub(crate) fn icon_quads(&self) -> Option<&SymbolQuads> {
+        self.shared().icon_quads.as_ref()
     }
     #[must_use]
-    pub(crate) fn vertical_icon_quads(&self) -> &Option<SymbolQuads> {
-        &self.shared().vertical_icon_quads
+    pub(crate) fn vertical_icon_quads(&self) -> Option<&SymbolQuads> {
+        self.shared().vertical_icon_quads.as_ref()
     }
 
     #[must_use]
@@ -441,12 +441,12 @@ impl SymbolInstance {
         &self.icon_collision_feature
     }
     #[must_use]
-    pub(crate) fn get_vertical_text_collision_feature(&self) -> &Option<CollisionFeature> {
-        &self.vertical_text_collision_feature
+    pub(crate) fn get_vertical_text_collision_feature(&self) -> Option<&CollisionFeature> {
+        self.vertical_text_collision_feature.as_ref()
     }
     #[must_use]
-    pub(crate) fn get_vertical_icon_collision_feature(&self) -> &Option<CollisionFeature> {
-        &self.vertical_icon_collision_feature
+    pub(crate) fn get_vertical_icon_collision_feature(&self) -> Option<&CollisionFeature> {
+        self.vertical_icon_collision_feature.as_ref()
     }
     #[must_use]
     pub(crate) fn get_writing_modes(&self) -> WritingModeType {
@@ -477,8 +477,8 @@ impl SymbolInstance {
         self.text_box_scale
     }
     #[must_use]
-    pub(crate) fn get_text_variable_anchor_offset(&self) -> &Option<VariableAnchorOffsetCollection> {
-        &self.text_variable_anchor_offset
+    pub(crate) fn get_text_variable_anchor_offset(&self) -> Option<&VariableAnchorOffsetCollection> {
+        self.text_variable_anchor_offset.as_ref()
     }
     #[must_use]
     pub(crate) fn get_single_line(&self) -> bool {

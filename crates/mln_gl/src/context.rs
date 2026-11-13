@@ -472,7 +472,7 @@ impl Context {
         self.state.set_color_mode(self.gl(), color);
     }
 
-    pub(crate) fn set_cull_face_mode(&self, mode: &CullFaceMode) {
+    pub(crate) fn set_cull_face_mode(&self, mode: CullFaceMode) {
         self.state.set_cull_face_mode(self.gl(), mode);
     }
 
@@ -700,7 +700,7 @@ impl Context {
         };
 
         self.set_clip_mask_state();
-        self.set_cull_face_mode(&CullFaceMode::disabled());
+        self.set_cull_face_mode(CullFaceMode::disabled());
         // The shader reads none of its blocks in this variant, but WebGL2
         // wants a buffer for each.
         self.bind_uniform_blocks(shader, &UniformBufferArray::new(), 0);
@@ -774,7 +774,7 @@ impl Context {
         self.set_clip_mask_state();
         // The far side of a limb tile projects inside the disc; cull it or it
         // overwrites the tile in front.
-        self.set_cull_face_mode(&CullFaceMode::back_ccw());
+        self.set_cull_face_mode(CullFaceMode::back_ccw());
 
         // Each mask is drawn with a border first, then exactly, as GL JS
         // does: where a tile meets finer ones, its coarser edge leaves a

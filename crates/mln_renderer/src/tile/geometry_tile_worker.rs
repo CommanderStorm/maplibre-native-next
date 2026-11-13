@@ -836,8 +836,8 @@ impl GeometryTileWorker {
             for layout in &mut layouts {
                 if self.obsolete() {
                     if let Some(atlas) = &self.dynamic_texture_atlas {
-                        atlas.remove_textures(&glyph_atlas.texture_handles, &glyph_atlas.dynamic_texture);
-                        atlas.remove_textures(&image_atlas.texture_handles, &image_atlas.dynamic_texture);
+                        atlas.remove_textures(&glyph_atlas.texture_handles, glyph_atlas.dynamic_texture.as_ref());
+                        atlas.remove_textures(&image_atlas.texture_handles, image_atlas.dynamic_texture.as_ref());
                     }
                     return Ok(());
                 }

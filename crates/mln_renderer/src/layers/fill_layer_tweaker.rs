@@ -140,7 +140,7 @@ impl LayerTweaker for FillLayerTweaker {
             let projection = get_projection_data(
                 &tile_id,
                 parameters,
-                &translation,
+                translation,
                 anchor,
                 NEAR_CLIPPED,
                 IN_VIEWPORT_PIXEL_UNITS,

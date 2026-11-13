@@ -496,7 +496,7 @@ impl drawable::Drawable for Drawable {
             let segment = seg.get_segment();
 
             // update pipeline info with per segment modifiers
-            pipeline_info.set_draw_mode(seg.get_mode());
+            pipeline_info.set_draw_mode(*seg.get_mode());
             pipeline_info.set_scissor_rect(&parameters.scissor_rect());
             pipeline_info.set_dynamic_values(backend, command_buffer);
 
@@ -616,7 +616,7 @@ impl drawable::Drawable for Drawable {
 
     fn set_cull_face_mode(&mut self, value: &CullFaceMode) {
         self.base.cull_face_mode = *value;
-        self.impl_.pipeline_info.set_cull_mode(value);
+        self.impl_.pipeline_info.set_cull_mode(*value);
     }
 
     fn set_textures(&mut self, textures: Textures) {

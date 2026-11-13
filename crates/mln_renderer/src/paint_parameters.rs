@@ -106,7 +106,7 @@ pub struct PaintParameters<'a> {
 /// SubdivisionGranularitySetting::globe().stencil)`, in the form the gfx trait
 /// takes it (see `Context::render_globe_tile_clipping_masks`).
 fn globe_clip_mesh(tile: &CanonicalTileID, borders: bool) -> (Vec<u8>, Vec<u16>) {
-    let mesh = raw_globe_tile_mesh(tile, borders, &SubdivisionGranularitySetting::globe().stencil);
+    let mesh = raw_globe_tile_mesh(tile, borders, SubdivisionGranularitySetting::globe().stencil);
     (mesh.vertices, mesh.indices)
 }
 

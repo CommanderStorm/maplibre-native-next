@@ -86,21 +86,21 @@ struct StubGlyphManagerObserver {
 }
 
 impl GlyphManagerObserver for StubGlyphManagerObserver {
-    fn on_glyphs_loaded(&self, font_stack: &FontStack, range: &GlyphRange) {
+    fn on_glyphs_loaded(&self, font_stack: &FontStack, range: GlyphRange) {
         if let Some(f) = self.glyphs_loaded.borrow_mut().as_mut() {
-            f(font_stack, range);
+            f(font_stack, &range);
         }
     }
 
-    fn on_glyphs_error(&self, font_stack: &FontStack, range: &GlyphRange, error: Error) {
+    fn on_glyphs_error(&self, font_stack: &FontStack, range: GlyphRange, error: Error) {
         if let Some(f) = self.glyphs_error.borrow_mut().as_mut() {
-            f(font_stack, range, error);
+            f(font_stack, &range, error);
         }
     }
 
-    fn on_glyphs_requested(&self, font_stack: &FontStack, range: &GlyphRange) {
+    fn on_glyphs_requested(&self, font_stack: &FontStack, range: GlyphRange) {
         if let Some(f) = self.glyphs_requested.borrow_mut().as_mut() {
-            f(font_stack, range);
+            f(font_stack, &range);
         }
     }
 }

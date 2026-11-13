@@ -269,7 +269,7 @@ impl PipelineInfo {
         }
     }
 
-    pub(crate) fn set_cull_mode(&mut self, value: &CullFaceMode) {
+    pub(crate) fn set_cull_mode(&mut self, value: CullFaceMode) {
         self.cull_mode = if value.enabled { Self::vulkan_cull_mode(value.side) } else { vk::CullModeFlags::NONE };
         self.front_face = Self::vulkan_front_face(value.winding);
     }
@@ -280,7 +280,7 @@ impl PipelineInfo {
         self.scissor_rect = Self::vulkan_scissor_rect(value, self.view_extent);
     }
 
-    pub(crate) fn set_draw_mode(&mut self, value: &DrawMode) {
+    pub(crate) fn set_draw_mode(&mut self, value: DrawMode) {
         self.topology = Self::vulkan_primitive_topology(value.type_);
         if matches!(value.type_, DrawModeType::Lines | DrawModeType::LineStrip | DrawModeType::LineLoop) {
             self.set_line_width(value.size);
@@ -290,7 +290,7 @@ impl PipelineInfo {
     }
 
     pub(crate) fn set_color_blend(&mut self, value: &ColorMode) {
-        self.set_color_blend_function(&value.blend_function);
+        self.set_color_blend_function(value.blend_function);
         self.dynamic_values.blend_constants = self.uses_blend_constants().then(|| {
             let color = value.blend_color;
             [color.r, color.g, color.b, color.a]
@@ -309,7 +309,7 @@ impl PipelineInfo {
         }
     }
 
-    pub(crate) fn set_color_blend_function(&mut self, value: &BlendFunction) {
+    pub(crate) fn set_color_blend_function(&mut self, value: BlendFunction) {
         self.color_blend = !matches!(value, BlendFunction::Replace);
         self.color_blend_function = Self::vulkan_blend_op(value.equation());
         self.src_blend_factor = Self::vulkan_blend_factor(value.src_factor());

@@ -39,7 +39,7 @@ impl Impl {
         metadata: &TestMetadata,
         file_sources: &FileSourceManager,
         resource_options: &ResourceOptions,
-        impl_options: &ImplOptions,
+        impl_options: ImplOptions,
     ) -> Result<Impl, String> {
         let resource_options = mln_storage::ResourceOptions {
             cache_path: resource_options.cache_path.clone(),
@@ -412,6 +412,6 @@ pub fn factory() -> ImplFactory {
     let file_sources = proxy_file_sources();
     Box::new(move |metadata: &TestMetadata, resource_options: &ResourceOptions, impl_options: &ImplOptions| {
         let _ = &run_loop;
-        Ok(Box::new(Impl::new(metadata, &file_sources, resource_options, impl_options)?) as Box<dyn TestRunnerImpl>)
+        Ok(Box::new(Impl::new(metadata, &file_sources, resource_options, *impl_options)?) as Box<dyn TestRunnerImpl>)
     })
 }

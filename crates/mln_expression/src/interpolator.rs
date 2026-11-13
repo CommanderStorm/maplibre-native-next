@@ -15,7 +15,7 @@ impl ExponentialInterpolator {
     }
 
     #[must_use]
-    pub(crate) fn interpolation_factor(&self, input_levels: Range<f64>, input: f64) -> f64 {
+    pub(crate) fn interpolation_factor(self, input_levels: Range<f64>, input: f64) -> f64 {
         f64::from(interpolation_factor(
             self.base as f32,
             Range::new(input_levels.min as f32, input_levels.max as f32),

@@ -263,7 +263,7 @@ impl CollisionIndex {
         pitch_with_map: bool,
         rotate_with_map: bool,
         collision_debug: bool,
-        avoid_edges: &Option<CollisionBoundaries>,
+        avoid_edges: Option<&CollisionBoundaries>,
         collision_group_predicate: Option<&dyn Fn(&IndexedSubfeature) -> bool>,
         projected_boxes: &mut Vec<ProjectedCollisionBox>,
     ) -> PlacedFeatureResult {
@@ -281,7 +281,7 @@ impl CollisionIndex {
                 allow_overlap,
                 pitch_with_map,
                 collision_debug,
-                avoid_edges.as_ref(),
+                avoid_edges,
                 collision_group_predicate,
                 projected_boxes,
             )

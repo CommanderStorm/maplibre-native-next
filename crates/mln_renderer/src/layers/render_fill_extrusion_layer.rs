@@ -118,7 +118,7 @@ fn capture_rendered_features(
                 tile_id,
                 state,
                 transform_params,
-                translation,
+                *translation,
                 translation_anchor,
                 /*near_clipped=*/ true,
             )
@@ -310,7 +310,7 @@ impl RenderLayer for RenderFillExtrusionLayer {
         let evaluated = get_evaluated::<FillExtrusionLayerProperties>(&self.base.evaluated_properties);
         let translated_query_geometry = crate::geometry::feature_index::FeatureIndex::translate_query_geometry(
             query_geometry,
-            evaluated.get::<FillExtrusionTranslate>(),
+            *evaluated.get::<FillExtrusionTranslate>(),
             *evaluated.get::<FillExtrusionTranslateAnchor>(),
             transform_state.get_bearing() as f32,
             pixels_to_tile_units,
@@ -487,7 +487,7 @@ impl RenderLayer for RenderFillExtrusionLayer {
             let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
                 // A drawable produced on a previous style/bucket should not
                 // be updated.
-                drawable_has_layer_tweaker(drawable, &layer_tweaker)
+                drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref())
             };
             if self.update_tile(draw_pass, &tile_id, update_existing) {
                 continue;

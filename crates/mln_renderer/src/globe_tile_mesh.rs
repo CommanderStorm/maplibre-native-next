@@ -38,7 +38,7 @@ impl<V: bytemuck::Pod> GlobeTileMesh<V> {
         let mut indices: Vec<u16> = Vec::new();
         let mut segments: Vec<SegmentBase> = Vec::new();
         for part in mask {
-            let mesh = create_tile_mesh(&TileMeshOptions {
+            let mesh = create_tile_mesh(TileMeshOptions {
                 granularity: SubdivisionGranularitySetting::globe()
                     .tile
                     .get_granularity_for_zoom_level(canonical.z.wrapping_add(part.z)),
@@ -168,9 +168,9 @@ pub(crate) struct RawGlobeTileMesh {
 pub(crate) fn raw_globe_tile_mesh(
     canonical: &CanonicalTileID,
     generate_borders: bool,
-    granularity: &SubdivisionGranularityExpression,
+    granularity: SubdivisionGranularityExpression,
 ) -> RawGlobeTileMesh {
-    let mesh = create_tile_mesh(&TileMeshOptions {
+    let mesh = create_tile_mesh(TileMeshOptions {
         granularity: granularity.get_granularity_for_zoom_level(canonical.z),
         generate_borders,
         extend_to_north_pole: canonical.y == 0,

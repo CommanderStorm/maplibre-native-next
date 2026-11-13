@@ -168,7 +168,7 @@ impl LayerTweaker for SymbolLayerTweaker {
                 get_projection_data(
                     &tile_id,
                     parameters,
-                    &[0.0, 0.0],
+                    [0.0, 0.0],
                     anchor,
                     NEAR_CLIPPED,
                     IN_VIEWPORT_PIXEL_UNITS,
@@ -183,7 +183,7 @@ impl LayerTweaker for SymbolLayerTweaker {
             let tile_translation: [f32; 2] = if is_screen_space {
                 [0.0, 0.0]
             } else {
-                RenderTile::tile_unit_translation(&tile_id, translate, anchor, state)
+                RenderTile::tile_unit_translation(&tile_id, *translate, anchor, state)
             };
             projection.translate = [0.0, 0.0];
             let matrix = projection.fallback_matrix;

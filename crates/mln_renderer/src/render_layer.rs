@@ -158,7 +158,7 @@ impl<'a> CaptureView<'a> {
         tile_id: &OverscaledTileID,
         state: &'a TransformState,
         transform_params: &crate::paint_parameters::TransformParameters,
-        translation: &[f32; 2],
+        translation: [f32; 2],
         anchor: mln_style_types::TranslateAnchorType,
         near_clipped: bool,
     ) -> Self {
@@ -216,7 +216,7 @@ pub(crate) fn capture_retained_features<'a>(
     tile_id: &OverscaledTileID,
     state: &'a TransformState,
     transform_params: &crate::paint_parameters::TransformParameters,
-    translation: &[f32; 2],
+    translation: [f32; 2],
     anchor: mln_style_types::TranslateAnchorType,
     mut visible: impl FnMut(usize) -> bool,
     mut bound: impl FnMut(&CaptureView<'_>, usize, usize) -> Option<NDCBound>,
@@ -577,7 +577,7 @@ pub trait RenderLayer {
     fn layer_removed(&mut self, changes: &mut UniqueChangeRequestVec) {
         self.remove_all_drawables();
         let group = self.base().layer_group.clone();
-        activate_layer_group(&group, false, changes);
+        activate_layer_group(group.as_ref(), false, changes);
     }
 
     /// Called when the layer index changes.
@@ -587,7 +587,7 @@ pub trait RenderLayer {
         // Submit a change request to update the layer index of our tile layer
         // group
         let group = self.base().layer_group.clone();
-        change_layer_index(&group, new_layer_index, changes);
+        change_layer_index(group.as_ref(), new_layer_index, changes);
     }
 
     /// Called when the layer is included or excluded from rendering.
@@ -751,14 +751,14 @@ pub trait RenderLayer {
     fn set_layer_group(&mut self, layer_group: Option<LayerGroupBasePtr>, changes: &mut UniqueChangeRequestVec) {
         // Remove the active layer group, if any, before replacing it.
         let old = self.base().layer_group.clone();
-        activate_layer_group(&old, false, changes);
+        activate_layer_group(old.as_ref(), false, changes);
 
         self.base_mut().layer_group = layer_group;
 
         // Add the new layer group, if we're currently renderable.
         let group = self.base().layer_group.clone();
         let renderable = self.base().is_renderable;
-        activate_layer_group(&group, renderable, changes);
+        activate_layer_group(group.as_ref(), renderable, changes);
     }
 }
 
@@ -775,7 +775,7 @@ pub(crate) fn mark_layer_renderable_base<L: RenderLayer + ?Sized>(
     // This layer is either being freshly included in the renderable set or
     // excluded
     let group = layer.base().layer_group.clone();
-    activate_layer_group(&group, will_render, changes);
+    activate_layer_group(group.as_ref(), will_render, changes);
 
     if !will_render {
         layer.release_render_data();
@@ -823,7 +823,7 @@ fn get_render_tile_bucket_id(base: &RenderLayerBase, tile_id: &OverscaledTileID)
 
 /// (Un-)Register the layer group with the orchestrator.
 pub(crate) fn activate_layer_group(
-    layer_group: &Option<LayerGroupBasePtr>,
+    layer_group: Option<&LayerGroupBasePtr>,
     activate: bool,
     changes: &mut UniqueChangeRequestVec,
 ) {
@@ -840,7 +840,7 @@ pub(crate) fn activate_layer_group(
 }
 
 pub(crate) fn change_layer_index(
-    group: &Option<LayerGroupBasePtr>,
+    group: Option<&LayerGroupBasePtr>,
     new_index: i32,
     changes: &mut UniqueChangeRequestVec,
 ) {

@@ -323,7 +323,7 @@ impl State {
         }
     }
 
-    pub(crate) fn set_cull_face_mode(&self, gl: &Gl, mode: &CullFaceMode) {
+    pub(crate) fn set_cull_face_mode(&self, gl: &Gl, mode: CullFaceMode) {
         Self::capability(gl, &self.cull_face, glow::CULL_FACE, mode.enabled);
         // These shouldn't need to be updated when face culling is disabled,
         // but we might end up having the same issues with Adreno 2xx GPUs as

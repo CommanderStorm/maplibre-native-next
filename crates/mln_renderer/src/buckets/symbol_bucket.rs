@@ -720,7 +720,7 @@ impl SymbolBucket {
         tx: u16,
         ty: u16,
         tex_origin: [u16; 2],
-        size_data: &Range<f32>,
+        size_data: Range<f32>,
         is_sdf: bool,
         pixel_offset: Point<f32>,
         min_font_scale: Point<f32>,

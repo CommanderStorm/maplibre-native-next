@@ -122,7 +122,7 @@ impl GlobeDepthPass {
             let mesh = self
                 .meshes
                 .entry(key)
-                .or_insert_with(|| raw_globe_tile_mesh(canonical, true, &SubdivisionGranularitySetting::globe().tile));
+                .or_insert_with(|| raw_globe_tile_mesh(canonical, true, SubdivisionGranularitySetting::globe().tile));
             builder.set_raw_vertices(mesh.vertices.clone(), mesh.vertex_count, AttributeDataType::Short2);
             builder.set_segments(DrawMode::Triangles(), mesh.indices.clone(), &mesh.segments);
             builder.flush(context);

@@ -365,11 +365,11 @@ impl TilePyramid {
         if !pan_tiles.is_empty() {
             // `[](const UnwrappedTileID&, Tile&) {}` and no prefetched tiles.
             ctx.render = false;
-            update_renderables(&mut ctx, &pan_tiles, &zoom_range, max_parent_tile_overscale_factor);
+            update_renderables(&mut ctx, &pan_tiles, zoom_range, max_parent_tile_overscale_factor);
         }
 
         ctx.render = true;
-        update_renderables(&mut ctx, &ideal_tiles, &zoom_range, max_parent_tile_overscale_factor);
+        update_renderables(&mut ctx, &ideal_tiles, zoom_range, max_parent_tile_overscale_factor);
 
         let previously_rendered: Vec<(UnwrappedTileID, OverscaledTileID)> =
             ctx.previously_rendered_tiles.iter().map(|(id, key)| (*id, *key)).collect();

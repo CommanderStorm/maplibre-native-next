@@ -417,7 +417,7 @@ impl FeatureIndex {
     #[must_use]
     pub(crate) fn translate_query_geometry(
         query_geometry: &GeometryCoordinates,
-        translate: &[f32; 2],
+        translate: [f32; 2],
         anchor_type: TranslateAnchorType,
         bearing: f32,
         pixels_to_tile_units: f32,
@@ -576,18 +576,18 @@ mod tests {
     fn translate_query_geometry() {
         let query: GeometryCoordinates = vec![Point::new(10, 10), Point::new(20, 20)];
         assert_eq!(
-            FeatureIndex::translate_query_geometry(&query, &[0.0, 0.0], TranslateAnchorType::Map, 0.0, 8.0),
+            FeatureIndex::translate_query_geometry(&query, [0.0, 0.0], TranslateAnchorType::Map, 0.0, 8.0),
             None
         );
         assert_eq!(
-            FeatureIndex::translate_query_geometry(&query, &[1.0, -2.0], TranslateAnchorType::Map, 1.0, 8.0),
+            FeatureIndex::translate_query_geometry(&query, [1.0, -2.0], TranslateAnchorType::Map, 1.0, 8.0),
             Some(vec![Point::new(2, 26), Point::new(12, 36)])
         );
         // Viewport anchor: the translation is rotated by -bearing.
         assert_eq!(
             FeatureIndex::translate_query_geometry(
                 &query,
-                &[1.0, 0.0],
+                [1.0, 0.0],
                 TranslateAnchorType::Viewport,
                 std::f32::consts::FRAC_PI_2,
                 8.0

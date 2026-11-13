@@ -141,7 +141,7 @@ pub(crate) fn get_drawable_render_tile(drawable: &dyn Drawable) -> Option<&Rende
     Some(slot.tile())
 }
 
-pub(crate) fn drawable_has_layer_tweaker(drawable: &dyn Drawable, layer_tweaker: &Option<LayerTweakerPtr>) -> bool {
+pub(crate) fn drawable_has_layer_tweaker(drawable: &dyn Drawable, layer_tweaker: Option<&LayerTweakerPtr>) -> bool {
     let current = drawable.get_layer_tweaker().and_then(|slot| slot.downcast_ref::<LayerTweakerPtr>());
     match (current, layer_tweaker) {
         (None, None) => true,

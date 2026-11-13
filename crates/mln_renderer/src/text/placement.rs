@@ -76,7 +76,7 @@ impl OpacityState {
     }
 
     #[must_use]
-    pub(crate) fn from_prev(prev_state: &OpacityState, increment: f32, placed: bool) -> Self {
+    pub(crate) fn from_prev(prev_state: OpacityState, increment: f32, placed: bool) -> Self {
         OpacityState {
             opacity: fmaxf(
                 0.0,
@@ -87,7 +87,7 @@ impl OpacityState {
     }
 
     #[must_use]
-    pub(crate) fn is_hidden(&self) -> bool {
+    pub(crate) fn is_hidden(self) -> bool {
         self.opacity == 0.0 && !self.placed
     }
 }
@@ -115,8 +115,8 @@ impl JointOpacityState {
         placed_icon: bool,
     ) -> Self {
         JointOpacityState {
-            icon: OpacityState::from_prev(&prev_opacity_state.icon, increment, placed_icon),
-            text: OpacityState::from_prev(&prev_opacity_state.text, increment, placed_text),
+            icon: OpacityState::from_prev(prev_opacity_state.icon, increment, placed_icon),
+            text: OpacityState::from_prev(prev_opacity_state.text, increment, placed_text),
         }
     }
 
@@ -154,7 +154,7 @@ impl JointPlacement {
     }
 
     #[must_use]
-    pub(crate) fn placed(&self) -> bool {
+    pub(crate) fn placed(self) -> bool {
         self.text || self.icon
     }
 }
@@ -249,7 +249,7 @@ fn translation_point(
     if screen_space {
         return Point::new(0.0, 0.0);
     }
-    let translation = RenderTile::tile_unit_translation(tile_id, &translate.offset, translate.anchor, state);
+    let translation = RenderTile::tile_unit_translation(tile_id, translate.offset, translate.anchor, state);
     Point::new(translation[0], translation[1])
 }
 
@@ -1057,7 +1057,7 @@ impl Placement {
                             ctx.pitch_text_with_map,
                             ctx.rotate_text_with_map,
                             this.show_collision_boxes,
-                            &ctx.avoid_edges,
+                            ctx.avoid_edges.as_ref(),
                             ctx.collision_group_predicate(),
                             &mut this.text_boxes,
                         );
@@ -1223,7 +1223,7 @@ impl Placement {
                     ctx.pitch_text_with_map,
                     ctx.rotate_text_with_map,
                     this.show_collision_boxes,
-                    &ctx.avoid_edges,
+                    ctx.avoid_edges.as_ref(),
                     ctx.collision_group_predicate(),
                     &mut this.icon_boxes,
                 )
@@ -1402,7 +1402,7 @@ impl Placement {
                 ctx.pitch_text_with_map,
                 ctx.rotate_text_with_map,
                 self.show_collision_boxes,
-                &ctx.avoid_edges,
+                ctx.avoid_edges.as_ref(),
                 ctx.collision_group_predicate(),
                 &mut self.text_boxes,
             );
@@ -1422,7 +1422,7 @@ impl Placement {
                     ctx.pitch_text_with_map, // TODO: shall it be pitchIconWithMap?
                     ctx.rotate_text_with_map,
                     self.show_collision_boxes,
-                    &ctx.avoid_edges,
+                    ctx.avoid_edges.as_ref(),
                     ctx.collision_group_predicate(),
                     &mut self.icon_boxes,
                 );
@@ -2727,10 +2727,10 @@ mod tests {
     fn opacity_state() {
         let state = OpacityState::new(true, true);
         assert_eq!(state.opacity, 1.0);
-        let faded = OpacityState::from_prev(&OpacityState::new(false, false), 0.5, false);
+        let faded = OpacityState::from_prev(OpacityState::new(false, false), 0.5, false);
         assert_eq!(faded.opacity, 0.0);
         assert!(faded.is_hidden());
-        let fading_in = OpacityState::from_prev(&OpacityState::new(true, false), 0.25, true);
+        let fading_in = OpacityState::from_prev(OpacityState::new(true, false), 0.25, true);
         assert_eq!(fading_in.opacity, 0.25);
     }
 }

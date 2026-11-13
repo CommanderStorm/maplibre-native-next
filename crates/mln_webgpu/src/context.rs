@@ -456,7 +456,7 @@ impl Context {
             self.globe_clip_mask_pipeline_hash.get(),
             // the far side of a limb tile projects inside the disc; cull it or
             // it overwrites the tile in front
-            &CullFaceMode::back_ccw(),
+            CullFaceMode::back_ccw(),
         ) else {
             eprintln!("WebGPU: Failed to create globe clipping mask pipeline");
             return false;
@@ -586,7 +586,7 @@ impl Context {
             &clip_mask_stencil_mode(),
             DrawModeType::Triangles,
             self.clip_mask_pipeline_hash.get(),
-            &CullFaceMode::disabled(),
+            CullFaceMode::disabled(),
         ) else {
             eprintln!("WebGPU: Failed to create clipping mask pipeline");
             return false;

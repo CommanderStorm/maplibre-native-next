@@ -110,7 +110,7 @@ impl MockSource {
         let zoom_range = self.zoom_range;
         let mut ctx =
             Callbacks { data_tiles: &mut self.data_tiles, log: &mut self.log, next_serial: &mut self.next_serial };
-        update_renderables(&mut ctx, &ideal_tiles, &zoom_range, max_parent_overscale_factor);
+        update_renderables(&mut ctx, &ideal_tiles, zoom_range, max_parent_overscale_factor);
     }
 }
 

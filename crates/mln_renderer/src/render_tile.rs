@@ -63,7 +63,7 @@ impl RenderTile {
     /// The layer's translation in tile units, rotated for its anchor.
     pub(crate) fn tile_unit_translation(
         id: &UnwrappedTileID,
-        translation: &[f32; 2],
+        translation: [f32; 2],
         anchor: TranslateAnchorType,
         state: &TransformState,
     ) -> [f32; 2] {

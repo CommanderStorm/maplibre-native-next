@@ -293,7 +293,7 @@ impl AtlasMirror {
 
 impl TextureAtlas for AtlasMirror {
     /// Queues the releases for the instance.
-    fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: &Option<DynamicTexturePtr>) {
+    fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: Option<&DynamicTexturePtr>) {
         if let Some(texture) = dynamic_texture
             && !texture_handles.is_empty()
         {

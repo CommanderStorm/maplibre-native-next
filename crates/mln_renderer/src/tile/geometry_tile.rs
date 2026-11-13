@@ -80,8 +80,8 @@ pub(crate) struct LayoutAtlases {
 impl Drop for LayoutAtlases {
     fn drop(&mut self) {
         if let Some(atlas) = &self.dynamic_texture_atlas {
-            atlas.remove_textures(&self.glyph_atlas.texture_handles, &self.glyph_atlas.dynamic_texture);
-            atlas.remove_textures(&self.image_atlas.texture_handles, &self.image_atlas.dynamic_texture);
+            atlas.remove_textures(&self.glyph_atlas.texture_handles, self.glyph_atlas.dynamic_texture.as_ref());
+            atlas.remove_textures(&self.image_atlas.texture_handles, self.image_atlas.dynamic_texture.as_ref());
         }
     }
 }

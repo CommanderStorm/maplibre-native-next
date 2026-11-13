@@ -90,7 +90,7 @@ pub(crate) fn layer_tweaker_slot(tweaker: &LayerTweakerPtr) -> Option<Rc<dyn Any
 pub(crate) fn get_tile_matrix(
     tile_id: &UnwrappedTileID,
     parameters: &PaintParameters<'_>,
-    translation: &[f32; 2],
+    translation: [f32; 2],
     anchor: TranslateAnchorType,
     near_clipped: bool,
     in_viewport_pixel_units: bool,
@@ -116,7 +116,7 @@ pub(crate) fn get_tile_matrix(
 pub(crate) fn get_projection_data(
     tile_id: &UnwrappedTileID,
     parameters: &PaintParameters<'_>,
-    translation: &[f32; 2],
+    translation: [f32; 2],
     anchor: TranslateAnchorType,
     near_clipped: bool,
     in_viewport_pixel_units: bool,
@@ -175,7 +175,7 @@ pub(crate) fn get_tile_matrix_for(
     tile_id: &UnwrappedTileID,
     transform_state: &TransformState,
     transform_params: &TransformParameters,
-    translation: &[f32; 2],
+    translation: [f32; 2],
     anchor: TranslateAnchorType,
     origin: Option<Point<f64>>,
     near_clipped: bool,
@@ -214,7 +214,7 @@ pub(crate) fn multiply_with_projection_matrix(
 pub(crate) fn translate_vtx_matrix(
     id: &UnwrappedTileID,
     tile_matrix: &Mat4,
-    translation: &[f32; 2],
+    translation: [f32; 2],
     anchor: TranslateAnchorType,
     state: &TransformState,
     in_viewport_pixel_units: bool,

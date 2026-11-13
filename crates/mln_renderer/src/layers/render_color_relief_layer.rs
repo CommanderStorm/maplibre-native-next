@@ -564,7 +564,7 @@ impl RenderLayer for RenderColorReliefLayer {
             dem_texture.borrow_mut().set_sampler_configuration(dem_sampler);
 
             let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
-                if !drawable_has_layer_tweaker(drawable, &layer_tweaker) {
+                if !drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref()) {
                     return false;
                 }
                 // The masked geometry changed: rebuild (see the file comment).

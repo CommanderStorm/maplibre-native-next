@@ -246,6 +246,7 @@ pub(crate) mod shared_expression {
     pub(crate) mod option {
         use super::{Arc, Deserializer, Expression, Serializer, SharedExpression, shared};
 
+        #[expect(clippy::ref_option, reason = "`#[serde(with)]` passes the field by reference")]
         pub(crate) fn serialize<S: Serializer>(
             expression: &Option<Arc<dyn Expression>>,
             serializer: S,

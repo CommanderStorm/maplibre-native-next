@@ -769,11 +769,11 @@ impl SymbolLayout {
             Arc::new(SymbolInstanceSharedData::new(
                 line,
                 shaped_text_orientations,
-                &shaped_icon,
-                &vertically_shaped_icon,
+                shaped_icon.as_ref(),
+                vertically_shaped_icon.as_ref(),
                 &evaluated_layout_properties,
                 text_placement,
-                &text_offset,
+                text_offset,
                 image_map,
                 icon_rotation,
                 icon_type,
@@ -803,8 +803,8 @@ impl SymbolLayout {
                         anchor,
                         shared_data,
                         shaped_text_orientations,
-                        &shaped_icon,
-                        &vertically_shaped_icon,
+                        shaped_icon.as_ref(),
+                        vertically_shaped_icon.as_ref(),
                         text_box_scale,
                         text_padding,
                         text_placement,
@@ -819,7 +819,7 @@ impl SymbolLayout {
                         overscaling,
                         icon_rotation,
                         text_rotation,
-                        &variable_anchor_offsets,
+                        variable_anchor_offsets.as_ref(),
                         allow_vertical_placement,
                         icon_type,
                     ));
@@ -1132,7 +1132,7 @@ impl SymbolLayout {
             tex.x,
             tex.y,
             [tex.x, tex.y],
-            &size_data,
+            size_data,
             symbol.is_sdf,
             pixel_offset_tl,
             min_font_scale,
@@ -1144,7 +1144,7 @@ impl SymbolLayout {
             tex.x + tex.w,
             tex.y,
             [tex.x, tex.y],
-            &size_data,
+            size_data,
             symbol.is_sdf,
             Point::new(pixel_offset_br.x, pixel_offset_tl.y),
             min_font_scale,
@@ -1156,7 +1156,7 @@ impl SymbolLayout {
             tex.x,
             tex.y + tex.h,
             [tex.x, tex.y],
-            &size_data,
+            size_data,
             symbol.is_sdf,
             Point::new(pixel_offset_tl.x, pixel_offset_br.y),
             min_font_scale,
@@ -1168,7 +1168,7 @@ impl SymbolLayout {
             tex.x + tex.w,
             tex.y + tex.h,
             [tex.x, tex.y],
-            &size_data,
+            size_data,
             symbol.is_sdf,
             pixel_offset_br,
             min_font_scale,
@@ -1740,11 +1740,11 @@ impl Layout for SymbolLayout {
                         index
                     };
 
-                    let icon_quads = symbol_instance.icon_quads().clone().unwrap_or_default();
+                    let icon_quads = symbol_instance.icon_quads().cloned().unwrap_or_default();
                     let index = place_icon(&icon_quads, WritingModeType::None);
                     let vertical_index = symbol_instance
                         .vertical_icon_quads()
-                        .clone()
+                        .cloned()
                         .map(|vertical_icon_quads| place_icon(&vertical_icon_quads, WritingModeType::Vertical));
                     symbol_instance.placed_icon_index = Some(index);
                     if vertical_index.is_some() {

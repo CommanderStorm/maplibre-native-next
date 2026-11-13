@@ -439,7 +439,7 @@ impl LayerTweaker for PolylineLayerTweaker {
             let projection = get_projection_data(
                 &tile_id,
                 parameters,
-                &[0.0, 0.0],
+                [0.0, 0.0],
                 TranslateAnchorType::Viewport,
                 false,
                 false,

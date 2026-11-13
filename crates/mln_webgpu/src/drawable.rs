@@ -788,7 +788,7 @@ impl drawable::Drawable for Drawable {
                 &stencil_mode,
                 draw_mode_type,
                 Some(pipeline_hash),
-                &cull_mode,
+                cull_mode,
             );
             if self.impl_.pipeline_state.is_none() {
                 eprintln!(

@@ -114,7 +114,7 @@ fn capture_rendered_features(
         tile.get_overscaled_tile_id(),
         state,
         transform_params,
-        evaluated.get::<FillTranslate>(),
+        *evaluated.get::<FillTranslate>(),
         *evaluated.get::<FillTranslateAnchor>(),
         |vertex_offset| {
             if !alpha_is_constant {
@@ -288,7 +288,7 @@ impl RenderLayer for RenderFillLayer {
         let evaluated = get_evaluated::<FillLayerProperties>(&self.base.evaluated_properties);
         let translated_query_geometry = crate::geometry::feature_index::FeatureIndex::translate_query_geometry(
             query_geometry,
-            evaluated.get::<FillTranslate>(),
+            *evaluated.get::<FillTranslate>(),
             *evaluated.get::<FillTranslateAnchor>(),
             transform_state.get_bearing() as f32,
             pixels_to_tile_units,
@@ -441,7 +441,7 @@ impl RenderLayer for RenderFillLayer {
             // shared vectors; the backend upload guard fires automatically
             // when those change.
             let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
-                let current = drawable_has_layer_tweaker(drawable, &layer_tweaker);
+                let current = drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref());
                 if current && FillVariant::from_type(drawable.get_type()) != Some(FillVariant::FillOutlineTriangulated)
                 {
                     refresh_if_bucket_updated(drawable, |attrs| {

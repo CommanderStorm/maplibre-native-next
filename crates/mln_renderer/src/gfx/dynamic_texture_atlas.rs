@@ -29,14 +29,14 @@ pub(crate) type DynamicTextureAtlasPtr = Arc<DynamicTextureAtlas>;
 /// another wasm instance it is the map side's mirror of that instance's
 /// atlas (`tile/worker_codec`), which sends the releases on.
 pub(crate) trait TextureAtlas: Send + Sync {
-    fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: &Option<DynamicTexturePtr>);
+    fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: Option<&DynamicTexturePtr>);
     /// Drops the dynamic textures that are no longer in use. Render thread
     /// only.
     fn remove_unused_dynamic_textures(&self);
 }
 
 impl TextureAtlas for DynamicTextureAtlas {
-    fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: &Option<DynamicTexturePtr>) {
+    fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: Option<&DynamicTexturePtr>) {
         DynamicTextureAtlas::remove_textures(self, texture_handles, dynamic_texture);
     }
 
@@ -500,7 +500,7 @@ impl DynamicTextureAtlas {
     pub(crate) fn remove_textures(
         &self,
         texture_handles: &[TextureHandle],
-        dynamic_texture: &Option<DynamicTexturePtr>,
+        dynamic_texture: Option<&DynamicTexturePtr>,
     ) {
         let Some(dynamic_texture) = dynamic_texture else {
             return;

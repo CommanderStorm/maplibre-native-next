@@ -300,7 +300,7 @@ impl drawable::Drawable for Drawable {
         }
 
         context.set_color_mode(&self.base.color_mode);
-        context.set_cull_face_mode(&self.base.cull_face_mode);
+        context.set_cull_face_mode(self.base.cull_face_mode);
         context.set_scissor_test(&parameters.scissor_rect());
 
         context.bind_uniform_blocks(shader, &self.impl_.uniform_buffers, self.base.ubo_index);

@@ -61,9 +61,9 @@ pub struct HBShapeResult {
 pub(crate) type HBShapeResults = VecMap<FontStack, VecMap<GlyphIDType, BTreeMap<Vec<u16>, HBShapeResult>>>;
 
 pub(crate) trait GlyphManagerObserver {
-    fn on_glyphs_loaded(&self, _font_stack: &FontStack, _range: &GlyphRange) {}
-    fn on_glyphs_error(&self, _font_stack: &FontStack, _range: &GlyphRange, _error: Error) {}
-    fn on_glyphs_requested(&self, _font_stack: &FontStack, _range: &GlyphRange) {}
+    fn on_glyphs_loaded(&self, _font_stack: &FontStack, _range: GlyphRange) {}
+    fn on_glyphs_error(&self, _font_stack: &FontStack, _range: GlyphRange, _error: Error) {}
+    fn on_glyphs_requested(&self, _font_stack: &FontStack, _range: GlyphRange) {}
 }
 
 struct NullObserver;
@@ -308,7 +308,7 @@ impl GlyphManager {
 
         if let Some(data) = self.get_font_face_data(range.type_) {
             // A face that holds its font file needs no request.
-            self.observer.borrow().clone().on_glyphs_requested(font_stack, &range);
+            self.observer.borrow().clone().on_glyphs_requested(font_stack, range);
             self.process_data(Ok(Some(data)), font_stack, range);
             return;
         }
@@ -328,7 +328,7 @@ impl GlyphManager {
         };
 
         let observer = self.observer.borrow().clone();
-        observer.on_glyphs_requested(font_stack, &range);
+        observer.on_glyphs_requested(font_stack, range);
 
         let Some(file_source) = file_source else {
             // C++ always has a file source; without one the request never
@@ -446,8 +446,8 @@ impl GlyphManager {
         Self::deliver(notifications);
 
         match error {
-            Some(error) => observer.on_glyphs_error(font_stack, &range, error),
-            None => observer.on_glyphs_loaded(font_stack, &range),
+            Some(error) => observer.on_glyphs_error(font_stack, range, error),
+            None => observer.on_glyphs_loaded(font_stack, range),
         }
     }
 

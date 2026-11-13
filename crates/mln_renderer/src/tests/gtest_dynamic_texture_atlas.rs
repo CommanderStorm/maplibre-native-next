@@ -78,10 +78,10 @@ impl DynamicTextureAtlasTest {
 impl Drop for DynamicTextureAtlasTest {
     fn drop(&mut self) {
         for image_atlas in &self.atlases {
-            self.atlas.remove_textures(&image_atlas.texture_handles, &image_atlas.dynamic_texture);
+            self.atlas.remove_textures(&image_atlas.texture_handles, image_atlas.dynamic_texture.as_ref());
         }
         for glyph_atlas in &self.glyph_atlases {
-            self.atlas.remove_textures(&glyph_atlas.texture_handles, &glyph_atlas.dynamic_texture);
+            self.atlas.remove_textures(&glyph_atlas.texture_handles, glyph_atlas.dynamic_texture.as_ref());
         }
     }
 }
@@ -151,7 +151,7 @@ fn released_revision_gets_fresh_allocation() {
     let image = make_image("pattern", false);
     let released = test.atlas.upload_icons_and_patterns(&ImageMap::new(), &image_map(&image), &ImageVersionMap::new());
     let released_id = released.texture_handles[0].get_id();
-    test.atlas.remove_textures(&released.texture_handles, &released.dynamic_texture);
+    test.atlas.remove_textures(&released.texture_handles, released.dynamic_texture.as_ref());
 
     // The revision was forgotten on its last release, so it is packed and uploaded again under a new id.
     assert_ne!(released_id, test.upload_pattern(&image).texture_handles[0].get_id());

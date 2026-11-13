@@ -399,7 +399,7 @@ impl RenderLayer for RenderHeatmapLayer {
             let update_existing = |drawable: &mut dyn Drawable| {
                 // A drawable produced on a previous style/bucket should not
                 // be updated.
-                drawable_has_layer_tweaker(drawable, &layer_tweaker)
+                drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref())
             };
             if self.update_tile(&tile_layer_group, render_pass, &tile_id, update_existing) {
                 continue;

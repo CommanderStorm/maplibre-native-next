@@ -103,7 +103,7 @@ impl crate::text::glyph_manager::GlyphManagerObserver for OrchestratorGlyphObser
     fn on_glyphs_error(
         &self,
         font_stack: &mln_util::font_stack::FontStack,
-        glyph_range: &mln_text::glyph::GlyphRange,
+        glyph_range: mln_text::glyph::GlyphRange,
         error: mln_util::error::Error,
     ) {
         let range = if glyph_range.type_ == mln_text::glyph::GlyphIDType::FontPBF {
@@ -120,18 +120,18 @@ impl crate::text::glyph_manager::GlyphManagerObserver for OrchestratorGlyphObser
         );
         self.events.emit(RendererEvent::GlyphsError {
             font_stack: font_stack.clone(),
-            range: *glyph_range,
+            range: glyph_range,
             error: error.clone(),
         });
         self.events.emit(RendererEvent::ResourceError(error));
     }
 
-    fn on_glyphs_loaded(&self, font_stack: &mln_util::font_stack::FontStack, range: &mln_text::glyph::GlyphRange) {
-        self.events.emit(RendererEvent::GlyphsLoaded { font_stack: font_stack.clone(), range: *range });
+    fn on_glyphs_loaded(&self, font_stack: &mln_util::font_stack::FontStack, range: mln_text::glyph::GlyphRange) {
+        self.events.emit(RendererEvent::GlyphsLoaded { font_stack: font_stack.clone(), range });
     }
 
-    fn on_glyphs_requested(&self, font_stack: &mln_util::font_stack::FontStack, range: &mln_text::glyph::GlyphRange) {
-        self.events.emit(RendererEvent::GlyphsRequested { font_stack: font_stack.clone(), range: *range });
+    fn on_glyphs_requested(&self, font_stack: &mln_util::font_stack::FontStack, range: mln_text::glyph::GlyphRange) {
+        self.events.emit(RendererEvent::GlyphsRequested { font_stack: font_stack.clone(), range });
     }
 }
 
@@ -1218,7 +1218,7 @@ impl RenderOrchestrator {
             shaders,
             context,
             state,
-            &paint_parameters.renderable_size,
+            paint_parameters.renderable_size,
             paint_parameters.pixel_ratio,
             tree_parameters.sky.as_ref(),
             &tree_parameters.light,

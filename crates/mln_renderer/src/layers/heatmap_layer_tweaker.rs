@@ -107,7 +107,7 @@ impl LayerTweaker for HeatmapLayerTweaker {
             let projection = get_projection_data(
                 &tile_id,
                 parameters,
-                &[0.0, 0.0],
+                [0.0, 0.0],
                 TranslateAnchorType::Viewport,
                 NEAR_CLIPPED,
                 IN_VIEWPORT_PIXEL_UNITS,

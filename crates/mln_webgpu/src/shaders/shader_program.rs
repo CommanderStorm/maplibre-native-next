@@ -316,7 +316,7 @@ impl ShaderProgram {
         stencil_mode: &StencilMode,
         draw_mode_type: DrawModeType,
         reuse_hash: Option<u64>,
-        cull_mode: &CullFaceMode,
+        cull_mode: CullFaceMode,
     ) -> Option<wgpu::RenderPipeline> {
         // Check cache first
         if let Some(hash) = reuse_hash
@@ -326,7 +326,7 @@ impl ShaderProgram {
         }
         // Create new pipeline
         let pipeline =
-            self.create_pipeline(vertex_layouts, color_mode, depth_mode, stencil_mode, draw_mode_type, *cull_mode);
+            self.create_pipeline(vertex_layouts, color_mode, depth_mode, stencil_mode, draw_mode_type, cull_mode);
         // Cache the pipeline if we have a reuse hash
         if let (Some(hash), Some(p)) = (reuse_hash, &pipeline) {
             self.render_pipeline_cache.borrow_mut().insert(hash, p.clone());

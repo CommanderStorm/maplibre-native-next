@@ -34,7 +34,7 @@ pub(crate) type PrefetchedTile = (OverscaledTileID, OverscaledTileID);
 pub(crate) fn update_renderables<C: RenderablesContext>(
     ctx: &mut C,
     ideal_tile_ids: &[OverscaledTileID],
-    zoom_range: &Range<u8>,
+    zoom_range: Range<u8>,
     max_parent_overscale_factor: Option<u8>,
 ) {
     let mut checked: HashSet<OverscaledTileID> = HashSet::new();

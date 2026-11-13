@@ -238,7 +238,7 @@ impl RenderLayer for RenderHillshadeLayer {
         // RenderLayer::layerRemoved
         self.remove_all_drawables();
         let group = self.base.layer_group.clone();
-        crate::render_layer::activate_layer_group(&group, false, changes);
+        crate::render_layer::activate_layer_group(group.as_ref(), false, changes);
 
         self.remove_render_targets(changes);
     }
@@ -498,7 +498,7 @@ impl RenderLayer for RenderHillshadeLayer {
             let update_existing = |drawable: &mut dyn Drawable| {
                 // Only current drawables are updated, ones produced for a
                 // previous style retain the attribute values for that style.
-                if !drawable_has_layer_tweaker(drawable, &layer_tweaker) {
+                if !drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref()) {
                     return false;
                 }
 

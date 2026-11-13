@@ -119,7 +119,7 @@ impl FreeTypeFace {
     }
 
     #[must_use]
-    pub(crate) fn rasterize_glyph(&self, glyph: &GlyphID) -> Glyph {
-        crate::rasterize::rasterize_glyph(self, *glyph)
+    pub(crate) fn rasterize_glyph(&self, glyph: GlyphID) -> Glyph {
+        crate::rasterize::rasterize_glyph(self, glyph)
     }
 }

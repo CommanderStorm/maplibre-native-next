@@ -124,7 +124,7 @@ impl Impl {
         self.face.is_valid()
     }
 
-    pub(crate) fn rasterize_glyph(&self, glyph: &GlyphID) -> Glyph {
+    pub(crate) fn rasterize_glyph(&self, glyph: GlyphID) -> Glyph {
         self.face.rasterize_glyph(glyph)
     }
 

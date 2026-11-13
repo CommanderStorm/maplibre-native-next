@@ -90,7 +90,7 @@ impl WorkerCodec {
                 if let Some(texture) = release.texture
                     && textures.iter().any(|known| Arc::ptr_eq(known, &texture))
                 {
-                    self.atlas.remove_textures(&release.handles, &Some(texture));
+                    self.atlas.remove_textures(&release.handles, Some(texture).as_ref());
                 }
             }
             // The atlas frees only the textures nothing else holds.

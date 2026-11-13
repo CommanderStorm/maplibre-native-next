@@ -184,7 +184,7 @@ fn capture_rendered_features(
         tile_id,
         state,
         transform_params,
-        evaluated.get::<CircleTranslate>(),
+        *evaluated.get::<CircleTranslate>(),
         *evaluated.get::<CircleTranslateAnchor>(),
         |vertex_offset| {
             if !alpha_is_constant || !stroke_alpha_is_constant {
@@ -418,7 +418,7 @@ impl RenderLayer for RenderCircleLayer {
         // Translate query geometry
         let translated = FeatureIndex::translate_query_geometry(
             query_geometry,
-            evaluated.get::<CircleTranslate>(),
+            *evaluated.get::<CircleTranslate>(),
             *evaluated.get::<CircleTranslateAnchor>(),
             transform_state.get_bearing() as f32,
             pixels_to_tile_units,
@@ -451,7 +451,7 @@ impl RenderLayer for RenderCircleLayer {
         // query finds none there either.
         let drawn_translation = crate::render_tile::RenderTile::tile_unit_translation(
             projector.get_tile_id(),
-            evaluated.get::<CircleTranslate>(),
+            *evaluated.get::<CircleTranslate>(),
             *evaluated.get::<CircleTranslateAnchor>(),
             transform_state,
         );
@@ -622,7 +622,7 @@ impl RenderLayer for RenderCircleLayer {
             // and move on to the next tile.
             let update_existing = |drawable: &mut dyn mln_gfx::Drawable| {
                 // A drawable produced on a previous style/bucket should not be updated.
-                let current = drawable_has_layer_tweaker(drawable, &layer_tweaker);
+                let current = drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref());
                 if current {
                     refresh_if_bucket_updated(drawable, |attrs| {
                         read_circle_attributes(

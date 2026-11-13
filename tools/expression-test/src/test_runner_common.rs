@@ -143,7 +143,7 @@ pub(crate) fn color_output_equal(a: &Value, b: &Value) -> bool {
 }
 
 #[must_use]
-pub(crate) fn deep_equal_opt(a: &Option<Value>, b: &Option<Value>) -> bool {
+pub(crate) fn deep_equal_opt(a: Option<&Value>, b: Option<&Value>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => deep_equal(a, b),
         (None, None) => true,

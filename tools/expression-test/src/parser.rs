@@ -500,10 +500,10 @@ pub(crate) fn expression_value_to_value(expr_value: &mln_expression::Value) -> O
 
 pub(crate) fn parse_expression(
     value: &serde_json::Value,
-    spec: &Option<PropertySpec>,
+    spec: Option<&PropertySpec>,
     result: &mut TestResult,
 ) -> Option<Box<dyn Expression>> {
-    let expected = spec.as_ref().and_then(to_expression_type);
+    let expected = spec.and_then(to_expression_type);
     let mut ctx = match &expected {
         Some(t) => ParsingContext::with_expected(t.clone()),
         None => ParsingContext::new(),

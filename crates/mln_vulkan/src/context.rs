@@ -1177,7 +1177,7 @@ impl Context {
             // or it overwrites the tile in front. The shader flips Y for
             // Vulkan's downward framebuffer, so the far side is still
             // clockwise on screen.
-            pipeline_info.set_cull_mode(&CullFaceMode::back_ccw());
+            pipeline_info.set_cull_mode(CullFaceMode::back_ccw());
             pipeline_info.input_bindings.push(
                 vk::VertexInputBindingDescription::default()
                     .binding(1)

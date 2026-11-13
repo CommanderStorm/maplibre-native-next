@@ -179,7 +179,7 @@ impl RenderRasterLayer {
                 changes.push(ChangeRequest::AddLayerTweaker(group.clone(), Rc::downgrade(tweaker)));
             }
             self.image_layer_group = Some(group);
-            activate_layer_group(&self.image_layer_group, self.base.is_renderable, changes);
+            activate_layer_group(self.image_layer_group.as_ref(), self.base.is_renderable, changes);
         }
         let image_layer_group = self.image_layer_group.clone().expect("image layer group");
 
@@ -313,7 +313,7 @@ impl RenderLayer for RenderRasterLayer {
     fn mark_layer_renderable(&mut self, will_render: bool, changes: &mut UniqueChangeRequestVec) {
         crate::render_layer::mark_layer_renderable_base(self, will_render, changes);
         if self.image_layer_group.is_some() {
-            activate_layer_group(&self.image_layer_group, will_render, changes);
+            activate_layer_group(self.image_layer_group.as_ref(), will_render, changes);
         }
     }
 
@@ -330,9 +330,9 @@ impl RenderLayer for RenderRasterLayer {
         // RenderLayer::layerRemoved
         self.remove_all_drawables();
         let group = self.base.layer_group.clone();
-        activate_layer_group(&group, false, changes);
+        activate_layer_group(group.as_ref(), false, changes);
         if self.image_layer_group.is_some() {
-            activate_layer_group(&self.image_layer_group, false, changes);
+            activate_layer_group(self.image_layer_group.as_ref(), false, changes);
         }
     }
 
@@ -340,9 +340,9 @@ impl RenderLayer for RenderRasterLayer {
         // RenderLayer::layerIndexChanged
         self.base.layer_index = new_layer_index;
         let group = self.base.layer_group.clone();
-        change_layer_index(&group, new_layer_index, changes);
+        change_layer_index(group.as_ref(), new_layer_index, changes);
 
-        change_layer_index(&self.image_layer_group, new_layer_index, changes);
+        change_layer_index(self.image_layer_group.as_ref(), new_layer_index, changes);
     }
 
     fn update(
@@ -513,7 +513,7 @@ impl RenderLayer for RenderRasterLayer {
                     // Only current drawables are updated, ones produced for
                     // a previous style retain the attribute values for that
                     // style.
-                    if !drawable_has_layer_tweaker(drawable, &layer_tweaker) {
+                    if !drawable_has_layer_tweaker(drawable, layer_tweaker.as_ref()) {
                         return false;
                     }
                     // buildVertexData(none, &drawable, bucket): the bucket

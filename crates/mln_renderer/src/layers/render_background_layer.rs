@@ -290,7 +290,7 @@ impl RenderLayer for RenderBackgroundLayer {
             if self.base.projection_variant == ProjectionVariant::Globe {
                 // The background is not depth tested, so it needs no tile
                 // border.
-                let mesh = raw_globe_tile_mesh(&tile_id.canonical, false, &SubdivisionGranularitySetting::globe().tile);
+                let mesh = raw_globe_tile_mesh(&tile_id.canonical, false, SubdivisionGranularitySetting::globe().tile);
                 builder.set_raw_vertices(mesh.vertices, mesh.vertex_count, AttributeDataType::Short2);
                 builder.set_segments(DrawMode::Triangles(), mesh.indices, &mesh.segments);
             } else {

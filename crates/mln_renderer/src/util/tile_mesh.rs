@@ -43,7 +43,7 @@ pub(crate) struct TileMesh {
 /// of GL JS `util/create_tile_mesh.ts`. Triangles are counter-clockwise in
 /// tile space.
 #[must_use]
-pub(crate) fn create_tile_mesh(options: &TileMeshOptions) -> TileMesh {
+pub(crate) fn create_tile_mesh(options: TileMeshOptions) -> TileMesh {
     // Capped first so the product cannot wrap; every granularity past the
     // vertex limit fails the check anyway.
     const MAX_VERTICES: u64 = 1 << 16;
