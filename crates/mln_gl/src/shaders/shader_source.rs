@@ -102,9 +102,6 @@ use super::glsl_sources;
 /// and the shader's.
 #[derive(Debug)]
 pub(crate) struct GlslShaderSource {
-    /// The `BuiltIn` enumerator name.
-    pub(crate) built_in: &'static str,
-    pub(crate) name: &'static str,
     pub(crate) vertex: &'static str,
     pub(crate) fragment: &'static str,
 }
@@ -116,6 +113,7 @@ pub(crate) struct UniformBlockInfo {
     pub(crate) name: &'static str,
     pub(crate) id: usize,
     /// The size of the block's UBO.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests check it against the block the shader declares"))]
     pub(crate) size: usize,
     /// The size of an element of the layer's buffer that holds this block for
     /// each of its drawables, or 0 if the renderer writes no such buffer.

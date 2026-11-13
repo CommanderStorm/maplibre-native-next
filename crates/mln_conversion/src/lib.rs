@@ -12,6 +12,3 @@ pub mod value_conversion;
 pub use conversion::{Convertible, Error, to_geojson};
 pub use get_json_type::get_json_type;
 pub use value_conversion::{json_to_value, value_to_json};
-
-#[cfg(test)]
-mod tests;

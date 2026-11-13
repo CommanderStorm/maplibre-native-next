@@ -135,6 +135,7 @@ impl BackendImpl {
     }
 
     /// `VK_KHR_external_semaphore_fd`, when the device has it.
+    #[cfg_attr(not(unix), expect(dead_code, reason = "sync files are Unix's"))]
     pub(crate) fn get_semaphore_fd_loader(&self) -> Option<&ash::khr::external_semaphore_fd::Device> {
         self.device.shared.semaphore_fd()
     }

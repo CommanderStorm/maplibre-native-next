@@ -83,12 +83,6 @@ impl Device {
         self.host_queue
     }
 
-    /// Whether `self` and `other` are the same device and queue.
-    pub(crate) fn same_as(&self, other: &Device) -> bool {
-        Retained::as_ptr(&self.device) == Retained::as_ptr(&other.device)
-            && Retained::as_ptr(&self.queue) == Retained::as_ptr(&other.queue)
-    }
-
     #[must_use]
     pub fn device(&self) -> &MTLDevicePtr {
         &self.device

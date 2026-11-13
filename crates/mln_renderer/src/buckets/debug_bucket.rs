@@ -17,7 +17,6 @@ pub(crate) struct DebugBucket {
     pub(crate) modified: Option<Timestamp>,
     pub(crate) expires: Option<Timestamp>,
     pub(crate) debug_mode: MapDebugOptions,
-    pub(crate) source_name: String,
 
     /// The text, one line per entry, empty without `PARSE_STATUS` and
     /// `TIMESTAMPS`.
@@ -64,7 +63,7 @@ impl DebugBucket {
             add_text(format!("expires: {}", iso8601(expires)), 50.0, baseline + 200.0, 5.0);
         }
 
-        DebugBucket { renderable, complete, modified, expires, debug_mode, source_name, text, strokes }
+        DebugBucket { renderable, complete, modified, expires, debug_mode, text, strokes }
     }
 }
 

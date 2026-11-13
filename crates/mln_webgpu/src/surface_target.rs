@@ -491,6 +491,7 @@ impl Default for SurfaceOptions {
 /// `GLFWWebGPUBackend`'s surface without the window: frames presented to a
 /// `wgpu::Surface`.
 pub struct SurfaceTarget {
+    #[expect(dead_code, reason = "keeps the backend that the surface's frames render with alive as long as the target")]
     backend: Rc<RendererBackend>,
     state: Rc<SurfaceState>,
     image: Rc<DrawTarget>,

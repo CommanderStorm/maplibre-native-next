@@ -256,7 +256,7 @@ impl Scene {
 
         let tile_vertices: [[i16; 2]; 4] = [[0, 0], [EXTENT, 0], [0, EXTENT], [EXTENT, EXTENT]];
         let passes = RenderPass::Opaque | RenderPass::Translucent;
-        let mut builder = context.create_drawable_builder("background".to_owned());
+        let mut builder = context.create_drawable_builder();
         builder.set_render_pass(passes);
         builder.set_shader(Some(shader));
         builder.set_depth_type(DepthMaskType::ReadWrite);

@@ -26,7 +26,6 @@ pub(crate) type RenderTargetPtr = Rc<RefCell<RenderTarget>>;
 /// Render target class
 pub struct RenderTarget {
     offscreen_texture: Box<dyn OffscreenTexture>,
-    size: Size,
     layer_groups_by_layer_index: VecMap<i32, LayerGroupBasePtr>,
 }
 
@@ -34,7 +33,6 @@ impl RenderTarget {
     pub(crate) fn new(context: &dyn Context, size: Size, type_: TextureChannelDataType) -> Self {
         RenderTarget {
             offscreen_texture: context.create_offscreen_texture(size, type_),
-            size,
             layer_groups_by_layer_index: VecMap::new(),
         }
     }

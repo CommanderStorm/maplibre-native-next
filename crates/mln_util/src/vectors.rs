@@ -26,11 +26,13 @@ pub(crate) fn slice<const START: usize, const COUNT: usize, T: Copy, const N: us
 
 /// A value as an array: a scalar is a one-element array, an array is itself.
 /// Other arithmetic types aren't converted to `T`: the caller converts first.
+#[cfg(test)]
 pub(crate) trait AsArray<T: Copy> {
     const LEN: usize;
     fn write_to(&self, out: &mut [T]);
 }
 
+#[cfg(test)]
 impl AsArray<f64> for f64 {
     const LEN: usize = 1;
     fn write_to(&self, out: &mut [f64]) {
@@ -38,6 +40,7 @@ impl AsArray<f64> for f64 {
     }
 }
 
+#[cfg(test)]
 impl AsArray<f32> for f32 {
     const LEN: usize = 1;
     fn write_to(&self, out: &mut [f32]) {
@@ -45,6 +48,7 @@ impl AsArray<f32> for f32 {
     }
 }
 
+#[cfg(test)]
 impl<T: Copy, const M: usize> AsArray<T> for [T; M] {
     const LEN: usize = M;
     fn write_to(&self, out: &mut [T]) {

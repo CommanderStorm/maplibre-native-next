@@ -12,13 +12,12 @@ use mln_gfx::{
     CommandEncoder, Context, DepthMaskType, DepthMode, RendererBackend, ScissorRect, ShaderRegistry,
     StencilMode,
 };
-use mln_map_types::{MapDebugOptions, MapMode, ProjectionData, TileLodMode, TransformState, ViewportMode};
+use mln_map_types::{MapDebugOptions, ProjectionData, TransformState, ViewportMode};
 use mln_tile_id::{CanonicalTileID, UnwrappedTileID};
 use mln_util::mat4::Mat4;
 use mln_util::range::Range;
 use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
-use mln_util::time::Instant;
 use mln_vec_map::VecMap;
 
 use crate::globe_tile_mesh::raw_globe_tile_mesh;
@@ -83,10 +82,7 @@ pub struct PaintParameters<'a> {
     pub(crate) pattern_atlas: Rc<RefCell<PatternAtlas>>,
 
     pub(crate) pass: RenderPass,
-    pub(crate) map_mode: MapMode,
     pub(crate) debug_options: MapDebugOptions,
-    /// As in [`UpdateParameters::time_point`](crate::update_parameters::UpdateParameters::time_point).
-    pub(crate) time_point: Option<Instant>,
 
     pub(crate) pixel_ratio: f32,
     pub(crate) renderable_size: Size,
@@ -101,15 +97,8 @@ pub struct PaintParameters<'a> {
     pub(crate) depth_range_size: f32,
     pub(crate) opaque_pass_cutoff: u32,
     pub(crate) symbol_fade_change: f32,
-    pub(crate) frame_count: u64,
-
-    pub(crate) tile_lod_min_radius: f64,
-    pub(crate) tile_lod_scale: f64,
-    pub(crate) tile_lod_pitch_threshold: f64,
-    pub(crate) tile_lod_mode: TileLodMode,
 
     pub(crate) scissor_rect: ScissorRect,
-    pub(crate) capture_rendered_features: bool,
     /// The frame that custom layers draw into, set before their prerender.
     pub(crate) custom_layer_frame: Option<mln_style::layers::CustomLayerFrame>,
 }
@@ -132,20 +121,12 @@ impl<'a> PaintParameters<'a> {
         context: &'a dyn Context,
         pixel_ratio: f32,
         backend: &'a dyn RendererBackend,
-        map_mode: MapMode,
         debug_options: MapDebugOptions,
-        time_point: Option<Instant>,
         transform_params: &'a TransformParameters,
         static_data: &'a RenderStaticData,
         pattern_atlas: Rc<RefCell<PatternAtlas>>,
-        frame_count: u64,
-        tile_lod_min_radius: f64,
-        tile_lod_scale: f64,
-        tile_lod_pitch_threshold: f64,
-        tile_lod_mode: TileLodMode,
         renderable_size: Size,
         scissor_rect: ScissorRect,
-        capture_rendered_features: bool,
     ) -> Self {
         let state = &transform_params.state;
         let mut pixels_to_gl_units = [2.0f32 / state.get_size().width as f32, -2.0f32 / state.get_size().height as f32];
@@ -166,9 +147,7 @@ impl<'a> PaintParameters<'a> {
             line_atlas: Rc::new(RefCell::new(LineAtlas::new())),
             pattern_atlas,
             pass: RenderPass::Opaque,
-            map_mode,
             debug_options,
-            time_point,
             pixel_ratio,
             renderable_size,
             pixels_to_gl_units,
@@ -181,13 +160,7 @@ impl<'a> PaintParameters<'a> {
             depth_range_size: 1.0,
             opaque_pass_cutoff: 0,
             symbol_fade_change: 0.0,
-            frame_count,
-            tile_lod_min_radius,
-            tile_lod_scale,
-            tile_lod_pitch_threshold,
-            tile_lod_mode,
             scissor_rect,
-            capture_rendered_features,
             custom_layer_frame: None,
         }
     }

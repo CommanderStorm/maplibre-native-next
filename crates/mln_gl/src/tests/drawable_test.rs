@@ -122,8 +122,6 @@ impl PaintParameters for TestPaintParameters<'_> {
 /// it.
 static FIXED_TRIANGLES: ShaderSource = ShaderSource {
     glsl: &GlslShaderSource {
-        built_in: "FixedTriangles",
-        name: "FixedTriangles",
         vertex: r"const vec2 positions[6] = vec2[6](
     vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0),
     vec2(2.0, 2.0), vec2(3.0, 2.0), vec2(2.0, 3.0));

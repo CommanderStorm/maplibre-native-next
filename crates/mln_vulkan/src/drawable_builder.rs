@@ -16,8 +16,8 @@ pub(crate) struct DrawableBuilder {
 
 impl DrawableBuilder {
     #[must_use]
-    pub(crate) fn new(name: String) -> Self {
-        DrawableBuilder { base: DrawableBuilderBase::new(name) }
+    pub(crate) fn new() -> Self {
+        DrawableBuilder { base: DrawableBuilderBase::new() }
     }
 }
 

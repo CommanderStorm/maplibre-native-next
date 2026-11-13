@@ -274,7 +274,7 @@ impl RenderLayer for RenderBackgroundLayer {
             // We actually need to build things, so set up a builder if we
             // haven't already
             let builder = builder.get_or_insert_with(|| {
-                let mut b = context.create_drawable_builder("background".to_owned());
+                let mut b = context.create_drawable_builder();
                 b.set_render_pass(draw_passes);
                 b.set_shader(cur_shader.clone());
                 b.set_depth_type(DepthMaskType::ReadWrite);

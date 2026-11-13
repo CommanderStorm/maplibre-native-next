@@ -365,18 +365,9 @@ pub trait ValueConverter: Sized {
     }
 }
 
-pub(crate) fn to_expression_value<T: ValueConverter>(value: &T) -> Value {
-    value.to_expression_value()
-}
-
 #[must_use]
 pub fn from_expression_value<T: ValueConverter>(value: &Value) -> Option<T> {
     T::from_expression_value(value)
-}
-
-#[must_use]
-pub(crate) fn value_type_to_expression_type<T: ValueConverter>() -> Type {
-    T::expression_type()
 }
 
 #[must_use]

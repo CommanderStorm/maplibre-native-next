@@ -415,6 +415,7 @@ pub(crate) struct Shared {
     debug_utils: Option<ash::ext::debug_utils::Device>,
     surface: Option<ash::khr::surface::Instance>,
     swapchain: Option<ash::khr::swapchain::Device>,
+    #[cfg_attr(not(unix), expect(dead_code, reason = "sync files are Unix's"))]
     semaphore_fd: Option<ash::khr::external_semaphore_fd::Device>,
     #[cfg_attr(not(unix), allow(dead_code))]
     memory_fd: Option<ash::khr::external_memory_fd::Device>,
@@ -1245,6 +1246,7 @@ impl Shared {
         self.android_hardware_buffer.as_ref()
     }
 
+    #[cfg_attr(not(unix), expect(dead_code, reason = "sync files are Unix's"))]
     pub(crate) fn semaphore_fd(&self) -> Option<&ash::khr::external_semaphore_fd::Device> {
         self.semaphore_fd.as_ref()
     }

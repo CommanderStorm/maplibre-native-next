@@ -572,8 +572,8 @@ impl RenderLayer for RenderLineLayer {
             tile_layer_group.set_stencil_tiles(Some(Rc::new(render_tiles.iter().map(|tile| tile.id).collect())));
         }
 
-        let create_line_builder = |name: &str, shader: ShaderProgramBasePtr| -> UniqueDrawableBuilder {
-            let mut builder = context.create_drawable_builder(name.to_owned());
+        let create_line_builder = |shader: ShaderProgramBasePtr| -> UniqueDrawableBuilder {
+            let mut builder = context.create_drawable_builder();
             builder.set_shader(Some(shader));
             builder.set_render_pass(render_pass);
             builder.set_sub_layer_index(0);
@@ -776,7 +776,7 @@ impl RenderLayer for RenderLineLayer {
                     continue;
                 };
 
-                let mut builder = create_line_builder("lineGradientSDF", shader);
+                let mut builder = create_line_builder(shader);
 
                 // vertices and attributes
                 add_attributes(builder.as_mut(), geometry, bucket, vertex_attrs);
@@ -809,7 +809,7 @@ impl RenderLayer for RenderLineLayer {
                     continue;
                 };
 
-                let mut builder = create_line_builder("lineSDF", shader);
+                let mut builder = create_line_builder(shader);
 
                 // vertices, attributes and segments
                 add_attributes(builder.as_mut(), geometry, bucket, vertex_attrs);
@@ -836,7 +836,7 @@ impl RenderLayer for RenderLineLayer {
                     continue;
                 };
 
-                let mut builder = create_line_builder("linePattern", shader);
+                let mut builder = create_line_builder(shader);
 
                 // vertices and attributes
                 add_attributes(builder.as_mut(), geometry, bucket, vertex_attrs);
@@ -881,7 +881,7 @@ impl RenderLayer for RenderLineLayer {
                     continue;
                 };
 
-                let mut builder = create_line_builder("lineGradient", shader);
+                let mut builder = create_line_builder(shader);
 
                 // vertices and attributes
                 add_attributes(builder.as_mut(), geometry, bucket, vertex_attrs);
@@ -914,7 +914,7 @@ impl RenderLayer for RenderLineLayer {
                     continue;
                 };
 
-                let mut builder = create_line_builder("line", shader);
+                let mut builder = create_line_builder(shader);
 
                 // vertices, attributes and segments
                 add_attributes(builder.as_mut(), geometry, bucket, vertex_attrs);

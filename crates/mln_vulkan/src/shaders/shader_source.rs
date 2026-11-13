@@ -50,7 +50,9 @@ use super::glsl_sources;
 #[derive(Debug)]
 pub(crate) struct GlslShaderSource {
     /// The `BuiltIn` enumerator name.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests name the shaders they check by them"))]
     pub(crate) built_in: &'static str,
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests name the shaders they check by them"))]
     pub(crate) name: &'static str,
     /// The shader's own prelude constant (its buffer bindings), "" if none.
     pub(crate) prelude: &'static str,

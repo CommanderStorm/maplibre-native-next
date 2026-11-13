@@ -166,7 +166,6 @@ pub(crate) struct GeometryTileWorker {
     parent: Box<dyn TileEndpoint>,
 
     id: OverscaledTileID,
-    source_id: String,
     obsolete: Arc<AtomicBool>,
     mode: MapMode,
     pixel_ratio: f32,
@@ -212,7 +211,6 @@ impl GeometryTileWorker {
         self_ref: SelfRef,
         parent: Box<dyn TileEndpoint>,
         id: OverscaledTileID,
-        source_id: String,
         obsolete: Arc<AtomicBool>,
         mode: MapMode,
         pixel_ratio: f32,
@@ -225,7 +223,6 @@ impl GeometryTileWorker {
             self_ref,
             parent,
             id,
-            source_id,
             obsolete,
             mode,
             pixel_ratio,

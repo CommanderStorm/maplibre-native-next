@@ -46,6 +46,7 @@ pub(crate) fn as_gl(target: &dyn frame::DrawTarget) -> Option<&DrawTarget> {
 }
 
 /// The resource of `target`, if it is a `T`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn downcast_resource<T: 'static>(target: &dyn frame::DrawTarget) -> Option<&T> {
     let resource: &dyn Any = as_gl(target)?.resource();
     resource.downcast_ref()

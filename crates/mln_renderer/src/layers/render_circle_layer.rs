@@ -673,7 +673,7 @@ impl RenderLayer for RenderCircleLayer {
                 );
             }
 
-            let mut circle_builder = context.create_drawable_builder("circle".to_owned());
+            let mut circle_builder = context.create_drawable_builder();
             circle_builder.set_shader(Some(circle_shader));
             circle_builder.set_depth_type(DepthMaskType::ReadOnly);
             circle_builder.set_color_mode(&ColorMode::alpha_blended());

@@ -2,7 +2,7 @@
 //! WebGL2 through `mln_gl`, for browsers without WebGPU. The build without the
 //! feature has none of this.
 
-pub(crate) use mln_gl::CanvasTarget as Target;
+pub use mln_gl::CanvasTarget as Target;
 use mln_util::image::PremultipliedImage;
 
 // The imports and the private items of map.rs.

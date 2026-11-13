@@ -630,8 +630,8 @@ impl GfxContext for Context {
         VertexAttributeArray::new_ptr()
     }
 
-    fn create_drawable_builder(&self, name: String) -> UniqueDrawableBuilder {
-        Box::new(DrawableBuilder::new(name))
+    fn create_drawable_builder(&self) -> UniqueDrawableBuilder {
+        Box::new(DrawableBuilder::new())
     }
 
     fn create_uniform_buffer(&self, data: &[u8], persistent: bool, _ssbo: bool) -> UniformBufferPtr {

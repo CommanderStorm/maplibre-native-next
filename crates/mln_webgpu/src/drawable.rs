@@ -258,7 +258,7 @@ impl Drawable {
                 // update any existing buffer because it may still be in use
                 // by the previous frame.
                 let resource = upload_pass.create_index_buffer_of(&indexes, usage);
-                let gfx_index_buffer = GfxIndexBuffer::new(indexes.elements(), resource);
+                let gfx_index_buffer = GfxIndexBuffer::new(resource);
                 indexes.set_buffer(Some(Box::new(IndexBuffer { buffer: gfx_index_buffer })));
                 indexes.set_dirty(false);
             }

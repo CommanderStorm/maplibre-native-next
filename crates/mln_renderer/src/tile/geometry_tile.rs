@@ -492,7 +492,6 @@ impl GeometryTile {
         let synchronous = parameters.is_update_synchronous;
         let worker_parameters = WorkerParameters {
             id,
-            source_id: source_id.clone(),
             obsolete: obsolete.clone(),
             mode: parameters.mode,
             pixel_ratio: parameters.pixel_ratio,
@@ -665,6 +664,7 @@ impl Tile for GeometryTile {
         self.inner.pixel_ratio.replace(pixel_ratio) != pixel_ratio
     }
 
+    #[cfg(test)]
     fn set_observer(&self, observer: Rc<dyn TileObserver>) {
         self.inner.base.set_observer(observer);
     }

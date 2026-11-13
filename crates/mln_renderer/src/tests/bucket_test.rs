@@ -403,7 +403,7 @@ fn line_bucket_drawables_build_from_freed_indexes() {
 
     // A layer that rebuilds its drawables for the tile builds the segments
     // from the counts.
-    let mut builder = context.create_drawable_builder("line".to_owned());
+    let mut builder = context.create_drawable_builder();
     builder.set_raw_vertices(vec![0; vertex_count * 4], vertex_count, AttributeDataType::Short2);
     builder.set_segments_shared(
         DrawMode::Triangles(),

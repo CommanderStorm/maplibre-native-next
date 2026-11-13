@@ -221,10 +221,6 @@ pub struct TestMetadata {
     pub(crate) query_geometry_box: ScreenBox,
     pub(crate) query_options: RenderedQueryOptions,
 
-    // TODO
-    pub(crate) fade_duration: u32,
-    pub(crate) add_fake_canvas: bool,
-
     // HTML
     pub id: String,
     pub status: String,
@@ -277,8 +273,6 @@ impl Default for TestMetadata {
             query_geometry: Point::new(0.0, 0.0),
             query_geometry_box: ScreenBox::default(),
             query_options: RenderedQueryOptions::default(),
-            fade_duration: 0,
-            add_fake_canvas: false,
             id: String::new(),
             status: String::new(),
             color: String::new(),

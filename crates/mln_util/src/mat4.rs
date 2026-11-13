@@ -21,6 +21,7 @@
 // 3. This notice may not be removed or altered from any source distribution.
 
 pub type Mat4 = [f64; 16];
+#[cfg(test)]
 pub(crate) type Matf4 = [f32; 16];
 
 /// Matrix operations on `Mat4`.

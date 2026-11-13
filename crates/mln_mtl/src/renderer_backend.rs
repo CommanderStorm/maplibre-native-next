@@ -144,10 +144,6 @@ impl RendererBackend {
         self.impl_.get_device()
     }
 
-    pub(crate) fn get_command_queue(&self) -> &MTLCommandQueuePtr {
-        self.impl_.get_command_queue()
-    }
-
     /// Drops the context, releasing what it caches first
     /// (`Context::release_cached_resources`).
     pub(crate) fn reset_context(&mut self) {

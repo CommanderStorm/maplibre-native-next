@@ -134,17 +134,6 @@ impl BufferResource {
         self.size
     }
 
-    /// A copy of the contents.
-    pub(crate) fn contents(&self) -> Vec<u8> {
-        if let Some(buffer) = self.buffer.borrow().as_ref() {
-            // SAFETY: the buffer is shared memory of `size` bytes, and no
-            // command reading it writes to it.
-            unsafe { std::slice::from_raw_parts(buffer.contents().as_ptr().cast::<u8>(), self.size) }.to_vec()
-        } else {
-            self.raw.borrow().clone()
-        }
-    }
-
     pub(crate) fn get_metal_buffer(&self) -> Option<MTLBufferPtr> {
         self.buffer.borrow().clone()
     }

@@ -93,7 +93,6 @@ pub struct LayerPrepareParameters<'a> {
     pub(crate) image_manager: &'a crate::image_manager::ImageManager,
     pub(crate) pattern_atlas: &'a RefCell<PatternAtlas>,
     pub(crate) line_atlas: &'a RefCell<LineAtlas>,
-    pub(crate) state: &'a TransformState,
 }
 
 #[derive(Clone, Debug, Default)]

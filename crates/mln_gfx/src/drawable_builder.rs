@@ -33,10 +33,6 @@ pub(crate) enum Mode {
     Primitives,
     /// building drawables for thick polylines
     Polylines,
-    /// building drawables for thick polylines using wide vectors in local coordinates
-    WideVectorLocal,
-    /// building drawables for thick polylines using wide vectors in global coordinates
-    WideVectorGlobal,
     /// building custom drawables.
     Custom,
 }
@@ -148,7 +144,6 @@ impl DrawableBuilderImpl {
 
 /// The data members of `gfx::DrawableBuilder`.
 pub struct DrawableBuilderBase {
-    pub(crate) name: String,
     pub drawable_name: String,
     pub vertex_attr_id: usize,
     pub(crate) render_pass: RenderPass,
@@ -174,9 +169,8 @@ pub struct DrawableBuilderBase {
 
 impl DrawableBuilderBase {
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub fn new() -> Self {
         DrawableBuilderBase {
-            name,
             drawable_name: String::new(),
             vertex_attr_id: 0,
             render_pass: RenderPass::Opaque,

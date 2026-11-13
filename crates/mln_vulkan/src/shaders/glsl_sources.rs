@@ -6461,6 +6461,7 @@ void main() {
 };
 
 /// Every specialisation, in the order of the C++ headers.
+#[cfg(test)]
 pub(crate) const ALL: &[&GlslShaderSource] = &[
     &BACKGROUND_SHADER,
     &BACKGROUND_PATTERN_SHADER,

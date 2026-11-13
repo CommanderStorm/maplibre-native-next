@@ -64,8 +64,6 @@
 use super::shader_source::GlslShaderSource;
 
 pub(crate) const ATMOSPHERE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "AtmosphereShader",
-    name: r"AtmosphereShader",
     vertex: r"layout(location = 0) in vec2 a_pos;
 
 layout(std140) uniform AtmospherePropsUBO {
@@ -196,8 +194,6 @@ void main() {
 };
 
 pub(crate) const BACKGROUND_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "BackgroundPatternShader",
-    name: r"BackgroundPatternShader",
     vertex: r"layout (std140) uniform BackgroundPatternDrawableUBO {
     highp mat4 u_matrix;
     highp vec2 u_pixel_coord_upper;
@@ -281,8 +277,6 @@ void main() {
 };
 
 pub(crate) const BACKGROUND_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "BackgroundShader",
-    name: r"BackgroundShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 layout (std140) uniform BackgroundDrawableUBO {
     highp mat4 u_matrix;
@@ -310,8 +304,6 @@ void main() {
 };
 
 pub(crate) const CIRCLE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "CircleShader",
-    name: r"CircleShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 out vec3 v_data;
 
@@ -567,8 +559,6 @@ lowp float stroke_opacity = u_stroke_opacity;
 };
 
 pub(crate) const CLIPPING_MASK_PROGRAM: GlslShaderSource = GlslShaderSource {
-    built_in: "ClippingMaskProgram",
-    name: r"ClippingMaskProgram",
     vertex: r"layout (location = 0) in vec2 a_pos;
 
 #ifdef PROJECTION_GLOBE
@@ -590,8 +580,6 @@ void main() {
 };
 
 pub(crate) const COLLISION_BOX_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "CollisionBoxShader",
-    name: r"CollisionBoxShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 layout (location = 1) in vec2 a_anchor_pos;
 layout (location = 2) in vec2 a_extrude;
@@ -674,8 +662,6 @@ void main() {
 };
 
 pub(crate) const COLLISION_CIRCLE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "CollisionCircleShader",
-    name: r"CollisionCircleShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 layout (location = 1) in vec2 a_anchor_pos;
 layout (location = 2) in vec2 a_extrude;
@@ -796,8 +782,6 @@ void main() {
 };
 
 pub(crate) const COLOR_RELIEF_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "ColorReliefShader",
-    name: r"ColorReliefShader",
     vertex: r"layout(std140) uniform ColorReliefDrawableUBO {
     highp mat4 u_matrix;
 };
@@ -906,8 +890,6 @@ void main() {
 };
 
 pub(crate) const DEBUG_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "DebugShader",
-    name: r"DebugShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 out vec2 v_uv;
 
@@ -948,8 +930,6 @@ void main() {
 };
 
 pub(crate) const FILL_EXTRUSION_INSTANCED_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillExtrusionInstancedShader",
-    name: r"FillExtrusionInstancedShader",
     vertex: r"invariant gl_Position;
 
 // The corner of the wall quad: x picks the instance's outline vertex (0) or
@@ -1095,8 +1075,6 @@ void main() {
 };
 
 pub(crate) const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillExtrusionPatternInstancedShader",
-    name: r"FillExtrusionPatternInstancedShader",
     vertex: r"invariant gl_Position;
 
 // The corner of the wall quad: x picks the instance's outline vertex (0) or
@@ -1342,8 +1320,6 @@ mediump vec4 pattern_to = u_pattern_to;
 };
 
 pub(crate) const FILL_EXTRUSION_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillExtrusionPatternShader",
-    name: r"FillExtrusionPatternShader",
     vertex: r"invariant gl_Position;
 
 layout (location = 0) in vec2 a_pos;
@@ -1577,8 +1553,6 @@ mediump vec4 pattern_to = u_pattern_to;
 };
 
 pub(crate) const FILL_EXTRUSION_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillExtrusionShader",
-    name: r"FillExtrusionShader",
     vertex: r"invariant gl_Position;
 
 layout (location = 0) in vec2 a_pos;
@@ -1712,8 +1686,6 @@ void main() {
 };
 
 pub(crate) const FILL_OUTLINE_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillOutlinePatternShader",
-    name: r"FillOutlinePatternShader",
     vertex: r"layout (std140) uniform GlobalPaintParamsUBO {
     highp vec2 u_pattern_atlas_texsize;
     highp vec2 u_units_to_pixels;
@@ -1916,8 +1888,6 @@ mediump vec4 pattern_to = u_pattern_to;
 };
 
 pub(crate) const FILL_OUTLINE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillOutlineShader",
-    name: r"FillOutlineShader",
     vertex: r"layout (std140) uniform GlobalPaintParamsUBO {
     highp vec2 u_pattern_atlas_texsize;
     highp vec2 u_units_to_pixels;
@@ -2015,8 +1985,6 @@ lowp float opacity = u_opacity;
 };
 
 pub(crate) const FILL_OUTLINE_TRIANGULATED_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillOutlineTriangulatedShader",
-    name: r"FillOutlineTriangulatedShader",
     vertex: r#"// floor(127 / 2) == 63.0
 // the maximum allowed miter limit is 2.0 at the moment. the extrude normal is
 // stored in a byte (-128..127). we scale regular normals up to length 63, but
@@ -2134,8 +2102,6 @@ void main() {
 };
 
 pub(crate) const FILL_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillPatternShader",
-    name: r"FillPatternShader",
     vertex: r"layout (std140) uniform GlobalPaintParamsUBO {
     highp vec2 u_pattern_atlas_texsize;
     highp vec2 u_units_to_pixels;
@@ -2331,8 +2297,6 @@ mediump vec4 pattern_to = u_pattern_to;
 };
 
 pub(crate) const FILL_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "FillShader",
-    name: r"FillShader",
     vertex: r"layout (std140) uniform FillDrawableUBO {
     highp mat4 u_matrix;
     // Interpolations
@@ -2411,8 +2375,6 @@ lowp float opacity = u_opacity;
 };
 
 pub(crate) const GLOBE_DEPTH_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "GlobeDepthShader",
-    name: r"GlobeDepthShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 
 void main() {
@@ -2426,8 +2388,6 @@ void main() {
 };
 
 pub(crate) const HEATMAP_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "HeatmapShader",
-    name: r"HeatmapShader",
     vertex: r#"layout (location = 0) in vec2 a_pos;
 out vec2 v_extrude;
 
@@ -2547,8 +2507,6 @@ highp float weight = u_weight;
 };
 
 pub(crate) const HEATMAP_TEXTURE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "HeatmapTextureShader",
-    name: r"HeatmapTextureShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 out vec2 v_pos;
 
@@ -2604,8 +2562,6 @@ void main() {
 };
 
 pub(crate) const HILLSHADE_PREPARE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "HillshadePrepareShader",
-    name: r"HillshadePrepareShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 layout (location = 1) in vec2 a_texture_pos;
 
@@ -2709,8 +2665,6 @@ void main() {
 };
 
 pub(crate) const HILLSHADE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "HillshadeShader",
-    name: r"HillshadeShader",
     vertex: r"layout (location = 0) in vec2 a_pos;
 layout (location = 1) in vec2 a_texture_pos;
 
@@ -2916,8 +2870,6 @@ void main() {
 };
 
 pub(crate) const LINE_GRADIENT_SDF_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "LineGradientSDFShader",
-    name: r"LineGradientSDFShader",
     vertex: r#"// floor(127 / 2) == 63.0
 // the maximum allowed miter limit is 2.0 at the moment. the extrude normal is
 // stored in a byte (-128..127). we scale regular normals up to length 63, but
@@ -3200,8 +3152,6 @@ lowp float floorwidth = u_floorwidth;
 };
 
 pub(crate) const LINE_GRADIENT_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "LineGradientShader",
-    name: r"LineGradientShader",
     vertex: r#"
 // the attribute conveying progress along a line is scaled to [0, 2^15)
 #define MAX_LINE_DISTANCE 32767.0
@@ -3433,8 +3383,6 @@ lowp float opacity = u_opacity;
 };
 
 pub(crate) const LINE_PATTERN_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "LinePatternShader",
-    name: r"LinePatternShader",
     vertex: r#"// floor(127 / 2) == 63.0
 // the maximum allowed miter limit is 2.0 at the moment. the extrude normal is
 // stored in a byte (-128..127). we scale regular normals up to length 63, but
@@ -3759,8 +3707,6 @@ lowp float opacity = u_opacity;
 };
 
 pub(crate) const LINE_SDF_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "LineSDFShader",
-    name: r"LineSDFShader",
     vertex: r#"// floor(127 / 2) == 63.0
 // the maximum allowed miter limit is 2.0 at the moment. the extrude normal is
 // stored in a byte (-128..127). we scale regular normals up to length 63, but
@@ -4047,8 +3993,6 @@ lowp float floorwidth = u_floorwidth;
 };
 
 pub(crate) const LINE_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "LineShader",
-    name: r"LineShader",
     vertex: r#"// floor(127 / 2) == 63.0
 // the maximum allowed miter limit is 2.0 at the moment. the extrude normal is
 // stored in a byte (-128..127). we scale regular normals up to length 63, but
@@ -4284,8 +4228,6 @@ lowp float opacity = u_opacity;
 };
 
 pub(crate) const PRELUDE: GlslShaderSource = GlslShaderSource {
-    built_in: "Prelude",
-    name: r"Prelude",
     vertex: r"#ifdef GL_ES
 precision highp float;
 #else
@@ -4554,8 +4496,6 @@ bool clippedAtAntimeridian(highp float tileX) {
 };
 
 pub(crate) const RASTER_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "RasterShader",
-    name: r"RasterShader",
     vertex: r"layout (std140) uniform RasterDrawableUBO {
     highp mat4 u_matrix;
 };
@@ -4653,8 +4593,6 @@ void main() {
 };
 
 pub(crate) const SKY_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "SkyShader",
-    name: r"SkyShader",
     vertex: r"layout(location = 0) in vec2 a_pos;
 
 out vec2 v_pos;
@@ -4696,8 +4634,6 @@ void main() {
 };
 
 pub(crate) const SYMBOL_ICON_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "SymbolIconShader",
-    name: r"SymbolIconShader",
     vertex: r"layout (location = 0) in vec4 a_pos_offset;
 layout (location = 1) in vec4 a_data;
 layout (location = 2) in vec4 a_pixeloffset;
@@ -4927,8 +4863,6 @@ lowp float opacity = u_opacity;
 };
 
 pub(crate) const SYMBOL_SDF_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "SymbolSDFShader",
-    name: r"SymbolSDFShader",
     vertex: r"layout (location = 0) in vec4 a_pos_offset;
 layout (location = 1) in vec4 a_data;
 layout (location = 2) in vec4 a_pixeloffset;
@@ -5272,8 +5206,6 @@ lowp float halo_blur = u_halo_blur;
 };
 
 pub(crate) const SYMBOL_TEXT_AND_ICON_SHADER: GlslShaderSource = GlslShaderSource {
-    built_in: "SymbolTextAndIconShader",
-    name: r"SymbolTextAndIconShader",
     vertex: r"layout (location = 0) in vec4 a_pos_offset;
 layout (location = 1) in vec4 a_data;
 layout (location = 2) in vec3 a_projected_pos;

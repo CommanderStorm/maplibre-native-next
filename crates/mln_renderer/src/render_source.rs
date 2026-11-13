@@ -18,7 +18,7 @@ use mln_tile_id::OverscaledTileID;
 use mln_util::constants;
 use mln_util::error::Error;
 
-use crate::image_manager::ImageManager;
+
 use crate::paint_parameters::TransformParameters;
 use crate::render_tile::RenderTile;
 use crate::render_tree::RenderItem;
@@ -32,7 +32,6 @@ use crate::tile_parameters::TileParameters;
 pub(crate) struct SourcePrepareParameters<'a> {
     pub(crate) transform: &'a TransformParameters,
     pub(crate) debug_options: MapDebugOptions,
-    pub(crate) image_manager: &'a ImageManager,
     pub(crate) source_name: String,
 }
 
@@ -134,7 +133,6 @@ impl RenderSourceBase {
 
 pub(crate) trait RenderSource {
     fn base(&self) -> &RenderSourceBase;
-    fn base_mut(&mut self) -> &mut RenderSourceBase;
 
     fn is_loaded(&self) -> bool;
 
@@ -266,10 +264,6 @@ pub(crate) trait RenderSource {
     }
 
     // Non-virtual members of the C++ class.
-
-    fn get_id(&self) -> &str {
-        &self.base().base_impl.id
-    }
 
     fn is_enabled(&self) -> bool {
         self.base().enabled

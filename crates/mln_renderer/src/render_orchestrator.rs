@@ -649,9 +649,7 @@ impl RenderOrchestrator {
         // Create parameters for the render tree.
         let mut render_tree_parameters = Box::new(RenderTreeParameters::new(
             &update_parameters.transform_state,
-            update_parameters.mode,
             update_parameters.debug_options,
-            update_parameters.time_point,
         ));
         // conformance: the RenderTreeParameters ctor's `renderLight.getEvaluated()`.
         render_tree_parameters.light = self.render_light.get_evaluated().clone();
@@ -733,7 +731,7 @@ impl RenderOrchestrator {
                                 source_needs_rendering = true;
                                 let source_id = source_impl.base().id.clone();
                                 layer_render_items.entry(index as u32).or_insert_with(|| {
-                                    LayerRenderItem::new(layer_ptr.clone(), Some(source_id), index as u32)
+                                    LayerRenderItem::new(layer_ptr.clone(), Some(source_id))
                                 });
                                 update_list[index] = true;
                             }
@@ -761,7 +759,7 @@ impl RenderOrchestrator {
                     }
                     layer_render_items
                         .entry(index as u32)
-                        .or_insert_with(|| LayerRenderItem::new(layer_ptr.clone(), None, index as u32));
+                        .or_insert_with(|| LayerRenderItem::new(layer_ptr.clone(), None));
                     update_list[index] = true;
                 }
             }
@@ -806,7 +804,6 @@ impl RenderOrchestrator {
                 render_source.prepare(&SourcePrepareParameters {
                     transform: &render_tree_parameters.transform_params,
                     debug_options: update_parameters.debug_options,
-                    image_manager: &self.image_manager,
                     source_name: name.clone(),
                 });
             } else {
@@ -825,7 +822,6 @@ impl RenderOrchestrator {
                 image_manager: &self.image_manager, // conformance
                 pattern_atlas: &self.pattern_atlas,
                 line_atlas: &self.line_atlas,
-                state: &update_parameters.transform_state,
             });
             if render_layer.needs_placement() {
                 layers_need_placement.push(render_item.layer.clone());

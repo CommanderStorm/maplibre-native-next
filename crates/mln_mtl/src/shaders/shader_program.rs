@@ -97,10 +97,6 @@ impl ShaderProgram {
         }
     }
 
-    pub(crate) fn get_shader_name(&self) -> &str {
-        &self.shader_name
-    }
-
     /// The pipeline state for a pass with `formats`, reused from earlier
     /// calls with the same `reuse_hash`.
     pub(crate) fn get_render_pipeline_state(

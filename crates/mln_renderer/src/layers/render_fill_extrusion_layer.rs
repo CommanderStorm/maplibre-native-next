@@ -194,12 +194,11 @@ fn read_paint_properties(
 /// The builder of a tile's depth pass or color pass drawables.
 fn create_builder(
     context: &dyn Context,
-    name: String,
     shader: &mln_gfx::shaders::shader_program_base::ShaderProgramBasePtr,
     enable_color: bool,
     tweaker: Option<&DrawableTweakerPtr>,
 ) -> UniqueDrawableBuilder {
-    let mut builder = context.create_drawable_builder(name);
+    let mut builder = context.create_drawable_builder();
     builder.set_shader(Some(shader.clone()));
     builder.set_is_3d(true);
     builder.set_enable_color(enable_color);
@@ -400,7 +399,6 @@ impl RenderLayer for RenderFillExtrusionLayer {
             });
         }
 
-        let layer_prefix = format!("{}/", self.get_id());
         let has_pattern = !self.unevaluated.get::<FillExtrusionPattern>().is_undefined();
         let opaque = *evaluated.get::<FillExtrusionOpacity>() >= 1.0;
 
@@ -541,16 +539,15 @@ impl RenderLayer for RenderFillExtrusionLayer {
 
             if do_depth_pass && depth_builder.is_none() {
                 depth_builder =
-                    Some(create_builder(context, format!("{layer_prefix}depth"), &shader, false, tweaker.as_ref()));
+                    Some(create_builder(context, &shader, false, tweaker.as_ref()));
             }
             if color_builder.is_none() {
                 color_builder =
-                    Some(create_builder(context, format!("{layer_prefix}color"), &shader, true, tweaker.as_ref()));
+                    Some(create_builder(context, &shader, true, tweaker.as_ref()));
             }
             if do_depth_pass && instanced_depth_builder.is_none() {
                 instanced_depth_builder = Some(create_builder(
                     context,
-                    format!("{layer_prefix}depthInstanced"),
                     &instanced_shader,
                     false,
                     tweaker.as_ref(),
@@ -559,7 +556,6 @@ impl RenderLayer for RenderFillExtrusionLayer {
             if instanced_color_builder.is_none() {
                 instanced_color_builder = Some(create_builder(
                     context,
-                    format!("{layer_prefix}colorInstanced"),
                     &instanced_shader,
                     true,
                     tweaker.as_ref(),

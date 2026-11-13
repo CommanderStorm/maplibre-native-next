@@ -34,7 +34,7 @@ mod map;
 
 use std::time::Duration;
 
-pub(crate) use map::{WebMap, set_preloads};
+pub use map::{WebMap, set_preloads};
 use mln_util::logging::{Event, EventSeverity, Log, Observer};
 use mln_util::time::Instant;
 use wasm_bindgen::prelude::*;

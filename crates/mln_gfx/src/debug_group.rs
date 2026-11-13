@@ -4,19 +4,3 @@ pub trait DebugGroupTarget {
     fn push_debug_group(&self, name: &str);
     fn pop_debug_group(&self);
 }
-
-/// A debug group, pushed on creation and popped on drop.
-pub(crate) struct DebugGroup<'a> {
-    target: Option<&'a dyn DebugGroupTarget>,
-}
-
-impl<'a> DebugGroup<'a> {
-}
-
-impl Drop for DebugGroup<'_> {
-    fn drop(&mut self) {
-        if let Some(target) = self.target.take() {
-            target.pop_debug_group();
-        }
-    }
-}

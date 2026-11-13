@@ -11,35 +11,13 @@ use crate::shaders::shader_defines::MAX_ATTRIBUTE_COUNT_PER_SHADER;
 use crate::vertex_buffer::UniqueVertexBufferResource;
 use crate::vertex_vector::VertexVectorBasePtr;
 
-/// The value of one vertex attribute element, in C++'s variant order.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum ElementType {
-    Int(i32),
-    UShort8([u16; 8]),
-    Int2([i32; 2]),
-    Int3([i32; 3]),
-    Int4([i32; 4]),
-    Float(f32),
-    Float2([f32; 2]),
-    Float3([f32; 3]),
-    Float4([f32; 4]),
-    MatF3([f32; 9]),
-    MatF4([f32; 16]),
-}
-
-impl Default for ElementType {
-    /// A value-initialized variant holds its first alternative.
-    fn default() -> Self {
-        ElementType::Int(0)
-    }
-}
-
 pub struct VertexAttribute {
     index: i32,
     stride: usize,
     dirty: Cell<bool>,
     data_type: AttributeDataType,
-    items: Vec<ElementType>,
+    /// The number of elements, without shared raw data.
+    count: usize,
     raw_data: Vec<u8>,
     shared_raw_data: Option<VertexVectorBasePtr>,
     shared_type: AttributeDataType,
@@ -57,7 +35,7 @@ impl VertexAttribute {
             stride,
             dirty: Cell::new(true),
             data_type,
-            items: vec![ElementType::default(); count],
+            count,
             raw_data: Vec::new(),
             shared_raw_data: None,
             shared_type: AttributeDataType::Invalid,
@@ -106,7 +84,7 @@ impl VertexAttribute {
     pub(crate) fn get_count(&self) -> usize {
         match &self.shared_raw_data {
             Some(shared) => shared.get_raw_count(),
-            None => self.items.len(),
+            None => self.count,
         }
     }
 

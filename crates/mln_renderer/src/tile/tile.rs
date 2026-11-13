@@ -132,6 +132,7 @@ impl TileBase {
         self.observer.borrow().clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn set_observer(&self, observer: Rc<dyn TileObserver>) {
         *self.observer.borrow_mut() = observer;
     }
@@ -198,6 +199,7 @@ pub(crate) trait Tile: Any {
 
     fn create_render_data(&self) -> Box<dyn TileRenderData>;
 
+    #[cfg(test)]
     fn set_observer(&self, observer: Rc<dyn TileObserver>) {
         self.base().set_observer(observer);
     }
@@ -294,10 +296,6 @@ pub(crate) trait Tile: Any {
 
     fn id(&self) -> OverscaledTileID {
         self.base().id()
-    }
-
-    fn set_tried_cache(&self) {
-        self.base().set_tried_cache();
     }
 
     fn has_tried_cache(&self) -> bool {

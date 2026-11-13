@@ -8,7 +8,6 @@ pub(crate) struct RenderStaticData {
     pub(crate) has_3d: bool,
     pub(crate) uploaded: std::cell::Cell<bool>,
     pub(crate) shaders: Box<ShaderRegistry>,
-    pub(crate) clipping_mask_segments: Vec<SegmentBase>,
 }
 
 impl RenderStaticData {
@@ -18,7 +17,6 @@ impl RenderStaticData {
             has_3d: false,
             uploaded: std::cell::Cell::new(false),
             shaders,
-            clipping_mask_segments: Self::tile_triangle_segments(),
         }
     }
 

@@ -15,9 +15,11 @@ use crate::image::{ImageType, UNSUPPORTED, image_type};
 pub(crate) type DecodeResult = Result<PremultipliedImage, Error>;
 
 /// Where a decoder's result goes.
+#[cfg(target_family = "wasm")]
 pub(crate) type DecodeDone = Box<dyn FnOnce(DecodeResult)>;
 
 /// A platform's image decoder.
+#[cfg(target_family = "wasm")]
 pub(crate) trait ImageDecoder: Send + Sync {
     /// Decodes `data`, an image of type `kind`, as `decode_image` does
     /// (premultiplied RGBA8, a WebP that can't be decoded an empty image),

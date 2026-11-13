@@ -4,14 +4,12 @@
 // `VecMap<u32, LayerRenderItem>`.
 
 use mln_gfx::{LayerGroupBasePtr, UploadPass}; // layers: debug
-use mln_map_types::{MapDebugOptions, MapMode, TransformState};
+use mln_map_types::{MapDebugOptions, TransformState};
 use mln_util::Color;
-use mln_util::time::Instant;
 use mln_vec_map::VecMap;
 
 use crate::paint_parameters::{PaintParameters, TransformParameters};
 use crate::render_layer::RenderLayerPtr;
-use crate::render_pass::RenderPass; // layers: debug
 
 /// The kinds of debug drawables (layers: debug).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -28,9 +26,6 @@ pub(crate) type DebugLayerGroupMap = VecMap<DebugType, LayerGroupBasePtr>;
 /// `LayerRenderItem`.
 pub(crate) trait RenderItem {
     fn upload(&self, upload_pass: &dyn UploadPass);
-    fn render(&self, _parameters: &mut PaintParameters<'_>) {}
-    fn has_render_pass(&self, pass: RenderPass) -> bool;
-    fn get_name(&self) -> &str;
     /// Updates the item's debug drawables; a no-op for the items that have
     /// none (`LayerRenderItem`, the image source). The orchestrator gives
     /// each debug layer group its tweaker (layers: debug).
@@ -43,21 +38,17 @@ pub(crate) struct LayerRenderItem {
     /// The id of the orchestrator's render source, `None` for layers without
     /// a source.
     pub(crate) source: Option<String>,
-    pub(crate) index: u32,
 }
 
 impl LayerRenderItem {
-    pub(crate) fn new(layer: RenderLayerPtr, source: Option<String>, index: u32) -> Self {
-        LayerRenderItem { layer, source, index }
+    pub(crate) fn new(layer: RenderLayerPtr, source: Option<String>) -> Self {
+        LayerRenderItem { layer, source }
     }
 }
 
 pub(crate) struct RenderTreeParameters {
     pub(crate) transform_params: TransformParameters,
-    pub(crate) map_mode: MapMode,
     pub(crate) debug_options: MapDebugOptions,
-    /// As in [`UpdateParameters::time_point`](crate::update_parameters::UpdateParameters::time_point).
-    pub(crate) time_point: Option<Instant>,
     /// conformance: `EvaluatedLight light`.
     pub(crate) light: crate::render_light::EvaluatedLight,
     pub(crate) sky: Option<crate::render_sky::EvaluatedSky>,
@@ -74,15 +65,11 @@ pub(crate) struct RenderTreeParameters {
 impl RenderTreeParameters {
     pub(crate) fn new(
         state: &TransformState,
-        map_mode: MapMode,
         debug_options: MapDebugOptions,
-        time_point: Option<Instant>,
     ) -> Self {
         RenderTreeParameters {
             transform_params: TransformParameters::new(state),
-            map_mode,
             debug_options,
-            time_point,
             light: crate::render_light::EvaluatedLight::default(),
             sky: None,
             has_3d: false,

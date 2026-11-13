@@ -31,10 +31,10 @@ use mln_style::layer::downcast_arc;
 use mln_style::layer_properties::{LayerProperties, get_evaluated};
 use mln_style::layers::symbol_layer_impl::{Impl as SymbolLayerImpl, SymbolLayerPaintPropertyOverrides};
 use mln_style::layers::symbol_layer_properties::{
-    IconColor, IconHaloBlur, IconHaloColor, IconHaloWidth, IconKeepUpright, IconOffset, IconOpacity,
+    IconColor, IconHaloBlur, IconHaloColor, IconHaloWidth, IconOffset, IconOpacity,
     IconPitchAlignment, IconRotationAlignment, IconSize, IconTextFit, IconTranslate, IconTranslateAnchor,
     SymbolLayerProperties, SymbolLayoutProperties, SymbolPaintProperties, SymbolPlacement, SymbolScreenSpace,
-    SymbolSortKey, TextColor, TextField, TextHaloBlur, TextHaloColor, TextHaloWidth, TextKeepUpright, TextOpacity,
+    SymbolSortKey, TextColor, TextField, TextHaloBlur, TextHaloColor, TextHaloWidth, TextOpacity,
     TextPitchAlignment, TextRotationAlignment, TextTranslate, TextTranslateAnchor,
 };
 use mln_style::properties::Property;
@@ -92,11 +92,8 @@ pub(crate) enum SymbolType {
 pub(crate) struct SymbolPropertyValues {
     pub(crate) pitch_alignment: AlignmentType,
     pub(crate) rotation_alignment: AlignmentType,
-    pub(crate) keep_upright: bool,
     pub(crate) translate: [f32; 2],
     pub(crate) translate_anchor: TranslateAnchorType,
-    pub(crate) has_halo: bool,
-    pub(crate) has_fill: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -142,12 +139,8 @@ pub(crate) fn icon_property_values(
     SymbolPropertyValues {
         pitch_alignment: *layout.get::<IconPitchAlignment>(),
         rotation_alignment: *layout.get::<IconRotationAlignment>(),
-        keep_upright: *layout.get::<IconKeepUpright>(),
         translate: *evaluated.get::<IconTranslate>(),
         translate_anchor: *evaluated.get::<IconTranslateAnchor>(),
-        has_halo: evaluated.get::<IconHaloColor>().constant_or(&Color::black()).a > 0.0
-            && evaluated.get::<IconHaloWidth>().constant_or(&1.0) != 0.0,
-        has_fill: evaluated.get::<IconColor>().constant_or(&Color::black()).a > 0.0,
     }
 }
 
@@ -159,12 +152,8 @@ pub(crate) fn text_property_values(
     SymbolPropertyValues {
         pitch_alignment: *layout.get::<TextPitchAlignment>(),
         rotation_alignment: *layout.get::<TextRotationAlignment>(),
-        keep_upright: *layout.get::<TextKeepUpright>(),
         translate: *evaluated.get::<TextTranslate>(),
         translate_anchor: *evaluated.get::<TextTranslateAnchor>(),
-        has_halo: evaluated.get::<TextHaloColor>().constant_or(&Color::black()).a > 0.0
-            && evaluated.get::<TextHaloWidth>().constant_or(&1.0) != 0.0,
-        has_fill: evaluated.get::<TextColor>().constant_or(&Color::black()).a > 0.0,
     }
 }
 
@@ -942,7 +931,7 @@ impl RenderSymbolLayer {
         let suffix = if is_text { "text/" } else { "icon/" };
         let layer_collision_prefix = format!("{}-collision/", self.get_id());
 
-        let mut collision_builder = context.create_drawable_builder(layer_collision_prefix.clone());
+        let mut collision_builder = context.create_drawable_builder();
         collision_builder.set_sub_layer_index(0);
         collision_builder.set_enable_depth(false);
         collision_builder.set_render_pass(passes);
@@ -1622,7 +1611,7 @@ impl RenderLayer for RenderSymbolLayer {
                 }
 
                 let builder = builder.get_or_insert_with(|| {
-                    let mut builder = context.create_drawable_builder(layer_prefix.clone());
+                    let mut builder = context.create_drawable_builder();
                     builder.set_sub_layer_index(0);
                     builder.set_render_pass(passes);
                     builder.set_cull_face_mode(&CullFaceMode::disabled());

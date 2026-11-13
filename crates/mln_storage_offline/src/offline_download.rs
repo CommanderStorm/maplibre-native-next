@@ -12,7 +12,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+#[cfg(test)]
+use std::rc::Weak;
 use std::sync::Arc;
 
 use feature::Value;
@@ -177,11 +179,13 @@ pub struct OfflineDownload {
 
 /// A weak reference to an `OfflineDownload` (for observers that call back
 /// into it, as C++ observers capture the download by reference).
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct WeakOfflineDownload {
     inner: Weak<Inner>,
 }
 
+#[cfg(test)]
 impl WeakOfflineDownload {
     /// Sets the download's state, if the download still exists.
     #[cfg(test)]

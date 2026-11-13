@@ -3,8 +3,11 @@
 // too large for 64 bits).
 
 use mln_util::error::Error;
-use mln_util::geo::{LatLng, LatLngBounds};
+#[cfg(any(test, feature = "sqlite"))]
+use mln_util::geo::LatLng;
+use mln_util::geo::LatLngBounds;
 use mln_util::geometry::Geometry;
+#[cfg(any(test, feature = "sqlite"))]
 use serde_json::{Map, Value as Json};
 
 use crate::response::ResourceError;
@@ -172,6 +175,7 @@ impl OfflineRegionDefinition {
 /// Decodes a region definition from JSON. A definition that isn't one fails
 /// with [`ErrorKind::Native`](mln_util::ErrorKind), and one
 /// with invalid values with the constructors' error.
+#[cfg(any(test, feature = "sqlite"))]
 pub(crate) fn decode_offline_region_definition(region: &[u8]) -> Result<OfflineRegionDefinition, Error> {
     let malformed = || Error::native("Malformed offline region definition");
 
@@ -242,6 +246,7 @@ pub(crate) fn decode_offline_region_definition(region: &[u8]) -> Result<OfflineR
     }
 }
 
+#[cfg(any(test, feature = "sqlite"))]
 #[must_use]
 pub(crate) fn encode_offline_region_definition(region: &OfflineRegionDefinition) -> String {
     let mut json = Map::new();

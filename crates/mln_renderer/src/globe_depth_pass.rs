@@ -101,7 +101,7 @@ impl GlobeDepthPass {
                 continue;
             }
             let builder = builder.get_or_insert_with(|| {
-                let mut builder = context.create_drawable_builder("globe-depth".to_owned());
+                let mut builder = context.create_drawable_builder();
                 builder.set_shader(self.shader.clone());
                 builder.set_render_pass(RenderPass::Translucent);
                 builder.set_is_3d(true);

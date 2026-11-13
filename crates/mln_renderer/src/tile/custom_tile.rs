@@ -209,6 +209,7 @@ impl<D: Clone + Send + 'static> Tile for CustomTile<D> {
         self.tile.create_render_data()
     }
 
+    #[cfg(test)]
     fn set_observer(&self, observer: Rc<dyn TileObserver>) {
         self.tile.set_observer(observer);
     }

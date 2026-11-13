@@ -403,7 +403,7 @@ impl RenderLayer for RenderHillshadeLayer {
                     Rc::downgrade(&prepare_layer_tweaker),
                 ));
 
-                let mut hillshade_prepare_builder = context.create_drawable_builder("hillshadePrepare".to_owned());
+                let mut hillshade_prepare_builder = context.create_drawable_builder();
                 hillshade_prepare_builder.set_shader(Some(hillshade_prepare_shader.clone()));
                 hillshade_prepare_builder.set_depth_type(DepthMaskType::ReadOnly);
                 hillshade_prepare_builder.set_color_mode(&ColorMode::unblended());
@@ -524,7 +524,7 @@ impl RenderLayer for RenderHillshadeLayer {
                 continue;
             }
 
-            let mut hillshade_builder = context.create_drawable_builder("hillshade".to_owned());
+            let mut hillshade_builder = context.create_drawable_builder();
             hillshade_builder.set_shader(Some(hillshade_shader.clone()));
             hillshade_builder.set_enable_depth(false);
             hillshade_builder.set_color_mode(&ColorMode::alpha_blended());

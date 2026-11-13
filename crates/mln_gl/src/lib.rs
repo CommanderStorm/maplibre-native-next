@@ -91,7 +91,7 @@ pub use renderer_backend::RendererBackend;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub use surface_target::SurfaceTarget;
 #[cfg(windows)]
-pub(crate) use wgl_surface_target::SurfaceTarget;
+pub use wgl_surface_target::SurfaceTarget;
 
 #[cfg(test)]
 mod tests;

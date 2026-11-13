@@ -128,7 +128,6 @@ fn exec(conn: &Connection, sql: &str) -> Result<(), SqliteError> {
 pub(crate) enum TransactionMode {
     Deferred,
     Immediate,
-    Exclusive,
 }
 
 /// A transaction that rolls back on drop unless committed or rolled back.
@@ -143,7 +142,6 @@ impl Transaction {
         let sql = match mode {
             TransactionMode::Deferred => "BEGIN DEFERRED TRANSACTION",
             TransactionMode::Immediate => "BEGIN IMMEDIATE TRANSACTION",
-            TransactionMode::Exclusive => "BEGIN EXCLUSIVE TRANSACTION",
         };
         // C++ throws from the constructor: no destructor, no rollback.
         db.exec(sql)?;

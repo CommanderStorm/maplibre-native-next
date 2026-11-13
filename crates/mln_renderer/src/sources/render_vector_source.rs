@@ -85,10 +85,6 @@ impl RenderSource for RenderVectorSource {
         &self.tile_source.base
     }
 
-    fn base_mut(&mut self) -> &mut RenderSourceBase {
-        &mut self.tile_source.base
-    }
-
     fn is_loaded(&self) -> bool {
         self.tile_source.is_loaded()
     }

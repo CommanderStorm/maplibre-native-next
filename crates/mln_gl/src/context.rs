@@ -187,6 +187,7 @@ impl Context {
         self.weak_self.clone()
     }
 
+    #[cfg(all(unix, not(target_vendor = "apple")))]
     pub(crate) fn get_backend(&self) -> &Rc<BackendImpl> {
         &self.backend
     }
@@ -346,6 +347,7 @@ impl Context {
         self.abandoned.borrow_mut().framebuffers.push(framebuffer);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn abandon_renderbuffer(&self, renderbuffer: RenderbufferID) {
         self.abandoned.borrow_mut().renderbuffers.push(renderbuffer);
     }
@@ -868,8 +870,8 @@ impl GfxContext for Context {
         VertexAttributeArray::new_ptr()
     }
 
-    fn create_drawable_builder(&self, name: String) -> UniqueDrawableBuilder {
-        Box::new(DrawableBuilder::new(name))
+    fn create_drawable_builder(&self) -> UniqueDrawableBuilder {
+        Box::new(DrawableBuilder::new())
     }
 
     fn create_uniform_buffer(&self, data: &[u8], _persistent: bool, ssbo: bool) -> UniformBufferPtr {

@@ -375,7 +375,6 @@ impl RenderLayer for RenderFillLayer {
         let mut pattern_builder: Option<UniqueDrawableBuilder> = None;
         let mut outline_pattern_builder: Option<UniqueDrawableBuilder> = None;
 
-        let layer_prefix = format!("{}/", self.get_id());
         let render_pass = RenderPass::Translucent;
 
         let common_init = |builder: &mut dyn DrawableBuilder| {
@@ -579,7 +578,7 @@ impl RenderLayer for RenderFillLayer {
                 };
 
                 if fill_builder.is_none() && fill_shader.is_some() {
-                    let mut builder = context.create_drawable_builder(format!("{layer_prefix}fill"));
+                    let mut builder = context.create_drawable_builder();
                     // Only write opaque fills to the depth buffer, matching
                     // `fillRenderPass` in legacy rendering
                     let opaque = evaluated.get::<FillColor>().constant_or(&Color::default()).a >= 1.0
@@ -593,7 +592,7 @@ impl RenderLayer for RenderFillLayer {
                     fill_builder = Some(builder);
                 }
                 if do_outline && outline_builder.is_none() && outline_shader.is_some() {
-                    let mut builder = context.create_drawable_builder(format!("{layer_prefix}fill-outline"));
+                    let mut builder = context.create_drawable_builder();
                     common_init(builder.as_mut());
                     builder.set_depth_type(DepthMaskType::ReadOnly);
                     builder.set_line_width(LINE_WIDTH);
@@ -703,7 +702,7 @@ impl RenderLayer for RenderFillLayer {
                     });
 
                 if pattern_builder.is_none() {
-                    let mut builder = context.create_drawable_builder(format!("{layer_prefix}fill-pattern"));
+                    let mut builder = context.create_drawable_builder();
                     common_init(builder.as_mut());
                     builder.set_shader(fill_shader.clone());
                     builder.set_depth_type(DepthMaskType::ReadWrite);
@@ -713,7 +712,7 @@ impl RenderLayer for RenderFillLayer {
                     pattern_builder = Some(builder);
                 }
                 if do_outline && outline_pattern_builder.is_none() {
-                    let mut builder = context.create_drawable_builder(format!("{layer_prefix}fill-outline-pattern"));
+                    let mut builder = context.create_drawable_builder();
                     common_init(builder.as_mut());
                     builder.set_shader(outline_shader.clone());
                     builder.set_line_width(LINE_WIDTH);

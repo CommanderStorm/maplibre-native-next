@@ -43,11 +43,6 @@ impl UploadPass {
         UploadPass { context: command_encoder.get_context().clone() }
     }
 
-    #[must_use]
-    pub(crate) fn mtl_context(&self) -> &Rc<Context> {
-        &self.context
-    }
-
     fn create_vertex_buffer(&self, data: &[u8], persistent: bool) -> Rc<VertexBufferResource> {
         Rc::new(VertexBufferResource::new(self.context.create_buffer(Some(data), data.len(), false, persistent)))
     }

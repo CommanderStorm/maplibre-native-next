@@ -186,14 +186,6 @@ impl RenderPass {
         pass
     }
 
-    pub(crate) fn get_context(&self) -> &Rc<Context> {
-        &self.context
-    }
-
-    pub(crate) fn get_command_buffer(&self) -> Option<&MTLCommandBufferPtr> {
-        self.command_buffer.as_ref()
-    }
-
     pub(crate) fn get_metal_encoder(&self) -> Option<MTLRenderCommandEncoderPtr> {
         self.encoder.borrow().clone()
     }

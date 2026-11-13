@@ -93,14 +93,6 @@ impl RenderItem for TileSourceRenderItem {
         }
     }
 
-    fn has_render_pass(&self, _pass: RenderPass) -> bool {
-        false
-    }
-
-    fn get_name(&self) -> &str {
-        &self.name
-    }
-
     // layers: debug
     //
     // C++ draws the text with the DebugShader as line primitives of 2 and 4
@@ -153,7 +145,7 @@ impl RenderItem for TileSourceRenderItem {
                                          options: &PolylineGeneratorOptions,
                                          data: Option<Box<dyn Any>>| {
             let builder = polyline_builder.get_or_insert_with(|| {
-                let mut builder = context.create_drawable_builder("debug-polyline-builder".to_owned());
+                let mut builder = context.create_drawable_builder();
                 builder.set_shader(Some(polyline_shader.clone()));
                 builder.set_render_pass(render_pass);
                 builder.set_enable_depth(false);

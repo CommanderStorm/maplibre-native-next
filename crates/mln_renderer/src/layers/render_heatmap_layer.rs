@@ -466,7 +466,7 @@ impl RenderLayer for RenderHeatmapLayer {
                 );
             }
 
-            let mut heatmap_builder = context.create_drawable_builder("heatmap".to_owned());
+            let mut heatmap_builder = context.create_drawable_builder();
             heatmap_builder.set_shader(heatmap_shader.clone());
             heatmap_builder.set_enable_depth(false);
             heatmap_builder.set_color_mode(&ColorMode::additive());
@@ -552,7 +552,7 @@ impl RenderLayer for RenderHeatmapLayer {
             );
         }
 
-        let mut heatmap_texture_builder = context.create_drawable_builder("heatmapTexture".to_owned());
+        let mut heatmap_texture_builder = context.create_drawable_builder();
         heatmap_texture_builder.set_shader(Some(heatmap_texture_shader));
         heatmap_texture_builder.set_enable_depth(false);
         heatmap_texture_builder.set_color_mode(&ColorMode::alpha_blended());

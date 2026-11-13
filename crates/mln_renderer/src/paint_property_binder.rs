@@ -802,6 +802,7 @@ macro_rules! paint_property_binders {
                 // copies the vector when it builds drawables.
             }
 
+            #[allow(dead_code, reason = "the heatmap bucket doesn't rewrite its vertices on a feature state change")]
             pub fn update_vertex_vectors(
                 &mut self,
                 states: &$crate::bucket::FeatureStates,

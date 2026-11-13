@@ -54,8 +54,6 @@ pub(crate) struct Face {
     /// The scale from font units to 26.6 pixels at the current size (16.16).
     pub(crate) x_scale: i64,
     pub(crate) y_scale: i64,
-    /// Offset of the SFNT header (non-zero in a collection).
-    pub(crate) sfnt_offset: usize,
     /// FreeType would add a synthesized Unicode charmap (not ported).
     pub(crate) needs_synthesized_charmap: bool,
 }
@@ -147,7 +145,6 @@ impl Face {
             charmap: None,
             x_scale: 0,
             y_scale: 0,
-            sfnt_offset,
             needs_synthesized_charmap: false,
         };
         if !is_tt && face.lookup(tag(*b"CFF ")).is_none() && face.lookup(tag(*b"CFF2")).is_none() {

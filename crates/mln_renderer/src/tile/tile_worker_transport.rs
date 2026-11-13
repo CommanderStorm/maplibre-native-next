@@ -51,7 +51,6 @@ use crate::tile::raster_tile::{RasterTileInner, RasterTileMessage, RasterTileWor
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WorkerParameters {
     pub(crate) id: OverscaledTileID,
-    pub(crate) source_id: String,
     /// Set by the tile when it no longer needs the worker's results.
     #[serde(skip)]
     pub(crate) obsolete: Arc<AtomicBool>,
@@ -150,7 +149,6 @@ impl TileWorkerTransport for InProcessTransport {
     fn create(&self, parameters: WorkerParameters, tile: Box<dyn TileEndpoint>) -> Box<dyn WorkerEndpoint> {
         let WorkerParameters {
             id,
-            source_id,
             obsolete,
             mode,
             pixel_ratio,
@@ -165,7 +163,6 @@ impl TileWorkerTransport for InProcessTransport {
                 self_ref,
                 tile,
                 id,
-                source_id,
                 obsolete,
                 mode,
                 pixel_ratio,

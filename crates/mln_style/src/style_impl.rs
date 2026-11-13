@@ -1032,36 +1032,6 @@ impl Drop for LightRefMut<'_> {
     }
 }
 
-/// The mutable sky of a style; notifies the style when dropped (see
-/// `Impl::get_sky_mut`).
-pub(crate) struct SkyRefMut<'a> {
-    sky: &'a mut Sky,
-    before: Arc<sky::Impl>,
-    /// The style's observer, which `Impl::on_sky_changed` notifies.
-    observer: Rc<dyn Observer>,
-}
-
-impl std::ops::Deref for SkyRefMut<'_> {
-    type Target = Sky;
-    fn deref(&self) -> &Sky {
-        self.sky
-    }
-}
-
-impl std::ops::DerefMut for SkyRefMut<'_> {
-    fn deref_mut(&mut self) -> &mut Sky {
-        self.sky
-    }
-}
-
-impl Drop for SkyRefMut<'_> {
-    fn drop(&mut self) {
-        if !Arc::ptr_eq(&self.before, &self.sky.impl_) {
-            self.observer.on_update();
-        }
-    }
-}
-
 /// The mutable projection of a style; notifies the style when dropped (see
 /// `Impl::get_projection_mut`).
 pub struct ProjectionRefMut<'a> {

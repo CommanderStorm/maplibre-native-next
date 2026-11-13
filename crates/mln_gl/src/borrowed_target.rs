@@ -472,7 +472,7 @@ impl HostSurface {
     /// the device whose targets present to it wraps, and it outlives them.
     #[cfg(windows)]
     #[must_use]
-    pub(crate) unsafe fn from_hdc(dc: std::ptr::NonNull<std::ffi::c_void>) -> HostSurface {
+    pub unsafe fn from_hdc(dc: std::ptr::NonNull<std::ffi::c_void>) -> HostSurface {
         HostSurface(SurfaceHandle::Wgl(dc.as_ptr()))
     }
 }

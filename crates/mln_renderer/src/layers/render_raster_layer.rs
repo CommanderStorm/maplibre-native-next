@@ -186,7 +186,7 @@ impl RenderRasterLayer {
         // Create a drawable for each tile the image is drawn in
         // TODO: Share textures
         for tile_id in &image_data.tile_ids {
-            let mut builder = context.create_drawable_builder("raster".to_owned());
+            let mut builder = context.create_drawable_builder();
             builder.set_shader(raster_shader.cloned());
             builder.set_render_pass(RenderPass::Translucent);
             builder.set_sub_layer_index(0);
@@ -537,7 +537,7 @@ impl RenderLayer for RenderRasterLayer {
             }
 
             // Otherwise, create new ones.
-            let mut builder = context.create_drawable_builder("raster".to_owned());
+            let mut builder = context.create_drawable_builder();
             builder.set_shader(raster_shader.clone());
             builder.set_render_pass(render_pass);
             builder.set_sub_layer_index(0);

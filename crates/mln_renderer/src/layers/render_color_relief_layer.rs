@@ -584,7 +584,7 @@ impl RenderLayer for RenderColorReliefLayer {
                 continue;
             }
 
-            let mut builder = context.create_drawable_builder("colorRelief".to_owned());
+            let mut builder = context.create_drawable_builder();
             builder.set_shader(Some(color_relief_shader.clone()));
             builder.set_enable_depth(false);
             builder.set_color_mode(&ColorMode::alpha_blended());
