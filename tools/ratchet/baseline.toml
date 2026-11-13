@@ -3,7 +3,7 @@
 # in the change that needs it.
 
 [panic]
-"crates/mln_actor/src/scheduler.rs" = 1
+"crates/mln_actor/src/scheduler.rs" = 2
 "crates/mln_actor/src/thread.rs" = 2
 "crates/mln_actor/src/thread_pool.rs" = 1
 "crates/mln_conversion/src/get_json_type.rs" = 1
