@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_map_types::{MapDebugOptions, MapMode, TileLodMode};
+use mln_map_types::{MapDebugOptions, MapMode, TileLodMode, VerticalPerspectiveProjection};
 use mln_style::layer::layer_type_info;
 use mln_style::layer_properties::LayerProperties;
 use mln_style::source;
@@ -16,6 +16,7 @@ use mln_tile_id::{OverscaledTileID, UnwrappedTileID};
 use mln_util::constants;
 use mln_util::geo::{LatLngBounds, WrapMode};
 use mln_util::logging::{Event, Log};
+use mln_util::projection::Projection;
 use mln_util::range::Range;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
@@ -24,7 +25,18 @@ use crate::tile::tile::{Tile, TileLoadOrder, TileNecessity, TileUpdateParameters
 use crate::tile::tile_cache::TileCache;
 use crate::tile::tile_observer::{NullTileObserver, TileObserver};
 use crate::tile_parameters::TileParameters;
-use crate::util::tile_cover::{TileCoverParameters, covering_zoom_level, tile_cover};
+use crate::util::tile_cover::{TileCoverParameters, covering_zoom_level, globe_level_cover, tile_cover};
+
+/// The coarsest zoom a source can start at and still have its whole first
+/// level kept loaded on the globe: four tiles, no more than a view's prefetch
+/// cover holds.
+const GLOBE_BASE_LEVEL_MAX_ZOOM: u8 = 1;
+
+/// The largest planet, as its radius over the viewport's longer side, whose
+/// base level is kept loaded. Up to here that side spans about 29 degrees of
+/// arc or more, so a fling across a few view widths reaches ground that no
+/// tile loaded for the view covers.
+const GLOBE_BASE_LEVEL_MAX_RADIUS: f64 = 2.0;
 
 pub(crate) struct TilePyramid {
     tiles: BTreeMap<OverscaledTileID, Box<dyn Tile>>,
@@ -73,7 +85,21 @@ where
     F: FnMut(&OverscaledTileID, Rc<dyn TileObserver>) -> Option<Box<dyn Tile>>,
 {
     fn get_tile(&mut self, id: &OverscaledTileID) -> Option<OverscaledTileID> {
-        self.tiles.contains_key(id).then_some(*id)
+        if self.tiles.contains_key(id) {
+            return Some(*id);
+        }
+        // On the globe every wrap of a tile is the same piece of the sphere,
+        // and the cover gives the tiles either side of the antimeridian
+        // different wraps: a tile there finds its parent under the wrap of
+        // the tiles on the other side. The cover's wraps are at most two
+        // apart.
+        if self.finds_tiles_across_wraps() {
+            return [-1, 1, -2, 2]
+                .into_iter()
+                .map(|delta| id.unwrap_to(id.wrap.wrapping_add(delta)))
+                .find(|other| self.tiles.contains_key(other));
+        }
+        None
     }
 
     fn create_tile(&mut self, id: &OverscaledTileID) -> Option<OverscaledTileID> {
@@ -135,6 +161,8 @@ where
         if !self.render {
             return;
         }
+        // A globe tile found under another wrap is drawn once, under its own.
+        let id = if self.finds_tiles_across_wraps() { &key.to_unwrapped() } else { id };
         // addRenderTile(tileID, tile)
         debug_assert!(self.tiles[key].is_renderable());
         self.rendered_tiles.entry(*id).or_insert(*key);
@@ -163,6 +191,44 @@ where
     fn is_loaded(&self, key: &OverscaledTileID) -> bool {
         self.tiles[key].is_loaded()
     }
+}
+
+impl<F> UpdateContext<'_, '_, F>
+where
+    F: FnMut(&OverscaledTileID, Rc<dyn TileObserver>) -> Option<Box<dyn Tile>>,
+{
+    /// Whether a tile lookup that misses looks under the neighbouring wraps:
+    /// on the full globe only. While it blends into Mercator, a tile's flat
+    /// half is placed by its wrap, so a tile of another wrap would land a
+    /// world away there.
+    fn finds_tiles_across_wraps(&self) -> bool {
+        self.parameters.transform_state.get_projection_transition() >= 1.0
+    }
+}
+
+/// Whether every tile of the source's minimum zoom is kept loaded: on the
+/// globe, for a source whose first level is a few tiles, while the planet is
+/// small enough in the view that it soon turns to its far side, and while the
+/// search for a loaded parent reaches that level from the tiles of the view.
+fn keeps_globe_base_level(
+    parameters: &TileParameters<'_>,
+    zoom_range: Range<u8>,
+    tile_zoom: i32,
+    max_parent_overscale_factor: Option<u8>,
+) -> bool {
+    let state = parameters.transform_state;
+    if !state.is_globe_rendering() || zoom_range.min > GLOBE_BASE_LEVEL_MAX_ZOOM {
+        return false;
+    }
+    if max_parent_overscale_factor.is_some_and(|factor| tile_zoom - i32::from(zoom_range.min) > i32::from(factor)) {
+        return false;
+    }
+    let size = state.get_size();
+    let radius = VerticalPerspectiveProjection::globe_radius_pixels(
+        Projection::world_size(state.get_scale()),
+        state.get_lat_lng(WrapMode::Unwrapped).latitude(),
+    );
+    radius <= GLOBE_BASE_LEVEL_MAX_RADIUS * f64::from(std::cmp::max(size.width, size.height))
 }
 
 /// The tiles a view wants: its ideal and prefetched tiles.
@@ -328,6 +394,22 @@ impl TilePyramid {
             }
 
             ideal_tiles = tile_cover(&tile_cover_parameters, ideal_zoom as u8, zoom_range, Some(tile_zoom as u8));
+
+            // The globe cover leaves out the far side of the planet, so a
+            // view turned there would find no parent to draw until its tiles
+            // load. The source's whole first level stays loaded with the
+            // prefetched tiles, ahead of them, and is drawn only where the
+            // search for a loaded parent reaches it.
+            if parameters.mode == MapMode::Continuous
+                && type_ != SourceType::GeoJSON
+                && keeps_globe_base_level(parameters, zoom_range, tile_zoom, max_parent_tile_overscale_factor)
+            {
+                let mut base_tiles =
+                    globe_level_cover(&tile_cover_parameters, zoom_range.min, zoom_range, Some(tile_zoom as u8));
+                pan_tiles.retain(|id| !base_tiles.contains(id));
+                base_tiles.append(&mut pan_tiles);
+                pan_tiles = base_tiles;
+            }
             if parameters.mode == MapMode::Tile
                 && type_ != SourceType::Raster
                 && type_ != SourceType::RasterDEM
