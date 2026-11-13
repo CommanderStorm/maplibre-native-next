@@ -897,7 +897,8 @@ impl Device {
     /// Apple's platforms, and Vulkan elsewhere, or OpenGL where there is no
     /// Vulkan. WebGPU (wgpu) takes the place of a native backend that isn't
     /// there. A backend that can't name the GPU that `options` names is
-    /// skipped: OpenGL names none, and only Vulkan names one by UUID or LUID.
+    /// skipped: only Vulkan names one by UUID or LUID. OpenGL lists one GPU,
+    /// the one its display renders on, at index 0.
     /// So is OpenGL where it can't render with `options.gl_api`.
     ///
     /// Fails with [`ErrorKind::NotFound`](mln_util::ErrorKind) when
@@ -956,8 +957,13 @@ impl Device {
             .map(Device::Vulkan),
             #[cfg(all(feature = "gl", not(target_family = "wasm")))]
             BackendType::OpenGL => {
-                if adapter.is_some() {
-                    return Err(Error::unsupported("OpenGL picks no GPU"));
+                // An OpenGL device renders on the one GPU of its display, so
+                // its list of GPUs holds that one.
+                match index(adapter)? {
+                    None | Some(0) => {}
+                    Some(index) => {
+                        return Err(Error::not_found(format!("adapter_index {index} is past OpenGL's one GPU")));
+                    }
                 }
                 let api = match gl_api {
                     GlApi::Gles => mln_gl::Api::Gles,
