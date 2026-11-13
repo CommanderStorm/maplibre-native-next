@@ -1058,8 +1058,8 @@ fn host_demands_and_a_still_image_demand_never_replace_each_other() {
     still.wait().unwrap();
     // Each demand ends once, with a result of its own, and the image's frame
     // draws the map. How the host's demand ends depends on what it finds
-    // when the session evaluates it, which is when the map has applied the
-    // still image's command:
+    // when the session evaluates it, which can happen only after the map has
+    // applied the still image's command:
     // - Usually the image's frame has shown the latest update, and a static
     //   map publishes another only for its next still image, so the demand
     //   waits until the barrier ends it with no update.
