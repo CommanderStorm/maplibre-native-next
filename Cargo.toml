@@ -168,8 +168,9 @@ regex = { version = "1.13.1" }
 # tools/render-test's JSON (with serde_json), and the types that cross to a
 # tile worker in another wasm instance (rc: the values behind their `Arc`s).
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-# The same engine as the C++ core's vendored SQLite, built from source like it.
-rusqlite = { version = "0.41.1", features = ["bundled"] }
+# The same engine as the C++ core's vendored SQLite, built from source like it
+# where the platform has none (crates/mln_storage).
+rusqlite = "0.41.1"
 # preserve_order: objects keep their members in document order, which the
 # style parser and the order of expression errors rely on.
 # float_roundtrip: correctly rounded float parsing (the default parser can be
