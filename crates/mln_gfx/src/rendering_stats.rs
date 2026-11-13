@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use mln_tile_id::OverscaledTileID;
 
 /// A bounding box in normalized device coordinates, positive up and right. The
-/// default is empty (inverted), so that [`include`](Self::include) of any bound
+/// default is empty (inverted), so that `include` of any bound
 /// yields that bound.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NDCBound {

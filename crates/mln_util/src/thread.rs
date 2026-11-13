@@ -6,7 +6,7 @@
 /// default would give it.
 pub(crate) const STACK_SIZE: usize = 2 * 1024 * 1024;
 
-/// A builder for a thread named `name` with a [`STACK_SIZE`] stack.
+/// A builder for a thread named `name` with a `STACK_SIZE` stack.
 pub fn builder(name: impl Into<String>) -> std::thread::Builder {
     std::thread::Builder::new().name(name.into()).stack_size(STACK_SIZE)
 }

@@ -188,7 +188,7 @@ impl FileSource for ProxyFileSource {
     }
 }
 
-/// File sources whose `ResourceLoader` is a [`ProxyFileSource`] over the
+/// File sources whose `ResourceLoader` is a `ProxyFileSource` over the
 /// default one (`TestRunner::registerProxyFileSource()`).
 #[must_use]
 pub fn proxy_file_sources() -> FileSourceManager {

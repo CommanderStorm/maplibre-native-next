@@ -200,17 +200,17 @@ impl CustomVectorSource {
         self.handle().set_tile_data(tile_id, data, format);
     }
 
-    /// See [`CustomVectorSourceHandle::set_tile_error`].
+    /// See `CustomVectorSourceHandle::set_tile_error`.
     pub fn set_tile_error(&self, tile_id: CanonicalTileID, error: Error) {
         self.handle().set_tile_error(tile_id, error);
     }
 
-    /// See [`CustomVectorSourceHandle::invalidate_tile`].
+    /// See `CustomVectorSourceHandle::invalidate_tile`.
     pub fn invalidate_tile(&self, tile_id: CanonicalTileID) {
         self.handle().invalidate_tile(tile_id);
     }
 
-    /// See [`CustomVectorSourceHandle::invalidate_region`].
+    /// See `CustomVectorSourceHandle::invalidate_region`.
     pub fn invalidate_region(&self, bounds: LatLngBounds) {
         self.handle().invalidate_region(bounds);
     }

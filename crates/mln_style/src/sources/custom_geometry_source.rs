@@ -284,12 +284,12 @@ impl CustomGeometrySource {
         self.handle().set_tile_error(tile_id, error);
     }
 
-    /// See [`CustomGeometrySourceHandle::invalidate_tile`].
+    /// See `CustomGeometrySourceHandle::invalidate_tile`.
     pub fn invalidate_tile(&self, tile_id: CanonicalTileID) {
         self.handle().invalidate_tile(tile_id);
     }
 
-    /// See [`CustomGeometrySourceHandle::invalidate_region`].
+    /// See `CustomGeometrySourceHandle::invalidate_region`.
     pub fn invalidate_region(&self, bounds: LatLngBounds) {
         self.handle().invalidate_region(bounds);
     }

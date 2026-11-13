@@ -115,7 +115,7 @@ pub fn limit_holes(polygon: &mut GeometryCollection, max_holes: u32) {
 }
 
 /// Converts the geometry of a feature of `tile_id` from tile coordinates to
-/// longitude/latitude. Fails with [`Error::OutOfRange`] for a point feature
+/// longitude/latitude. Fails with `Error::OutOfRange` for a point feature
 /// without rings, where C++ throws from `geometries.at(0)`. A feature of
 /// `FeatureType::Unknown` fails a debug assertion and otherwise converts to
 /// `Point(NaN, NaN)`, as in C++.

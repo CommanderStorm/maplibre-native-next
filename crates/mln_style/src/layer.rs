@@ -110,7 +110,7 @@ pub trait Layer: Any + Send + Sync {
     fn get_property(&self, name: &str) -> StyleProperty;
 
     /// Serializes the layer as a style JSON value; implementations start from
-    /// [`serialize_base`].
+    /// `serialize_base`.
     fn serialize(&self) -> Value;
 
     /// Create a layer, copying all properties except id and paint properties

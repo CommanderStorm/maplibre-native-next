@@ -67,7 +67,7 @@ pub(crate) fn mercator_tile_coords(tile_id: &UnwrappedTileID) -> Vec4 {
 
 /// How a [`TransformState`] places tiles on the screen. Both variants
 /// project locations onto the same Mercator plane, so the tile-to-world matrix
-/// is [`mercator_tile_matrix`] on either.
+/// is `mercator_tile_matrix` on either.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Projection {
     #[default]

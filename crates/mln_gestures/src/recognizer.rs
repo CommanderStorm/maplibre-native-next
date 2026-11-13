@@ -428,7 +428,7 @@ enum Finish {
 ///
 /// Hosts feed it [`Input`]s with their timestamps, in milliseconds on any
 /// clock that only goes forward, and call [`frame`](Self::frame) once a
-/// display frame. Every move goes through the [`GestureCamera`].
+/// display frame. Every move goes through the `GestureCamera`.
 #[derive(Debug)]
 pub struct GestureRecognizer {
     options: GestureOptions,

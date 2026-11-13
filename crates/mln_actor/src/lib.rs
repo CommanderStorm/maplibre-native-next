@@ -3,7 +3,7 @@
 //!
 //! A host with one thread (the browser) installs a
 //! [`CooperativeScheduler`] at startup
-//! ([`scheduler::install_cooperative`]) and runs its tasks on that thread.
+//! (`scheduler::install_cooperative`) and runs its tasks on that thread.
 
 pub mod actor;
 mod actor_ref;

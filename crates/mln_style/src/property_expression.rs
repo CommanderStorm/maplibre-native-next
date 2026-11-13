@@ -27,7 +27,7 @@ fn collect_global_state_refs_shared(expression: &dyn Expression) -> Option<Arc<V
 ///
 /// C++ also caches `zoomCurve` (raw pointers into the shared expression).
 /// A Rust struct cannot hold borrows of its own `Arc`, so
-/// [`get_zoom_curve`](Self::get_zoom_curve) recomputes it with
+/// `get_zoom_curve` recomputes it with
 /// `find_zoom_curve_checked` (a pure function of the expression).
 #[derive(Debug)]
 pub struct PropertyExpressionBase {

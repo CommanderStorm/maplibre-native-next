@@ -1,10 +1,10 @@
 //! Tile data: the decoded layers and features of vector tiles, and the
 //! geometry functions that work on them.
 //!
-//! - [`vector_mvt_tile_data`]: Mapbox Vector Tile data (`VectorMVTTileData`,
+//! - `vector_mvt_tile_data`: Mapbox Vector Tile data (`VectorMVTTileData`,
 //!   `VectorMVTTileLayer`, `VectorMVTTileFeature`) on the fast-mvt reader.
-//! - [`vector_mlt_tile_data`]: MapLibre Tile data (`VectorMLTTileData`,
-//!   `VectorMLTTileLayer`, `VectorMLTTileFeature`) on [`mlt`], the C++ MLT
+//! - `vector_mlt_tile_data`: MapLibre Tile data (`VectorMLTTileData`,
+//!   `VectorMLTTileLayer`, `VectorMLTTileFeature`) on `mlt`, the C++ MLT
 //!   decoder's output model filled by the mlt-core crate.
 //! - [`geometry_tile_data`]: ring classification, hole limits, polygon fixup
 //!   on `i_overlay`, coordinate conversion and corner rounding. The feature

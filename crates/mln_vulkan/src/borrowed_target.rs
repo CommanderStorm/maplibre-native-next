@@ -348,7 +348,7 @@ pub struct BorrowedTarget {
 impl BorrowedTarget {
     /// A target on `backend` that draws into `images` and hands each frame
     /// to the host with sync of the kind `producer`, which must be one of
-    /// [`BorrowedImages::sync_kinds`]'s producer kinds.
+    /// [`Device::sync_kinds`](crate::Device::sync_kinds)'s producer kinds.
     ///
     /// Fails as [`BorrowedImages::check`] does, with
     /// [`ErrorKind::Unsupported`](mln_util::ErrorKind) for a producer kind
@@ -438,7 +438,7 @@ impl BorrowedTarget {
 
     /// The host gave the image at `slot` back: the next frame drawn into it
     /// waits for `consumer`, a sync of one of
-    /// [`BorrowedImages::sync_kinds`]'s consumer kinds. The sync file of the
+    /// [`Device::sync_kinds`](crate::Device::sync_kinds)'s consumer kinds. The sync file of the
     /// slot's last frame is closed.
     ///
     /// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when the target

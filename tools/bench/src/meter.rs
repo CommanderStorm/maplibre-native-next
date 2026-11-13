@@ -5,7 +5,7 @@
 //! process, through [`CountingAllocator`], which the `mln-bench` binary
 //! installs.
 //!
-//! A [`Meter`] times the timed part of each iteration of a case and leaves
+//! A `Meter` times the timed part of each iteration of a case and leaves
 //! its setup out.
 
 // The allocator, the process CPU clock and its counters are the FFI here.
@@ -24,7 +24,7 @@ static LIVE: AtomicI64 = AtomicI64::new(0);
 static PEAK: AtomicI64 = AtomicI64::new(0);
 
 /// The system allocator, counting allocations, the bytes they ask for, and
-/// the most bytes live at once since [`reset_peak`].
+/// the most bytes live at once since `reset_peak`.
 pub struct CountingAllocator;
 
 // SAFETY: every call forwards to `System` with the caller's arguments.

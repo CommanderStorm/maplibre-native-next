@@ -127,10 +127,10 @@ pub(crate) fn basemap_style(fixtures: &Path) -> String {
 /// When the map draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// A static map: [`Scene::render_still`] draws a complete frame.
+    /// A static map: `Scene::render_still` draws a complete frame.
     Still,
     /// A continuous map, drawn only when the case calls
-    /// [`Scene::render_frame`], as a host on a display clock does.
+    /// `Scene::render_frame`, as a host on a display clock does.
     OnDemand,
     /// A continuous map, drawn whenever the map updates, as the run loop
     /// delivers the update.

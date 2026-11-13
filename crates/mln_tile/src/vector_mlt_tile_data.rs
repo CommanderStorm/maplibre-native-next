@@ -269,7 +269,7 @@ struct State {
 }
 
 /// MapLibre Tile data. The tile is decoded on the first layer lookup (or
-/// [`layer_names`](Self::layer_names)); a decoding error is logged and leaves
+/// `layer_names`); a decoding error is logged and leaves
 /// it without layers.
 pub struct VectorMLTTileData {
     state: Mutex<State>,
