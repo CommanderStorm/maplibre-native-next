@@ -33,7 +33,7 @@ repository = "https://github.com/louwers/mln-rs"
 # code is, all or in part, under the root license has a LICENSE.md symlink to
 # it, which `cargo package` archives as a file. The ports of other projects
 # also ship their own license files.
-include = ["/src", "/tests", "/LICENSE*"]
+include = ["/src", "/tests", "/build.rs", "/LICENSE*"]
 # The libraries' keywords and categories on crates.io. mln-rs has its own.
 keywords = ["maplibre", "map"]
 categories = ["graphics", "science::geo"]
