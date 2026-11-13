@@ -474,6 +474,16 @@ impl GestureRecognizer {
         }
     }
 
+    #[must_use]
+    pub fn options(&self) -> &GestureOptions {
+        &self.options
+    }
+
+    /// Takes effect with the next input.
+    pub fn set_options(&mut self, options: GestureOptions) {
+        self.options = options;
+    }
+
     /// A gesture is under way: hosts keep pointer capture and scrolling off.
     #[cfg(test)]
     #[must_use]
@@ -726,7 +736,7 @@ impl GestureRecognizer {
                     zooming: false,
                     rotating: false,
                     // Fingers above one another can't tilt.
-                    pitch: (vector.y.abs() > vector.x.abs()).then_some(false),
+                    pitch: (!self.options.pitch || vector.y.abs() > vector.x.abs()).then_some(false),
                     single_since: None,
                     panning: false,
                     tap: now - self.pointers[0].down_at < self.options.tap_interval_ms
@@ -799,8 +809,8 @@ impl GestureRecognizer {
         let delta = to - from;
         match self.mode {
             Mode::Rotate => {
-                let bearing = delta.x * self.options.drag_rotate;
-                let pitch = -delta.y * self.options.drag_pitch;
+                let bearing = if self.options.rotate { delta.x * self.options.drag_rotate } else { 0.0 };
+                let pitch = if self.options.pitch { -delta.y * self.options.drag_pitch } else { 0.0 };
                 let step = CameraDelta { bearing: Some(bearing), pitch: Some(pitch), ..CameraDelta::default() };
                 self.update(camera, step);
                 self.tracking.record(now, Step { bearing, pitch, ..Step::default() });
@@ -860,7 +870,7 @@ impl GestureRecognizer {
         if !pinch.zooming && (distance / pinch.start_distance).log2().abs() >= self.options.pinch_zoom_threshold {
             pinch.zooming = true;
         }
-        if !pinch.rotating {
+        if !pinch.rotating && self.options.rotate {
             let threshold = self.options.rotate_threshold / (std::f64::consts::PI * pinch.min_diameter) * 360.0;
             if angle(pinch.start_vector, vector).abs() >= threshold {
                 pinch.rotating = true;
@@ -1056,6 +1066,9 @@ impl GestureRecognizer {
         now: f64,
     ) -> bool {
         let options = self.options;
+        if !options.scroll_zoom {
+            return false;
+        }
         let mut scroll = self.scroll.unwrap_or(Scroll { anchor: position, idle_until: now, ease: None });
         scroll.anchor = position;
         scroll.idle_until = now + options.scroll_idle_ms;
@@ -1116,6 +1129,8 @@ impl GestureRecognizer {
         let (pan, bearing, pitch) = (self.options.key_pan, self.options.key_bearing, self.options.key_pitch);
         let mut step = CameraDelta { animation, ..CameraDelta::default() };
         match (key, modifiers.shift) {
+            (Key::Left | Key::Right, true) if !self.options.rotate => return false,
+            (Key::Up | Key::Down, true) if !self.options.pitch => return false,
             (Key::ZoomIn | Key::ZoomOut, shift) => {
                 let levels: f64 = if shift { 2.0 } else { 1.0 };
                 step.scale = Some(if key == Key::ZoomIn { levels } else { -levels }.exp2());
@@ -1169,7 +1184,7 @@ impl GestureRecognizer {
         }
         let zoom = if scale > 0.0 && scale.is_finite() { scale.log2() } else { 0.0 };
         // Fingers turning clockwise turn the map clockwise.
-        let bearing = if rotation.is_finite() { -rotation } else { 0.0 };
+        let bearing = if rotation.is_finite() && self.options.rotate { -rotation } else { 0.0 };
         if zoom == 0.0 && bearing == 0.0 {
             return true;
         }

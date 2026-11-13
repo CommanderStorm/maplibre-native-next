@@ -576,6 +576,75 @@ fn keys_step_the_camera() {
 }
 
 #[test]
+fn rotate_pitch_and_scroll_zoom_turn_their_gestures_off() {
+    let off = GestureOptions::DEFAULT.rotate(false).pitch(false).scroll_zoom(false);
+
+    // A rotate drag neither turns nor pitches.
+    let mut rig = Rig::with(&off);
+    rig.down_with(1, PointerKind::Mouse, 400.0, 300.0, Modifiers { ctrl: true, ..Modifiers::default() });
+    for i in 1..=10 {
+        rig.now += 16.0;
+        rig.to(1, 400.0 + 10.0 * f64::from(i), 300.0 - 10.0 * f64::from(i));
+    }
+    rig.up(1, 500.0, 200.0);
+    rig.settle();
+    assert_eq!((rig.bearing(), rig.pitch()), (0.0, 0.0));
+
+    // Two fingers twisting apart zoom without turning.
+    let mut rig = Rig::with(&off);
+    rig.down(1, PointerKind::Touch, 300.0, 300.0);
+    rig.down(2, PointerKind::Touch, 500.0, 300.0);
+    for i in 1..=20 {
+        let t = f64::from(i) / 20.0;
+        let half = 100.0 * (1.0 + t);
+        let (dy, dx) = (t * std::f64::consts::FRAC_PI_2).sin_cos();
+        rig.now += 16.0;
+        rig.to(1, 400.0 - dx * half, 300.0 - dy * half);
+        rig.to(2, 400.0 + dx * half, 300.0 + dy * half);
+        rig.frame();
+    }
+    assert!(rig.zoom() > 12.5, "{}", rig.zoom());
+    assert_eq!(rig.bearing(), 0.0);
+
+    // Two fingers moving up together pan instead of tilting.
+    let mut rig = Rig::with(&off);
+    rig.down(1, PointerKind::Touch, 300.0, 400.0);
+    rig.down(2, PointerKind::Touch, 500.0, 400.0);
+    for i in 1..=10 {
+        rig.now += 16.0;
+        let y = 400.0 - 10.0 * f64::from(i);
+        rig.to(1, 300.0, y);
+        rig.to(2, 500.0, y);
+    }
+    assert_eq!(rig.pitch(), 0.0);
+
+    // A platform pinch zooms without turning.
+    let mut rig = Rig::with(&off);
+    rig.pinch(1.0, 0.0, PinchPhase::Begin);
+    for _ in 0..10 {
+        rig.now += 16.0;
+        rig.pinch(2f64.powf(0.05), -2.0, PinchPhase::Update);
+    }
+    rig.pinch(1.0, 0.0, PinchPhase::End);
+    rig.settle();
+    assert!(rig.zoom() > 12.5, "{}", rig.zoom());
+    assert_eq!(rig.bearing(), 0.0);
+
+    // Shift with the arrow keys and scrolls go unhandled.
+    let mut rig = Rig::with(&off);
+    for key in [Key::Left, Key::Right, Key::Up, Key::Down] {
+        assert!(!rig.input.handle(&mut rig.camera, Input::Key { key, modifiers: SHIFT }, rig.now), "{key:?}");
+    }
+    let at = p(100.0, 100.0);
+    assert!(!rig.input.handle(&mut rig.camera, notches(at, -1.0), rig.now));
+    assert!(!rig.input.handle(&mut rig.camera, pixels(at, -30.0, Modifiers::default()), rig.now));
+    rig.settle();
+    assert_eq!((rig.zoom(), rig.bearing(), rig.pitch()), (12.0, 0.0, 0.0));
+
+    assert_eq!(off.rotate(true).pitch(true).scroll_zoom(true), GestureOptions::DEFAULT);
+}
+
+#[test]
 fn input_interrupts_animations() {
     let mut rig = Rig::new();
     rig.camera.ease_to(

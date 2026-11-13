@@ -10,7 +10,7 @@ use mln_map::{MomentumDecay, MomentumSnap};
 ///
 /// Distances are in logical pixels, and times in milliseconds (`_ms`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GestureOptions {
+pub struct GestureOptions {
     /// How far a press may move and still be a click; drags start past it.
     pub(crate) click_tolerance: f64,
     /// How far apart two taps of a double tap may be, and the most time
@@ -80,6 +80,12 @@ pub(crate) struct GestureOptions {
     /// The [`AnimationOptions::transition_id`](mln_map::AnimationOptions::transition_id)
     /// of the eases and momentum the recognizer starts.
     pub(crate) transition_id: u64,
+
+    /// Which gestures move the camera ([`rotate`](Self::rotate),
+    /// [`pitch`](Self::pitch) and [`scroll_zoom`](Self::scroll_zoom)).
+    pub(crate) rotate: bool,
+    pub(crate) pitch: bool,
+    pub(crate) scroll_zoom: bool,
 }
 
 impl GestureOptions {
@@ -112,7 +118,42 @@ impl GestureOptions {
         interrupt_animations: true,
         // "gestures" in ASCII.
         transition_id: 0x6765_7374_7572_6573,
+        rotate: true,
+        pitch: true,
+        scroll_zoom: true,
     };
+
+    /// Whether gestures turn the map: a rotate drag, two fingers or a
+    /// platform pinch twisting, and Shift with the left and right keys. On by
+    /// default.
+    #[must_use]
+    pub fn rotate(mut self, on: bool) -> Self {
+        self.rotate = on;
+        self
+    }
+
+    /// Whether gestures pitch the map: a rotate drag up or down, two fingers
+    /// moving up or down together, and Shift with the up and down keys. On by
+    /// default.
+    #[must_use]
+    pub fn pitch(mut self, on: bool) -> Self {
+        self.pitch = on;
+        self
+    }
+
+    /// Whether a wheel or trackpad scroll zooms. Off, the recognizer leaves
+    /// scrolls unhandled. On by default.
+    #[must_use]
+    pub fn scroll_zoom(mut self, on: bool) -> Self {
+        self.scroll_zoom = on;
+        self
+    }
+
+    /// How far a press may move and still be a click, in logical pixels.
+    #[must_use]
+    pub fn click_tolerance(&self) -> f64 {
+        self.click_tolerance
+    }
 }
 
 impl Default for GestureOptions {

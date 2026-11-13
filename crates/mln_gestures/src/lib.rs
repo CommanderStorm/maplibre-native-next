@@ -26,5 +26,7 @@ mod options;
 mod recognizer;
 mod velocity;
 
-pub use input::{Button, Input, Key, Modifiers, PinchPhase, PointerKind, WheelDelta};
+pub use camera::GestureCamera;
+pub use input::{Button, GestureEvent, Input, Key, Modifiers, PinchPhase, PointerKind, WheelDelta};
+pub use options::GestureOptions;
 pub use recognizer::GestureRecognizer;
