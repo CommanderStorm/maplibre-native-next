@@ -37,7 +37,6 @@ pub(crate) mod vertex_buffer_resource;
 mod writes;
 
 pub use borrowed_target::{BorrowedTarget, BorrowedTextures};
-pub(crate) use context::Context;
 pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 pub use device::Device;
 pub use offscreen_target::OffscreenTarget;

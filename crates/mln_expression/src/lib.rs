@@ -52,7 +52,6 @@ pub use expression::{
     downcast,
 };
 pub use find_zoom_curve::{ZoomCurvePtr, find_zoom_curve_checked};
-pub(crate) use find_zoom_curve::{ZoomCurve, find_zoom_curve};
 pub use formatted::{Formatted, FormattedSection};
 pub use image::Image;
 pub use interpolate::{Interpolate, create_interpolate};
@@ -61,12 +60,10 @@ pub use is_constant::{feature_property_keys, is_feature_constant, is_runtime_con
 pub use is_expression::is_expression;
 pub use literal::Literal;
 pub use parsing_context::{ParseResult, ParsingContext, TypeAnnotationOption};
-pub(crate) use parsing_context::ParsingError;
 pub use step::Step;
 pub use stops::Stops;
 pub use type_::Type;
 pub use value::{Value, ValueConverter, from_expression_value};
-pub(crate) use value::{to_expression_value, value_type_to_expression_type};
 
 #[cfg(test)]
 mod tests;

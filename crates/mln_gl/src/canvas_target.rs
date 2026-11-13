@@ -136,7 +136,7 @@ impl CanvasTarget {
     }
 
     /// The size of the frames, in physical pixels.
-    pub fn size(&self) -> Size {
+    pub(crate) fn size(&self) -> Size {
         self.size.get()
     }
 

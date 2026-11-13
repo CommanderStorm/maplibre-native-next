@@ -10,8 +10,9 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use mln_actor::scheduler;
-use mln_style_types::image::{ImageDependencies, ImageMap, ImageType, Impl as ImageImpl};
+#[cfg(test)]
 use mln_util::constants::DEFAULT_ON_DEMAND_IMAGES_CACHE_SIZE;
+use mln_style_types::image::{ImageDependencies, ImageMap, ImageType, Impl as ImageImpl};
 use mln_util::logging::{Event, Log};
 use mln_vec_map::{VecMap, VecSet};
 

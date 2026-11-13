@@ -10,7 +10,7 @@ use ash::vk;
 use gpu_allocator::MemoryLocation;
 use mln_gfx::command_encoder::CommandEncoder;
 use mln_gfx::frame::{self, FrameTarget, Handoff};
-use mln_gfx::{ConsumerSync, GpuSync, SyncKind, SyncKinds};
+use mln_gfx::{ConsumerSync, GpuSync, SyncKind};
 use mln_util::error::Error;
 use mln_util::logging::{Event, Log};
 use mln_util::size::Size;

@@ -133,7 +133,7 @@ fn parse_and_backfill_through_the_codec() {
     for tile in &tiles {
         tile.inner().set_data(Some(png(16, 16)), VectorTileEncoding::Mvt);
     }
-    while !tiles.iter().all(crate::tile::Tile::is_complete) {
+    while !tiles.iter().all(Tile::is_complete) {
         test.run_loop.run_once();
     }
     for tile in &tiles {

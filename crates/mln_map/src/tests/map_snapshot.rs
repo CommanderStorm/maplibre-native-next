@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use mln_actor::RunLoop;
 use crate::{
-    AnimationOptions, BoundOptions, CameraBounds, CameraDelta, CameraOptions, CameraUpdate, CameraUpdateMode,
-    ConstrainMode, FreeCamera, FreeCameraOptions, GesturePhase, Map, MapDebugOptions, MapMode, MapOptions,
+    AnimationOptions, BoundOptions, CameraDelta, CameraOptions, CameraUpdate, CameraUpdateMode,
+    ConstrainMode, FreeCameraOptions, GesturePhase, Map, MapDebugOptions, MapMode, MapOptions,
     MapProjection, MapView, NorthOrientation, ProjectionMode, TileLodMode, UpdateReader, ViewportMode,
 };
+use crate::map_snapshot::{CameraBounds, FreeCamera};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_style_types::{ProjectionDefinition, ProjectionType};
 use mln_util::error::ErrorKind;

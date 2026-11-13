@@ -97,7 +97,7 @@ impl TargetResource for WindowResource {
 
 /// Frames presented to a Win32 window, from a WGL context of the window's
 /// own.
-pub struct SurfaceTarget {
+pub(crate) struct SurfaceTarget {
     backend: Rc<RendererBackend>,
     window: Rc<WglWindow>,
     size: Rc<Cell<Size>>,
@@ -116,7 +116,7 @@ impl SurfaceTarget {
     /// [`ErrorKind::Unsupported`](mln_util::ErrorKind) when the driver makes
     /// no OpenGL 3.3 core context, and with
     /// [`ErrorKind::Native`](mln_util::ErrorKind) when WGL fails otherwise.
-    pub fn with_backend(
+    pub(crate) fn with_backend(
         window: Arc<dyn Window>,
         framebuffer_size: Size,
         cap_frame_rate: bool,
@@ -138,12 +138,12 @@ impl SurfaceTarget {
     }
 
     /// The size of the frames, in physical pixels.
-    pub fn size(&self) -> Size {
+    pub(crate) fn size(&self) -> Size {
         self.size.get()
     }
 
     /// The window has `size` pixels from now on.
-    pub fn resize(&self, size: Size) {
+    pub(crate) fn resize(&self, size: Size) {
         self.size.set(size);
     }
 }

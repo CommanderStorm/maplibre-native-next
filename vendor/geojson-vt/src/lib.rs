@@ -14,12 +14,11 @@ pub(crate) mod wrap;
 
 /// `mapbox::geojsonvt::detail`
 pub(crate) mod detail {
-    pub(crate) use crate::clip::{Clipper, clip};
-    pub(crate) use crate::convert::{Project, convert};
-    pub(crate) use crate::simplify::{get_sq_seg_dist, simplify, simplify_range};
+    pub(crate) use crate::clip::clip;
+    pub(crate) use crate::convert::convert;
     pub(crate) use crate::tile::InternalTile;
-    pub use crate::types::*;
-    pub(crate) use crate::wrap::{shift_coords, wrap};
+    pub(crate) use crate::types::*;
+    pub(crate) use crate::wrap::wrap;
 }
 
 use std::collections::{BTreeMap, HashMap};

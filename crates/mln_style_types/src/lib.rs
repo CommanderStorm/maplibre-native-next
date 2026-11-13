@@ -8,7 +8,6 @@ pub(crate) mod variable_anchor_offset_collection;
 
 pub use position::Position;
 pub use projection_definition::{ProjectionDefinition, ProjectionType, projection_type_from_name};
-pub(crate) use projection_definition::projection_type_name;
 pub use rotation::Rotation;
 pub use types::*;
 pub use variable_anchor_offset_collection::{AnchorOffsetPair, VariableAnchorOffsetCollection};

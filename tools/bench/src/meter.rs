@@ -92,7 +92,7 @@ pub(crate) fn process_cpu() -> Duration {
 /// clock tick at a time (15.625 ms by default), so an iteration shorter than
 /// a few ticks reads as zero or a whole tick.
 #[cfg(windows)]
-pub fn process_cpu() -> Duration {
+pub(crate) fn process_cpu() -> Duration {
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
@@ -111,7 +111,7 @@ pub fn process_cpu() -> Duration {
 /// far, or `None` where the system doesn't count them.
 #[cfg(target_os = "macos")]
 #[must_use]
-pub fn process_counters() -> Option<Counters> {
+pub(crate) fn process_counters() -> Option<Counters> {
     // SAFETY: rusage_info_v4 is plain integers, for which zero is valid.
     let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
     // SAFETY: the flavor names rusage_info_v4, which `info` is; the call

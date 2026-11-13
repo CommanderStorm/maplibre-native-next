@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use crate::debug_group::{DebugGroup, DebugGroupTarget};
+use crate::debug_group::DebugGroupTarget;
 use crate::frame::DrawTarget;
 use crate::render_pass::{RenderPass, RenderPassDescriptor};
 use crate::upload_pass::UploadPass;

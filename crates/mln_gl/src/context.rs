@@ -282,7 +282,7 @@ impl Context {
     /// `create_buffer` of bytes that are still in a JS array
     /// (`mln_util::host_bytes`), written from there.
     #[cfg(target_family = "wasm")]
-    pub fn create_buffer_from_host(
+    pub(crate) fn create_buffer_from_host(
         &self,
         target: u32,
         data: &mln_util::host_bytes::HostBytes,

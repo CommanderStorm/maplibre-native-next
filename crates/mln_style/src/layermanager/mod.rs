@@ -18,5 +18,4 @@ pub(crate) mod line_layer_factory;
 pub(crate) mod raster_layer_factory;
 pub(crate) mod symbol_layer_factory;
 
-pub(crate) use layer_factory::LayerFactory;
 pub(crate) use layer_manager::LayerManager;

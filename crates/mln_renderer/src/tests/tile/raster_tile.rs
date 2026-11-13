@@ -134,7 +134,7 @@ fn parse_through_the_codec() {
         tile.inner().set_data(Some(png(size, size)), VectorTileEncoding::Mvt);
         assert!(!tile.is_complete());
     }
-    while !tiles.iter().all(crate::tile::Tile::is_complete) {
+    while !tiles.iter().all(Tile::is_complete) {
         test.run_loop.run_once();
     }
     let layer = RasterLayer::new("r", "s").base_impl();

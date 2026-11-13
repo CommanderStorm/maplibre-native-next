@@ -26,8 +26,5 @@ mod options;
 mod recognizer;
 mod velocity;
 
-pub(crate) use camera::GestureCamera;
 pub use input::{Button, Input, Key, Modifiers, PinchPhase, PointerKind, WheelDelta};
-pub(crate) use input::GestureEvent;
-pub(crate) use options::GestureOptions;
 pub use recognizer::GestureRecognizer;

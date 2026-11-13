@@ -14,7 +14,9 @@
 use std::borrow::Borrow;
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::{Bound, Index, RangeBounds};
+#[cfg(test)]
+use std::ops::{Bound, RangeBounds};
+use std::ops::Index;
 
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, SerializeSeq};

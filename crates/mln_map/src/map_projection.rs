@@ -3,9 +3,9 @@
 
 use mln_map_types::{Camera, CameraOptions, MapView, TransformState};
 use mln_util::error::Error;
-use mln_util::geo::{EdgeInsets, LatLng, ScreenCoordinate, WrapMode};
+use mln_util::geo::{LatLng, ScreenCoordinate, WrapMode};
 
-use crate::map::{Map, camera_for_lat_lngs};
+use crate::map::Map;
 use crate::transform::Transform;
 
 /// Converts coordinates for one camera and size, without a map. It holds only

@@ -20,8 +20,3 @@ pub(crate) mod vector_tile;
 pub mod worker_codec;
 
 pub use tile::TileOperation;
-pub(crate) use tile::Tile;
-pub(crate) use tile::Kind;
-pub(crate) use tile::TileBase;
-pub(crate) use tile::TileUpdateParameters;
-pub(crate) use tile::TileNecessity;

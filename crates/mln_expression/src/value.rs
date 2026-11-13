@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::collator::Collator;
 use crate::formatted::Formatted;
 use crate::image::Image;
-use crate::type_::{self, Type};
+use crate::type_::Type;
 
 /// The object alternative of `expression::Value`.
 // C++ uses std::unordered_map, whose iteration order is libstdc++-hash

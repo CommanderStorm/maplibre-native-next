@@ -41,6 +41,5 @@ pub fn convert<T: Converter>(value: &Convertible<'_>, error: &mut Error) -> Opti
 
 pub(crate) use color_ramp_property_value::convert_color_ramp_property_value;
 pub use layer::convert_layer;
-pub(crate) use layer::set_paint_properties;
 pub use property_value::convert_property_value;
 pub use source::convert_source;

@@ -46,7 +46,7 @@ impl BufferResource {
     /// Port-only: a buffer of the bytes in the JS array `data`, written to
     /// the GPU from there.
     #[cfg(target_family = "wasm")]
-    pub fn new_from_host(
+    pub(crate) fn new_from_host(
         context: Rc<Context>,
         data: &mln_util::host_bytes::HostBytes,
         usage: wgpu::BufferUsages,

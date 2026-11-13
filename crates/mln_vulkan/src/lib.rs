@@ -58,9 +58,7 @@ pub use borrowed_target::{BorrowedDepth, BorrowedImage, BorrowedImages, Borrowed
 pub use context::Context;
 pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 pub use device::{AdapterId, Device, HostDevice, QueueLease, QueueLock, RawDevice};
-pub(crate) use device::Features;
 pub use exported_target::ExportedTarget;
-pub(crate) use buffer_resource::BufferResource;
 pub use offscreen_target::OffscreenTarget;
 pub use renderer_backend::RendererBackend;
 pub use shaders::compiler::{Stage as ShaderStage, compile as compile_glsl};

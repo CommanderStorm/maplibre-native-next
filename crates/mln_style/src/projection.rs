@@ -5,10 +5,12 @@
 
 use std::sync::Arc;
 
-use mln_conversion::{Convertible, Error};
 use mln_style_types::ProjectionDefinition;
-
+#[cfg(test)]
+use mln_conversion::{Convertible, Error};
+#[cfg(test)]
 use crate::conversion::convert_property_value;
+
 use crate::conversion_impl::make_style_property;
 pub(crate) use crate::projection_impl::Impl;
 use crate::property_value::PropertyValue;

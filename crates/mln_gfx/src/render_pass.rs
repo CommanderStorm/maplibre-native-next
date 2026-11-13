@@ -5,7 +5,7 @@ use std::any::Any;
 
 use mln_util::Color;
 
-use crate::debug_group::{DebugGroup, DebugGroupTarget};
+use crate::debug_group::DebugGroupTarget;
 use crate::frame::DrawTarget;
 
 #[derive(Clone, Copy)]

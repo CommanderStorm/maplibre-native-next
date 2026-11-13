@@ -15,7 +15,9 @@ use std::sync::Arc;
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::fallible_iterator::FallibleIterator;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
-use rusqlite::types::{ToSql, ValueRef};
+#[cfg(test)]
+use rusqlite::types::ToSql;
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, Row, Rows};
 
 /// SQLite result codes (`SQLITE_*`).

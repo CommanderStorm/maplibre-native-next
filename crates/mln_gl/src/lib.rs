@@ -80,7 +80,6 @@ pub mod wgl_surface_target;
 pub use borrowed_target::{BorrowedTarget, BorrowedTextures, HostSurface, HostSurfaceTarget};
 #[cfg(target_arch = "wasm32")]
 pub use canvas_target::{CanvasTarget, WebCanvas};
-pub(crate) use context::Context;
 pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 #[cfg(not(target_arch = "wasm32"))]
 pub use device::{Api, Device, DeviceOptions};

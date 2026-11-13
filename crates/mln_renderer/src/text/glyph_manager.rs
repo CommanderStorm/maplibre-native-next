@@ -33,7 +33,7 @@ use mln_actor::{AsyncTask, AsyncTaskSender};
 use mln_storage::{AsyncRequest, FileSource, Resource, Response};
 use mln_text::HBShapeAdjust;
 use mln_text::glyph::{
-    FontData, FontFaces, Glyph, GlyphDependencies, GlyphID, GlyphIDType, GlyphIDs, GlyphMap, GlyphRange, Glyphs,
+    FontData, FontFaces, Glyph, GlyphDependencies, GlyphID, GlyphIDType, GlyphMap, GlyphRange, Glyphs,
     HBShapeRequests, get_glyph_range,
 };
 use mln_text::glyph_cache::{GlyphCache, GlyphCacheRange};
@@ -44,7 +44,9 @@ use mln_util::error::Error;
 use mln_util::font_stack::FontStack;
 use mln_util::logging::{Event, Log};
 use mln_util::tiny_sdf::transform_raster_to_sdf;
-use mln_vec_map::{VecMap, VecSet};
+use mln_vec_map::VecMap;
+#[cfg(test)]
+use mln_vec_map::VecSet;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 

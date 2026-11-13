@@ -2,20 +2,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use mln_gfx::backend::Type as BackendType;
-use mln_gfx::color_mode::{BlendFunction, LinearBlend, Mask};
 use mln_gfx::globe_clip_mask::GlobeClipMask;
 use mln_gfx::paint_parameters::PaintParameters as GfxPaintParameters;
 use mln_gfx::render_pass::RenderPass as GfxRenderPass;
 use mln_gfx::shaders::clipping_mask_ubo::ClipUBO;
 use mln_gfx::stencil_mode::Test;
-use mln_gfx::types::{ColorBlendFactorType, DepthFunctionType, StencilOpType};
+use mln_gfx::types::{DepthFunctionType, StencilOpType};
 use mln_gfx::{
-    ColorMode, CommandEncoder, Context, DepthMaskType, DepthMode, RendererBackend, ScissorRect, ShaderRegistry,
+    CommandEncoder, Context, DepthMaskType, DepthMode, RendererBackend, ScissorRect, ShaderRegistry,
     StencilMode,
 };
 use mln_map_types::{MapDebugOptions, MapMode, ProjectionData, TileLodMode, TransformState, ViewportMode};
 use mln_tile_id::{CanonicalTileID, UnwrappedTileID};
-use mln_util::Color;
 use mln_util::mat4::Mat4;
 use mln_util::range::Range;
 use mln_util::size::Size;

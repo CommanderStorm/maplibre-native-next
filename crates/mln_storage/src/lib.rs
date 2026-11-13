@@ -53,7 +53,6 @@ pub mod stub_file_source;
 #[cfg(not(any(target_family = "wasm", target_vendor = "apple")))]
 mod ureq_transport;
 
-pub(crate) use asset_file_source::AssetFileSource;
 pub use async_request::AsyncRequest;
 #[cfg(feature = "sqlite")]
 pub use database_file_source::DatabaseFileSource;
@@ -61,18 +60,11 @@ pub use database_file_source::DatabaseFileSource;
 pub use fetch_transport::set_fetch_preloads;
 pub use file_source::{Callback, FileSource, FileSourceType, READ_ONLY_MODE_KEY};
 pub use file_source_manager::FileSourceManager;
-pub(crate) use file_source_manager::FileSourceFactory;
-pub(crate) use file_source_request::{FileSourceRequest, FileSourceRequestState};
-pub(crate) use local_file_source::LocalFileSource;
 pub use main_resource_loader::MainResourceLoader;
-#[cfg(feature = "sqlite")]
-pub(crate) use mbtiles_file_source::MBTilesFileSource;
 #[cfg(feature = "sqlite")]
 pub use offline_database::OfflineDatabase;
 pub use online_file_source::OnlineFileSource;
-pub(crate) use pmtiles_file_source::PMTilesFileSource;
 pub use resource::{Kind, LoadingMethod, Resource, StoragePolicy};
-pub(crate) use resource::TileData;
 pub use resource_options::ResourceOptions;
 pub use response::{Data, ResourceError, Response};
 

@@ -27,9 +27,7 @@ pub mod tagged_string;
 pub(crate) mod woff;
 
 pub use bidi::{BiDi, apply_arabic_shaping, starts_right_to_left};
-pub(crate) use bidi::StyledText;
 pub use freetype::FreeTypeLibrary;
-pub(crate) use freetype::FreeTypeFace;
 pub use glyph::{
     Glyph, GlyphID, GlyphIDType, GlyphMap, GlyphMetrics, GlyphPosition, GlyphPositions, GlyphRange, PositionedGlyph,
     PositionedLine, Shaping, WritingModeType,

@@ -297,7 +297,7 @@ impl BorrowedTarget {
     }
 
     /// How many textures the ring has.
-    pub fn depth(&self) -> usize {
+    pub(crate) fn depth(&self) -> usize {
         self.resource.textures.borrow().textures.len()
     }
 

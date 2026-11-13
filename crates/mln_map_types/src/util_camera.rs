@@ -4,8 +4,11 @@
 use std::f64::consts::PI;
 
 use mln_util::constants::{EARTH_RADIUS_M, M2PI};
+#[cfg(test)]
 use mln_util::geo::{LatLng, LatLngAltitude};
-use mln_util::mat3::{vec3_cross, vec3_length, vec3_sub};
+#[cfg(test)]
+use mln_util::mat3::vec3_sub;
+use mln_util::mat3::{vec3_cross, vec3_length};
 use mln_util::mat4::{Mat4, matrix};
 use mln_util::projection::Projection;
 use mln_util::quaternion::Quaternion;

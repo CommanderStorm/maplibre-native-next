@@ -26,11 +26,8 @@ pub use geometry_tile_data::{
     classify_rings, convert_feature, convert_geometry, convert_geometry_to_tile, limit_holes,
     round_polygon_corners, to_geometry_collection,
 };
-pub(crate) use geometry_tile_data::fixup_polygons;
 pub use vector_mlt_tile_data::VectorMLTTileData;
-pub(crate) use vector_mlt_tile_data::{VectorMLTTileFeature, VectorMLTTileLayer};
 pub use vector_mvt_tile_data::VectorMVTTileData;
-pub(crate) use vector_mvt_tile_data::{VectorMVTTileFeature, VectorMVTTileLayer};
 
 #[cfg(test)]
 mod malformed_tile_test;

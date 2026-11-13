@@ -65,7 +65,7 @@ impl BackendImpl {
 
     #[cfg(target_family = "wasm")]
     #[must_use]
-    pub fn webgl2(&self) -> &web_sys::WebGl2RenderingContext {
+    pub(crate) fn webgl2(&self) -> &web_sys::WebGl2RenderingContext {
         &self.webgl2
     }
 

@@ -5,7 +5,7 @@ use feature::{Identifier, PropertyMap, Value};
 use geometry::Point;
 use mln_gfx::shaders::segment::MAX_SEGMENT_VERTICES;
 use crate::bucket::Bucket;
-use crate::buckets::FillExtrusionBucket;
+use crate::buckets::fill_extrusion_bucket::FillExtrusionBucket;
 use crate::globe_tile_mesh::{GlobeTileMesh, GlobeTileMeshCache};
 use crate::layout::pattern_layout::PatternLayerMap;
 use crate::tile_mask::TileMask;

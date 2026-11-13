@@ -35,7 +35,9 @@ pub(crate) type Matf4 = [f32; 16];
 /// The C++ literals are floats (`1.0f / (left - right)`) promoted to double;
 /// all of them are exactly representable, so the arithmetic here is f64.
 pub mod matrix {
-    use super::{Mat4, Matf4};
+    use super::Mat4;
+    #[cfg(test)]
+    use super::Matf4;
     use crate::vectors::Vec4;
 
     pub fn identity(out: &mut Mat4) {

@@ -25,7 +25,6 @@ use mln_util::logging::{Event, Log};
 use crate::layer::LayerTypeInfo;
 use crate::observer::SourceObserver;
 pub use crate::source_impl::{Impl, downcast_arc};
-pub(crate) use crate::source_impl::ImplBase;
 
 /// The data members of `Source`.
 pub struct SourceBase {

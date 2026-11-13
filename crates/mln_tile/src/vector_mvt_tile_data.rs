@@ -11,7 +11,9 @@
 // for `GeometryTileFeature::error` (the trait has no other channel).
 
 use std::cell::OnceCell;
-use std::collections::{BTreeSet, HashMap};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 

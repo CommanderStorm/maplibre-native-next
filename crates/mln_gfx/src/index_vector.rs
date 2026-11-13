@@ -5,7 +5,6 @@ use std::rc::Rc;
 #[cfg(target_family = "wasm")]
 use mln_util::host_bytes::HostBytes;
 
-use crate::draw_mode::DrawMode;
 
 /// A backend buffer attached to a shared index vector.
 pub trait IndexBufferBase: Any {}

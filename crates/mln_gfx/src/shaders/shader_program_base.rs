@@ -4,7 +4,7 @@ use std::rc::Rc;
 use mln_util::identity::SimpleIdentity;
 
 use crate::shader::Shader;
-use crate::vertex_attribute::{ElementType, VertexAttributeArray};
+use crate::vertex_attribute::VertexAttributeArray;
 
 pub trait ShaderProgramBase: Shader {
     /// The program id assigned at construction.

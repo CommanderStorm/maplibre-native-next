@@ -35,7 +35,7 @@ use mln_style::layer_properties::{LayerProperties, LayerPropertiesBase};
 use mln_style::{layer, source};
 use mln_style_types::{LineCapType, LineJoinType, TranslateAnchorType};
 use mln_tile_id::geometry_tile_data::GeometryCoordinates;
-use mln_tile_id::{OverscaledTileID, UnwrappedTileID};
+use mln_tile_id::OverscaledTileID;
 use mln_util::Color;
 use mln_util::constants::EXTENT;
 use mln_util::geometry::FeatureType;
@@ -49,7 +49,6 @@ use crate::render_pass::RenderPass;
 use crate::render_source::{RenderSourceBase, RenderTiles, SourcePrepareParameters};
 use crate::render_tile::RenderTile;
 use crate::render_tree::{DebugLayerGroupMap, DebugType, RenderItem};
-use crate::tile::tile::Tile;
 use crate::tile_pyramid::TilePyramid;
 use crate::util::subdivision::subdivide_vertex_line;
 

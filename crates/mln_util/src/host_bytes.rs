@@ -39,7 +39,7 @@ impl HostBytes {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len == 0
     }
 
@@ -53,7 +53,7 @@ impl HostBytes {
 
     /// A copy of the bytes in wasm memory.
     #[must_use]
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
         self.to_pod_vec()
     }
 

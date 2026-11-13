@@ -29,10 +29,6 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
-pub(crate) use background_layer_tweaker::BackgroundLayerTweaker;
-pub(crate) use circle_layer_tweaker::CircleLayerTweaker;
-pub(crate) use fill_layer_tweaker::FillLayerTweaker;
-pub(crate) use line_layer_tweaker::LineLayerTweaker;
 use mln_gfx::Drawable;
 use mln_gfx::vertex_vector::VertexVectorBasePtr;
 use mln_style::CrossfadeParameters;

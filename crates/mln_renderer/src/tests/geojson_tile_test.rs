@@ -269,7 +269,7 @@ fn update_through_the_codec() {
             tile
         })
         .collect();
-    while !tiles.iter().all(crate::tile::Tile::is_complete) {
+    while !tiles.iter().all(Tile::is_complete) {
         test.run_loop.run_once();
     }
     for tile in &tiles {

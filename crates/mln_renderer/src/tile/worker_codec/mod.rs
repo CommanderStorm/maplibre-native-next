@@ -47,7 +47,6 @@ mod worker_side;
 pub use envelope::Encoded;
 pub use host::TileWorkerHost;
 pub use transport::{SerializingTransport, ThreadWorkerInstances};
-pub(crate) use transport::ReplySink;
 pub use transport::WorkerInstances;
 
 #[cfg(test)]

@@ -4,7 +4,9 @@
 // tests/fixtures.rs has the rest.
 
 use feature::Value;
-use crate::detail::{Clipper, VtGeometry, VtLineString, VtLinearRing, VtPoint, simplify};
+use crate::clip::Clipper;
+use crate::detail::{VtGeometry, VtLineString, VtLinearRing, VtPoint};
+use crate::simplify::simplify;
 use crate::{GeoJSONVT, Options};
 use geometry::{Geometry, Point};
 

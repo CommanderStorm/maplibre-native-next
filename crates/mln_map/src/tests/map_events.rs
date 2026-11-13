@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use mln_actor::RunLoop;
 use crate::{
     CameraChange, CameraChangeMode, CameraChangeSource, CameraOptions, Map, MapEvent, MapMode, MapOptions,
-    UnusedStyleImagePolicy,
 };
+use crate::map_options::UnusedStyleImagePolicy;
 use mln_renderer::RendererEvent;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_util::image::PremultipliedImage;

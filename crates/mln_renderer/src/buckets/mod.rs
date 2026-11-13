@@ -10,8 +10,3 @@ pub(crate) mod line_bucket;
 pub(crate) mod raster_bucket;
 pub(crate) mod symbol_bucket;
 
-pub(crate) use circle_bucket::CircleBucket;
-pub(crate) use fill_bucket::FillBucket;
-pub(crate) use fill_extrusion_bucket::FillExtrusionBucket;
-pub(crate) use line_bucket::LineBucket;
-pub(crate) use raster_bucket::RasterBucket;

@@ -9,6 +9,5 @@ pub mod tile_source;
 
 pub use custom_geometry_source::{CustomGeometrySource, CustomGeometrySourceHandle};
 pub use custom_vector_source::{CustomVectorSource, TileDataFormat};
-pub(crate) use custom_vector_source::CustomVectorSourceHandle;
 pub use geojson_source::{GeoJSONData, GeoJSONOptions, GeoJSONSource};
 pub use tile_source::{RasterDEMSource, RasterSource, TileSource, UrlOrTileset, VectorSource};

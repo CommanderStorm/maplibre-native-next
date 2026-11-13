@@ -94,6 +94,18 @@ impl Cancellation {
         self.cancelled.load(Ordering::SeqCst)
     }
 
+    #[cfg(target_vendor = "apple")]
+    fn set_handler(&self, handler: Box<dyn FnOnce() + Send>) {
+        *self.handler.lock() = Some(handler);
+        // `cancel` may have run before the handler was there.
+        if self.is_cancelled() {
+            let handler = self.handler.lock().take();
+            if let Some(handler) = handler {
+                handler();
+            }
+        }
+    }
+
     fn clear_handler(&self) {
         drop(self.handler.lock().take());
     }
@@ -142,6 +154,15 @@ impl TransferRequest {
     #[must_use]
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
+    }
+
+    /// Sets what stops the transfer when the request is dropped before it
+    /// finishes, such as cancelling the HTTP stack's task. It runs once, on
+    /// the thread that drops the request, or right away if the request is
+    /// already dropped; `finish` discards it.
+    #[cfg(target_vendor = "apple")]
+    pub(crate) fn set_cancel_handler(&self, handler: impl FnOnce() + Send + 'static) {
+        self.cancellation.set_handler(Box::new(handler));
     }
 
     /// Finishes the request with the transfer's result (a transfer that

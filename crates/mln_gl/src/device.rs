@@ -576,7 +576,7 @@ impl Device {
     /// `dc` is a live `HDC` with the pixel format of `context`, a live
     /// `HGLRC`, and they outlive the device and its renderers.
     #[cfg(windows)]
-    pub unsafe fn from_wgl(
+    pub(crate) unsafe fn from_wgl(
         dc: NonNull<c_void>,
         context: NonNull<c_void>,
         get_proc_address: *mut c_void,

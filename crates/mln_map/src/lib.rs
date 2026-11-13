@@ -14,15 +14,10 @@ pub(crate) mod rendering_stats_view;
 pub mod transform;
 
 pub use map::Map;
-pub(crate) use map::StillImageCallback;
 pub use map_event::{CameraChange, CameraChangeMode, CameraChangeSource, MapEvent, RenderFrameStatus, RenderMode};
 pub use map_options::MapOptions;
-pub(crate) use map_options::UnusedStyleImagePolicy;
 pub use map_projection::MapProjection;
 pub use map_snapshot::MapSnapshot;
-pub(crate) use map_snapshot::FreeCamera;
-pub(crate) use map_snapshot::TileSettings;
-pub(crate) use map_snapshot::CameraBounds;
 pub use mln_map_types::{
     AnimationOptions, BoundOptions, Camera, CameraDelta, CameraError, CameraMomentum, CameraOptions, CameraUpdate,
     CameraUpdateMode, CameraVelocity, ConstrainMode, FreeCameraOptions, GesturePhase, LogicalExtent, MapDebugOptions,

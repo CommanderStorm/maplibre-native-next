@@ -68,7 +68,7 @@ struct DrawableImpl {
     previous_stencil_mode: StencilMode,
 }
 
-pub struct Drawable {
+pub(crate) struct Drawable {
     base: DrawableBase,
     impl_: DrawableImpl,
 }
@@ -154,7 +154,7 @@ fn apply_buffer_indexes(bindings: &mut AttributeBindingArray, buffer_index_of: i
 
 impl Drawable {
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub(crate) fn new(name: String) -> Self {
         Drawable {
             base: DrawableBase::new(name),
             impl_: DrawableImpl {
@@ -176,11 +176,11 @@ impl Drawable {
         }
     }
 
-    pub fn set_vertex_attr_id(&mut self, id: usize) {
+    pub(crate) fn set_vertex_attr_id(&mut self, id: usize) {
         self.impl_.vertex_attr_id = id;
     }
 
-    pub fn upload(&mut self, upload_pass: &UploadPass) {
+    pub(crate) fn upload(&mut self, upload_pass: &UploadPass) {
         let Some(shader_ptr) = self.base.shader.clone() else {
             Log::warning(
                 Event::General,
