@@ -347,6 +347,11 @@ unused_qualifications = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Development macros that shouldn't be merged: `dbg!` prints to stderr, and
+# `todo!` and `unimplemented!` panic.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
 # Their fixes would change what the code does: numeric conversions that
 # truncate, wrap or saturate on purpose, where `try_from` would fail
 # instead, and exact float comparisons, which an epsilon would loosen.
