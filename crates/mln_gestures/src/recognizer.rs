@@ -474,6 +474,16 @@ impl GestureRecognizer {
         }
     }
 
+    #[must_use]
+    pub fn options(&self) -> &GestureOptions {
+        &self.options
+    }
+
+    /// Takes effect with the next input.
+    pub fn set_options(&mut self, options: GestureOptions) {
+        self.options = options;
+    }
+
     /// A gesture is under way: hosts keep pointer capture and scrolling off.
     #[cfg(test)]
     #[must_use]
