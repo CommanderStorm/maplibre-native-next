@@ -40,15 +40,15 @@ use mln_gfx::shaders::sky_ubo::{AtmospherePropsUBO, SkyPropsUBO};
 use mln_gfx::shaders::symbol_layer_ubo::{
     CollisionDrawableUBO, CollisionTilePropsUBO, SymbolDrawableUBO, SymbolEvaluatedPropsUBO, SymbolTilePropsUBO,
 };
-use mln_vulkan::shaders::compiler::{Stage, compile, compose, parse};
-use mln_vulkan::shaders::glsl_sources;
-use mln_vulkan::shaders::layout::{
+use crate::shaders::compiler::{Stage, compile, compose, parse};
+use crate::shaders::glsl_sources;
+use crate::shaders::layout::{
     CLIP_MASK_PUSH_CONSTANT_SIZE, DRAWABLE_UNIFORM_COUNT, DescriptorSetType, GLOBAL_UNIFORM_COUNT, IMAGE_SAMPLER_START,
     IMAGE_TEXTURE_COUNT, LAYER_STORAGE_COUNT, LAYER_UNIFORM_COUNT, UBO_INDEX_PUSH_CONSTANT_SIZE,
     drawable_uniform_binding, global_uniform_binding, image_sampler_binding, image_texture_binding,
     layer_storage_binding, layer_uniform_binding,
 };
-use mln_vulkan::shaders::shader_source::{AttributeInfo, ShaderSource, shader_source};
+use crate::shaders::shader_source::{AttributeInfo, ShaderSource, shader_source};
 use naga::{AddressSpace, ArraySize, Binding, Interpolation, Module, ScalarKind, StorageAccess, TypeInner};
 
 const ALL_BUILT_INS: &[BuiltIn] = &[

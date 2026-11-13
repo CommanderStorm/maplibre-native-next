@@ -39,7 +39,7 @@ use mln_gfx::shaders::shader_defines::{
 use mln_gfx::stencil_mode::{StencilMode, Test};
 use mln_gfx::types::{DepthMaskType, StencilOpType};
 use mln_gfx::uniform_buffer::UniformBufferPtr;
-use mln_gl::{Api, Device, DeviceOptions, OffscreenTarget, RendererBackend};
+use crate::{Api, Device, DeviceOptions, OffscreenTarget, RendererBackend};
 use mln_tile_id::{OverscaledTileID, UnwrappedTileID};
 use mln_util::Color;
 use mln_util::range::Range;

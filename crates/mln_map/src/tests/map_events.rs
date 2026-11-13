@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mln_actor::RunLoop;
-use mln_map::{
+use crate::{
     CameraChange, CameraChangeMode, CameraChangeSource, CameraOptions, Map, MapEvent, MapMode, MapOptions,
     UnusedStyleImagePolicy,
 };

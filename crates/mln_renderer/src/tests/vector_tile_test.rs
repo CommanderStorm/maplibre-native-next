@@ -4,17 +4,17 @@ use std::sync::Arc;
 use mln_actor::{RunLoop, TaggedScheduler, scheduler};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
-use mln_renderer::query::SourceQueryOptions;
-use mln_renderer::tile::geometry_tile_worker::{TileMessage, WorkerMessage};
-use mln_renderer::tile::raster_dem_tile::{RasterDEMTileMessage, RasterDEMWorkerMessage};
-use mln_renderer::tile::raster_tile::{RasterTileMessage, RasterWorkerMessage};
-use mln_renderer::tile::tile::Tile;
-use mln_renderer::tile::tile_loader::{LoaderTile, VectorTileEncoding};
-use mln_renderer::tile::tile_worker_transport::{
+use crate::query::SourceQueryOptions;
+use crate::tile::geometry_tile_worker::{TileMessage, WorkerMessage};
+use crate::tile::raster_dem_tile::{RasterDEMTileMessage, RasterDEMWorkerMessage};
+use crate::tile::raster_tile::{RasterTileMessage, RasterWorkerMessage};
+use crate::tile::tile::Tile;
+use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
+use crate::tile::tile_worker_transport::{
     InProcessTransport, TileEndpoint, TileWorkerTransport, WorkerEndpoint, WorkerParameters,
 };
-use mln_renderer::tile::vector_tile::VectorTile;
-use mln_renderer::tile_parameters::TileParameters;
+use crate::tile::vector_tile::VectorTile;
+use crate::tile_parameters::TileParameters;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_tile_id::OverscaledTileID;
 use mln_util::error::Error;
@@ -65,9 +65,9 @@ impl VectorTileTest {
             global_state: None,
             is_update_synchronous: false,
             capture_rendered_features: false,
-            image_manager: mln_renderer::image_manager::ImageManager::create(),
-            glyph_manager: mln_renderer::text::glyph_manager::GlyphManager::new(None),
-            dynamic_texture_atlas: Arc::new(mln_renderer::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
+            image_manager: crate::image_manager::ImageManager::create(),
+            glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
+            dynamic_texture_atlas: Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
             tile_worker_transport: self.transport.clone(),
         }
     }

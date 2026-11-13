@@ -4,7 +4,7 @@
 // standard; the distributions are libstdc++'s (x86-64 Linux, GCC 11 and
 // later), ported below so the atlas sees the same dash arrays as in C++.
 
-use mln_renderer::line_atlas::{LineAtlas, LinePatternCap};
+use crate::line_atlas::{LineAtlas, LinePatternCap};
 
 struct Mt19937 {
     state: [u32; Self::N],

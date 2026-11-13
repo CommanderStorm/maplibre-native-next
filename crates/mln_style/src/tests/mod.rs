@@ -26,3 +26,4 @@ mod style_layer;
 mod style_parser;
 mod util;
 mod variable_anchor_offset_collection;
+mod format_section_override_test;

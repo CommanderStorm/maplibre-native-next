@@ -399,3 +399,6 @@ fn sq_dist<N: Number>(ax: N, ay: N, bx: N, by: N) -> N {
     let dy = ay.sub(by);
     dx.mul(dx).add(dy.mul(dy))
 }
+
+#[cfg(test)]
+mod tests;

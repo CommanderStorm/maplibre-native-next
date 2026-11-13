@@ -1,13 +1,10 @@
-// Ported C++ gtests of test/util that test mln_util (and the low crates
-// next to it: mln_style_types' Position/Rotation).
+// Ported C++ gtests of test/util that test mln_util.
 // Every test carries a `// gtest: Group.Name` marker naming the C++ test it
 // ports.
 
 mod color;
 mod geo;
 mod number_conversions;
-mod position;
-mod rotation;
 mod string;
 
 /// The ULP distance gtest's `FloatingPoint<T>::AlmostEquals` uses.

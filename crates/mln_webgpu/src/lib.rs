@@ -43,3 +43,6 @@ pub use device::Device;
 pub use offscreen_target::OffscreenTarget;
 pub use renderer_backend::RendererBackend;
 pub use surface_target::{SurfaceOptions, SurfaceTarget};
+
+#[cfg(test)]
+mod tests;

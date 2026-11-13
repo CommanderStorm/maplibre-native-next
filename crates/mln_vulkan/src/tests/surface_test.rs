@@ -54,9 +54,9 @@ use mln_util::Color;
 use mln_util::error::Error;
 use mln_util::image::PremultipliedImage;
 use mln_util::size::Size;
-use mln_vulkan::renderer_backend::SurfaceProvider;
-use mln_vulkan::surface_target::{Overlay, OverlayTarget, present_mode};
-use mln_vulkan::{Device, RendererBackend, SurfaceTarget};
+use crate::renderer_backend::SurfaceProvider;
+use crate::surface_target::{Overlay, OverlayTarget, present_mode};
+use crate::{Device, RendererBackend, SurfaceTarget};
 
 const EXTENT: i16 = 8192;
 

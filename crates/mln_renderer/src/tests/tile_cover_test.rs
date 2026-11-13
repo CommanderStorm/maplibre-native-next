@@ -6,7 +6,7 @@ use std::rc::Rc;
 use geometry::{Geometry, LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{CameraOptions, ConstrainMode, TileLodMode, ViewportMode};
-use mln_renderer::util::tile_cover::{
+use crate::util::tile_cover::{
     TileCover, TileCoverParameters, covering_zoom_level, tile_count_bounds, tile_cover, tile_cover_bounds,
     tile_cover_geometry,
 };

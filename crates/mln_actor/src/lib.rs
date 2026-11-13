@@ -28,3 +28,6 @@ pub use scheduler::{Scheduler, SchedulerPtr, TaggedScheduler};
 pub use thread::Thread;
 pub use thread_pool::ThreadPool;
 pub use timer::Timer;
+
+#[cfg(test)]
+mod tests;

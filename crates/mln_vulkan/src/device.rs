@@ -1092,6 +1092,13 @@ impl Device {
         }
     }
 
+    /// The device's handle and functions, as ash loads them. The device lives
+    /// as long as a clone of `self` does.
+    #[must_use]
+    pub fn ash_device(&self) -> &ash::Device {
+        self.shared.device()
+    }
+
     /// Whether `self` and `other` are clones of one device.
     #[must_use]
     pub fn same_as(&self, other: &Device) -> bool {

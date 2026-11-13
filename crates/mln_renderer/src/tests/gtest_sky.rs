@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mln_conversion::Convertible;
-use mln_renderer::render_sky::RenderSky;
+use crate::render_sky::RenderSky;
 use mln_style::conversion::{Converter, Error};
 use mln_style::property_value::PropertyValue;
 use mln_style::sky::{

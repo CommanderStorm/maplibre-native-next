@@ -2,7 +2,7 @@
 // mln_map's Transform (above mln_renderer), one module per C++ file. The
 // other test/tile files are ported elsewhere: geojson_tile (geojson_tile_test),
 // vector_tile (vector_tile_test, mln_tile), geometry_tile_data (mln_tile),
-// tile_cache (mln_renderer::tile::tile_cache), tile_id (mln_tile_id),
+// tile_cache (crate::tile::tile_cache), tile_id (mln_tile_id),
 // tile_lod (mln_headless, which has the HeadlessFrontend).
 
 mod custom_geometry_tile;
@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use mln_actor::{TaggedScheduler, scheduler};
 use mln_map_types::{MapDebugOptions, MapMode, TileLodMode, TransformState};
-use mln_renderer::tile_parameters::TileParameters;
+use crate::tile_parameters::TileParameters;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_util::identity::SimpleIdentity;
 use mln_util::range::Range;
@@ -71,11 +71,11 @@ impl RasterTileTest {
             global_state: None,
             is_update_synchronous: false,
             capture_rendered_features: false,
-            image_manager: mln_renderer::image_manager::ImageManager::create(),
-            glyph_manager: mln_renderer::text::glyph_manager::GlyphManager::new(None),
-            dynamic_texture_atlas: Arc::new(mln_renderer::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
+            image_manager: crate::image_manager::ImageManager::create(),
+            glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
+            dynamic_texture_atlas: Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
             tile_worker_transport: std::rc::Rc::new(
-                mln_renderer::tile::tile_worker_transport::InProcessTransport::new(self.thread_pool.clone()),
+                crate::tile::tile_worker_transport::InProcessTransport::new(self.thread_pool.clone()),
             ),
         }
     }
@@ -90,8 +90,8 @@ impl Default for RasterTileTest {
 /// Port-only: a transport whose workers are in `count` worker instances on
 /// threads, reached only through the worker codec.
 #[must_use]
-pub fn serializing_transport(count: usize) -> std::rc::Rc<mln_renderer::tile::worker_codec::SerializingTransport> {
-    use mln_renderer::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
+pub fn serializing_transport(count: usize) -> std::rc::Rc<crate::tile::worker_codec::SerializingTransport> {
+    use crate::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
     SerializingTransport::new(|replies| Box::new(ThreadWorkerInstances::new(count, &replies)))
 }
 
@@ -109,8 +109,8 @@ pub fn png(width: u32, height: u32) -> mln_storage::Data {
 #[derive(Default)]
 pub struct ErrorObserver(pub std::cell::RefCell<Vec<String>>);
 
-impl mln_renderer::tile::tile_observer::TileObserver for ErrorObserver {
-    fn on_tile_error(&self, _tile: &mln_renderer::tile::TileBase, error: mln_util::error::Error) {
+impl crate::tile::tile_observer::TileObserver for ErrorObserver {
+    fn on_tile_error(&self, _tile: &crate::tile::TileBase, error: mln_util::error::Error) {
         self.0.borrow_mut().push(error.to_string());
     }
 }

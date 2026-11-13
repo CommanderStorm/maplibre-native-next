@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use geometry::Point;
 use mln_gfx::shaders::segment::{MAX_SEGMENT_VERTICES, SegmentBase};
-use mln_renderer::buckets::fill_bucket::FillLayoutVertex;
-use mln_renderer::buckets::line_bucket::LineLayoutVertex;
-use mln_renderer::gfx::fill_generator::generate_fill_and_outline_buffers;
-use mln_renderer::util::subdivision::{SubdivisionResult, subdivide_polygon};
+use crate::buckets::fill_bucket::FillLayoutVertex;
+use crate::buckets::line_bucket::LineLayoutVertex;
+use crate::gfx::fill_generator::generate_fill_and_outline_buffers;
+use crate::util::subdivision::{SubdivisionResult, subdivide_polygon};
 use mln_tile_id::CanonicalTileID;
 use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryCoordinate, GeometryCoordinates};
 use mln_util::constants::EXTENT;
@@ -135,7 +135,7 @@ fn globe_zoom_zero_outline_stays_inside_the_tile() {
     let wide = square(-2000, 1000, EXTENT_I16 + 2000, 2000);
     for zoom in [0u8, 1] {
         let buffers = generate(&wide, &CanonicalTileID::new(zoom, 0, 0), 8);
-        assert_ne!(buffers.line_vertices, [] as [mln_renderer::buckets::line_bucket::LineLayoutVertex; 0]);
+        assert_ne!(buffers.line_vertices, [] as [crate::buckets::line_bucket::LineLayoutVertex; 0]);
         // Only the zoom 0 tile wraps onto itself; every other zoom keeps the
         // outline of its buffer.
         assert_eq!(zoom != 0, any_outline_vertex_outside_tile_x(&buffers.line_vertices), "zoom {zoom}");

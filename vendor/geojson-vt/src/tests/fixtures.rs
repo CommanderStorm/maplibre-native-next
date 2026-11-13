@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use feature::{Feature, Identifier, PropertyMap, Value};
-use geojson_vt::{EMPTY_TILE, GeoJSONVT, Options, TileOptions, geojson_to_tile};
+use crate::{EMPTY_TILE, GeoJSONVT, Options, TileOptions, geojson_to_tile};
 use geometry::{Geometry, Point};
 use serde_json::Value as Json;
 

@@ -10,13 +10,13 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 
-use mln_actor::actor::Actor;
-use mln_actor::scheduler::{self, SchedulerPtr, TaggedScheduler};
-use mln_actor::{AsyncTask, AsyncTaskSender, RunLoop};
+use crate::actor::Actor;
+use crate::scheduler::{self, SchedulerPtr, TaggedScheduler};
+use crate::{AsyncTask, AsyncTaskSender, RunLoop};
 use mln_util::identity::SimpleIdentity;
 use parking_lot::Mutex;
 
-use crate::{Failures, wait};
+use crate::tests::gtest::{Failures, wait};
 
 struct TestWorker {
     async_: AsyncTaskSender,

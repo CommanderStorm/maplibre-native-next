@@ -59,6 +59,12 @@ pub use context::Context;
 pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 pub use device::{AdapterId, Device, Features, HostDevice, QueueLease, QueueLock, RawDevice};
 pub use exported_target::ExportedTarget;
+pub use buffer_resource::BufferResource;
 pub use offscreen_target::OffscreenTarget;
 pub use renderer_backend::RendererBackend;
-pub use surface_target::{HostSurface, SurfaceTarget};
+pub use shaders::compiler::{Stage as ShaderStage, compile as compile_glsl};
+pub use surface_target::{HostSurface, Overlay, OverlayTarget, SurfaceTarget};
+pub use texture2d::Texture2D;
+
+#[cfg(test)]
+mod tests;

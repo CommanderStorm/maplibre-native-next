@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use mln_actor::{RunLoop, Timer};
+use crate::{RunLoop, Timer};
 
 fn elapsed_ms(first: Instant) -> f64 {
     first.elapsed().as_millis() as f64

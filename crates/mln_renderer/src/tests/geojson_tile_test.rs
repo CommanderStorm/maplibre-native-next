@@ -7,11 +7,11 @@ use geometry::{Geometry, Point};
 use mln_actor::{RunLoop, TaggedScheduler, scheduler};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
-use mln_renderer::tile::geojson_tile::GeoJSONTile;
-use mln_renderer::tile::tile::{Tile, TileBase};
-use mln_renderer::tile::tile_observer::TileObserver;
-use mln_renderer::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
-use mln_renderer::tile_parameters::TileParameters;
+use crate::tile::geojson_tile::GeoJSONTile;
+use crate::tile::tile::{Tile, TileBase};
+use crate::tile::tile_observer::TileObserver;
+use crate::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
+use crate::tile_parameters::TileParameters;
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;
 use mln_style::layers::circle_layer::Impl as CircleLayerImpl;
@@ -55,13 +55,13 @@ impl GeoJSONTileTest {
             global_state: None,
             is_update_synchronous: false,
             capture_rendered_features: false,
-            image_manager: mln_renderer::image_manager::ImageManager::create(),
-            glyph_manager: mln_renderer::text::glyph_manager::GlyphManager::new(None),
+            image_manager: crate::image_manager::ImageManager::create(),
+            glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
             dynamic_texture_atlas: std::sync::Arc::new(
-                mln_renderer::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new(),
+                crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new(),
             ),
             tile_worker_transport: std::rc::Rc::new(
-                mln_renderer::tile::tile_worker_transport::InProcessTransport::new(self.thread_pool.clone()),
+                crate::tile::tile_worker_transport::InProcessTransport::new(self.thread_pool.clone()),
             ),
         }
     }
@@ -217,7 +217,7 @@ fn issue_9927() {
 /// worker codec sends to evaluate it again.
 fn evaluated_circle_layer_properties() -> Arc<dyn LayerProperties> {
     let layer = CircleLayer::new("circle", "source");
-    let render_layer = mln_renderer::layermanager::create_render_layer(&layer.base_impl()).unwrap();
+    let render_layer = crate::layermanager::create_render_layer(&layer.base_impl()).unwrap();
     render_layer.borrow_mut().evaluate(&PropertyEvaluationParameters::new(0.0));
     render_layer.borrow().base().evaluated_properties.clone()
 }
@@ -269,7 +269,7 @@ fn update_through_the_codec() {
             tile
         })
         .collect();
-    while !tiles.iter().all(mln_renderer::tile::Tile::is_complete) {
+    while !tiles.iter().all(crate::tile::Tile::is_complete) {
         test.run_loop.run_once();
     }
     for tile in &tiles {

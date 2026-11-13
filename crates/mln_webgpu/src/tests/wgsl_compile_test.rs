@@ -13,11 +13,11 @@ use mln_gfx::backend_scope::{BackendScope, ScopeType};
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::renderer_backend::RendererBackend;
 use mln_gfx::shader_group::GLOBE_DEFINE;
-use mln_webgpu::Device;
-use mln_webgpu::shaders::shader_program::ShaderProgram;
-use mln_webgpu::shaders::shader_source::{WgslShaderSource, prelude};
-use mln_webgpu::shaders::wgsl_preprocessor::preprocess_wgsl;
-use mln_webgpu::shaders::wgsl_sources::ALL;
+use crate::Device;
+use crate::shaders::shader_program::ShaderProgram;
+use crate::shaders::shader_source::{WgslShaderSource, prelude};
+use crate::shaders::wgsl_preprocessor::preprocess_wgsl;
+use crate::shaders::wgsl_sources::ALL;
 
 const REQUIRED: &[&str] = &[
     "BackgroundShader",
@@ -35,9 +35,9 @@ fn assemble(source: &WgslShaderSource, stage: &str) -> String {
 
 #[test]
 fn all_extracted_wgsl_compiles() {
-    let backend = mln_webgpu::RendererBackend::new(&Device::new(None).expect("device"));
+    let backend = crate::RendererBackend::new(&Device::new(None).expect("device"));
     let _scope = BackendScope::new(&backend, ScopeType::Explicit);
-    let context = backend.get_context().downcast_ref::<mln_webgpu::Context>().unwrap();
+    let context = backend.get_context().downcast_ref::<crate::Context>().unwrap();
 
     for variant in [ProjectionVariant::Mercator, ProjectionVariant::Globe] {
         // ProgramParameters(pixelRatio, overdraw=false): only DEVICE_PIXEL_RATIO.
@@ -93,9 +93,9 @@ fn conditional_symbols(source: &str) -> Vec<String> {
 /// when all data-driven properties are constant). Reported, not asserted.
 #[test]
 fn all_extracted_wgsl_compiles_with_all_conditionals_defined() {
-    let backend = mln_webgpu::RendererBackend::new(&Device::new(None).expect("device"));
+    let backend = crate::RendererBackend::new(&Device::new(None).expect("device"));
     let _scope = BackendScope::new(&backend, ScopeType::Explicit);
-    let context = backend.get_context().downcast_ref::<mln_webgpu::Context>().unwrap();
+    let context = backend.get_context().downcast_ref::<crate::Context>().unwrap();
     let mut failed = Vec::new();
     let mut compiled = 0;
     for source in ALL {

@@ -1,6 +1,6 @@
-use mln_style_types::Position;
+use crate::Position;
 
-use crate::assert_near;
+use crate::tests::assert_near;
 
 #[track_caller]
 fn expect_array_eq(got: [f32; 3], expected: [f32; 3]) {

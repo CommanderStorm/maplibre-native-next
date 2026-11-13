@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use geojson::{
+use crate::{
     Feature, GeoJSON, Geometry, Identifier, Value, convert, convert_geometry, parse, stringify, stringify_geometry,
     to_json, to_json_geometry,
 };
@@ -20,7 +20,7 @@ fn read_file(name: &str) -> String {
     std::fs::read_to_string(fixture(name)).unwrap()
 }
 
-fn read_geojson(name: &str, use_convert: bool) -> Result<GeoJSON, geojson::Error> {
+fn read_geojson(name: &str, use_convert: bool) -> Result<GeoJSON, crate::Error> {
     let text = read_file(name);
     if use_convert {
         let d: serde_json::Value = serde_json::from_str(&text).unwrap();

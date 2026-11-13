@@ -4,15 +4,15 @@ use std::rc::Rc;
 use feature::{Identifier, PropertyMap, Value};
 use geometry::Point;
 use mln_gfx::shaders::segment::MAX_SEGMENT_VERTICES;
-use mln_renderer::bucket::Bucket;
-use mln_renderer::buckets::FillExtrusionBucket;
-use mln_renderer::globe_tile_mesh::{GlobeTileMesh, GlobeTileMeshCache};
-use mln_renderer::layout::pattern_layout::PatternLayerMap;
-use mln_renderer::tile_mask::TileMask;
-use mln_renderer::util::subdivision::{
+use crate::bucket::Bucket;
+use crate::buckets::FillExtrusionBucket;
+use crate::globe_tile_mesh::{GlobeTileMesh, GlobeTileMeshCache};
+use crate::layout::pattern_layout::PatternLayerMap;
+use crate::tile_mask::TileMask;
+use crate::util::subdivision::{
     NORTH_POLE_Y, SOUTH_POLE_Y, SubdivisionResult, subdivide_polygon, subdivide_vertex_line,
 };
-use mln_renderer::util::tile_mesh::{TileMeshOptions, create_tile_mesh};
+use crate::util::tile_mesh::{TileMeshOptions, create_tile_mesh};
 use mln_style::layers::fill_extrusion_layer_properties::FillExtrusionLayoutProperties;
 use mln_style_types::image::ImagePositions;
 use mln_tile_id::CanonicalTileID;

@@ -1,5 +1,5 @@
 use mln_gfx::shaders::segment::SegmentBase;
-use mln_renderer::gfx::fill_large_mesh_arrays::{MeshLines, fill_large_mesh_arrays};
+use crate::gfx::fill_large_mesh_arrays::{MeshLines, fill_large_mesh_arrays};
 
 #[derive(Clone)]
 struct Mesh {

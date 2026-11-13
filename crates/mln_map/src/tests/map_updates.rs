@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use feature::Value;
 use mln_actor::RunLoop;
-use mln_map::{CameraOptions, ErrorKind, Map, MapOptions, UpdateReader};
+use crate::{CameraOptions, ErrorKind, Map, MapOptions, UpdateReader};
 use mln_renderer::update_slot::Update;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_style::expression::expression::FeatureState;

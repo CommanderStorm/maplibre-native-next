@@ -1,5 +1,5 @@
 use mln_math::deg2rad;
-use mln_renderer::util::tile_lod::{self, TileZoomFunction};
+use crate::util::tile_lod::{self, TileZoomFunction};
 
 // TransformState's default field of view, in degrees.
 const FOV: f64 = 36.869_897_645_844_02;

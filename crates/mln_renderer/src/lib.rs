@@ -59,3 +59,8 @@ pub use renderer_event::{
 };
 pub use update_parameters::UpdateParameters;
 pub use update_slot::{Update, UpdateReader, UpdateSlot};
+
+pub(crate) use paint_property_binder::paint_property_binders;
+
+#[cfg(test)]
+mod tests;

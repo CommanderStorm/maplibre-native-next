@@ -4,7 +4,7 @@
 
 #![allow(unused_mut, unused_variables, unused_assignments)]
 
-use shelf_pack::{Bin, BinRef, PackOptions, SHELF_PACK_VERSION, ShelfPack, ShelfPackOptions};
+use crate::{Bin, BinRef, PackOptions, SHELF_PACK_VERSION, ShelfPack, ShelfPackOptions};
 
 fn b(sprite: &ShelfPack, r: Option<BinRef>) -> Bin {
     *sprite.bin(r.expect("non-null Bin*"))

@@ -4,7 +4,7 @@
 // ports.
 //
 // C++ -> Rust in these tests:
-// - `Actor<O>` on `Scheduler::GetBackground()` is the pool `mln_actor::actor::
+// - `Actor<O>` on `Scheduler::GetBackground()` is the pool `crate::actor::
 //   Actor<O>` (objects are `Send`, messages are closures over `&mut O`);
 //   `util::Thread<O>` is the thread-pinned actor (messages are closures over
 //   `&O`).

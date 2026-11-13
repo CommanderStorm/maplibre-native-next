@@ -538,3 +538,6 @@ pub fn project(p: &Point<f64>) -> Point<f64> {
     let lat_y = if 1.0 < y { 1.0 } else { y };
     Point::new(lng_x, lat_y)
 }
+
+#[cfg(test)]
+mod tests;

@@ -10,7 +10,7 @@ use mln_gfx::render_pass::RenderPassDescriptor;
 use mln_gfx::renderer_backend::RendererBackend as _;
 use mln_util::Color;
 use mln_util::size::Size;
-use mln_webgpu::{Device, OffscreenTarget, RendererBackend};
+use crate::{Device, OffscreenTarget, RendererBackend};
 
 const SIZE: Size = Size { width: 16, height: 8 };
 

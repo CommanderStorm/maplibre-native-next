@@ -429,3 +429,6 @@ impl ShelfPack {
         Some(r)
     }
 }
+
+#[cfg(test)]
+mod tests;

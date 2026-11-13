@@ -1,7 +1,7 @@
 // Ports vendor/kdbush.hpp/test.cpp (testRange, testRadius, testEmpty). The
 // points and expected ids are inline in test.cpp; they are read from it.
 
-use kdbush::KDBush;
+use crate::KDBush;
 
 type TPoint = (i32, i32);
 
@@ -77,7 +77,7 @@ fn test_radius() {
 #[test]
 fn test_empty() {
     let empty_points: Vec<TPoint> = Vec::new();
-    let index: KDBush<i32, usize> = KDBush::from_points(&empty_points, kdbush::DEFAULT_NODE_SIZE);
+    let index: KDBush<i32, usize> = KDBush::from_points(&empty_points, crate::DEFAULT_NODE_SIZE);
     // test no crash when using empty index
     let mut result: Vec<usize> = Vec::new();
     index.within(50, 50, 20, &mut |id| result.push(id));

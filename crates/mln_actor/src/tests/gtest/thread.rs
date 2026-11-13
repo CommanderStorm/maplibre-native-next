@@ -3,13 +3,13 @@ use std::sync::{Arc, mpsc};
 use std::thread::ThreadId;
 use std::time::Duration;
 
-use mln_actor::actor::Actor;
-use mln_actor::scheduler::{self, SchedulerPtr, TaggedScheduler, Task};
-use mln_actor::{ActorRef, RunLoop, Thread, Timer};
+use crate::actor::Actor;
+use crate::scheduler::{self, SchedulerPtr, TaggedScheduler, Task};
+use crate::{ActorRef, RunLoop, Thread, Timer};
 use mln_util::identity::SimpleIdentity;
 use parking_lot::Mutex;
 
-use crate::{Failures, get, wait};
+use crate::tests::gtest::{Failures, get, wait};
 
 struct TestObject {
     tid: ThreadId,

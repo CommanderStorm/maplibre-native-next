@@ -9,9 +9,9 @@ use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{
     CameraOptions, ConstrainMode, MapDebugOptions, MapMode, TileLodMode, TransformState, ViewportMode,
 };
-use mln_renderer::render_source::{self as render_source, RenderSource, RenderSourceObserver};
-use mln_renderer::sources::render_geojson_source::RenderGeoJSONSource;
-use mln_renderer::tile_parameters::TileParameters;
+use crate::render_source::{self as render_source, RenderSource, RenderSourceObserver};
+use crate::sources::render_geojson_source::RenderGeoJSONSource;
+use crate::tile_parameters::TileParameters;
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{AsyncRequest, Callback, FileSource, Kind, Resource, ResourceOptions, Response};
@@ -75,10 +75,10 @@ fn tile_parameters<'a>(
         global_state: None,
         is_update_synchronous: false,
         capture_rendered_features: false,
-        image_manager: mln_renderer::image_manager::ImageManager::create(),
-        glyph_manager: mln_renderer::text::glyph_manager::GlyphManager::new(None),
-        dynamic_texture_atlas: std::sync::Arc::new(mln_renderer::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
-        tile_worker_transport: Rc::new(mln_renderer::tile::tile_worker_transport::InProcessTransport::new(
+        image_manager: crate::image_manager::ImageManager::create(),
+        glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
+        dynamic_texture_atlas: std::sync::Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
+        tile_worker_transport: Rc::new(crate::tile::tile_worker_transport::InProcessTransport::new(
             thread_pool.clone(),
         )),
     }

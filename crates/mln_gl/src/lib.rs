@@ -93,3 +93,6 @@ pub use renderer_backend::RendererBackend;
 pub use surface_target::SurfaceTarget;
 #[cfg(windows)]
 pub use wgl_surface_target::SurfaceTarget;
+
+#[cfg(test)]
+mod tests;

@@ -345,3 +345,6 @@ impl GeoJSONVT {
         self.tiles.get_mut(&id).unwrap().source_features = VtFeatures::new();
     }
 }
+
+#[cfg(test)]
+mod tests;

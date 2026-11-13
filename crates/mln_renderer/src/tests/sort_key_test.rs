@@ -4,16 +4,16 @@ use std::sync::Arc;
 use feature::{Feature, PropertyMap, Value};
 use geometry::{Geometry, Point};
 use mln_map_types::MapMode;
-use mln_renderer::bucket::BucketPtr;
-use mln_renderer::bucket_parameters::BucketParameters;
-use mln_renderer::buckets::symbol_bucket::SymbolBucket;
-use mln_renderer::buckets::{CircleBucket, FillBucket, LineBucket};
-use mln_renderer::geometry::feature_index::FeatureIndex;
-use mln_renderer::layermanager;
-use mln_renderer::layout::filter_groups::FilterGroups;
-use mln_renderer::layout::layout::{LayoutParameters, SourceLayer};
-use mln_renderer::render_layer::LayerRenderData;
-use mln_renderer::tile::geojson_tile_data::GeoJSONTileData;
+use crate::bucket::BucketPtr;
+use crate::bucket_parameters::BucketParameters;
+use crate::buckets::symbol_bucket::SymbolBucket;
+use crate::buckets::{CircleBucket, FillBucket, LineBucket};
+use crate::geometry::feature_index::FeatureIndex;
+use crate::layermanager;
+use crate::layout::filter_groups::FilterGroups;
+use crate::layout::layout::{LayoutParameters, SourceLayer};
+use crate::render_layer::LayerRenderData;
+use crate::tile::geojson_tile_data::GeoJSONTileData;
 use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
 use mln_style::layer::downcast_arc;
 use mln_style::layer_properties::LayerProperties;
@@ -251,14 +251,14 @@ fn symbol_order() {
             .state()
             .symbol_instances
             .iter()
-            .map(mln_renderer::layout::symbol_instance::SymbolInstance::get_data_feature_index)
+            .map(crate::layout::symbol_instance::SymbolInstance::get_data_feature_index)
             .collect();
         assert_eq!(expected_order(type_), order, "{type_:?}");
         // An explicit constant key still disables viewport-Y sorting for symbol-z-order:auto.
         assert_eq!(type_ == SortKeyType::Undefined, bucket.sort_features_by_y, "{type_:?}");
         match type_ {
             SortKeyType::Undefined => {
-                assert_eq!(bucket.sort_key_ranges, [] as [mln_renderer::buckets::symbol_bucket::SortKeyRange; 0]);
+                assert_eq!(bucket.sort_key_ranges, [] as [crate::buckets::symbol_bucket::SortKeyRange; 0]);
             }
             SortKeyType::Constant | SortKeyType::Camera => {
                 assert_eq!(bucket.sort_key_ranges.len(), 1, "{type_:?}");
@@ -281,7 +281,7 @@ fn symbol_viewport_y() {
             .state()
             .symbol_instances
             .iter()
-            .map(mln_renderer::layout::symbol_instance::SymbolInstance::get_data_feature_index)
+            .map(crate::layout::symbol_instance::SymbolInstance::get_data_feature_index)
             .collect();
         assert_eq!(vec![0, 1, 2], order, "{type_:?}");
     }

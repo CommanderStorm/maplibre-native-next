@@ -56,6 +56,7 @@ use mln_util::size::Size;
 use crate::buffer_resource::BufferResource;
 use crate::command_encoder::CommandEncoder;
 use crate::descriptor_set::{DescriptorPoolGrowable, ImageBinding, UniformDescriptorSet};
+use crate::device::Device;
 use crate::drawable_builder::DrawableBuilder;
 use crate::layer_group::LayerGroup;
 use crate::offscreen_texture::OffscreenTexture;
@@ -379,6 +380,11 @@ impl Context {
 
     pub fn get_backend(&self) -> &Rc<BackendImpl> {
         &self.backend
+    }
+
+    /// The device the context renders on.
+    pub fn device(&self) -> &Device {
+        self.backend.device()
     }
 
     /// Makes `surface` the images that frames are acquired from and

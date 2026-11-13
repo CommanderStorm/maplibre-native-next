@@ -292,3 +292,5 @@ pub fn local_callback(f: impl FnOnce() + 'static) -> Box<dyn FnOnce() + Send> {
         }
     })
 }
+// Ports test/util/http_timeout.test.cpp (marker `// gtest: Group.Name`).
+mod gtest_http_timeout;

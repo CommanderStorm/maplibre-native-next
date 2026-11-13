@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use mln_actor::{RunLoop, Timer};
+use crate::{RunLoop, Timer};
 
 // gtest: RunLoop.Stop
 #[test]

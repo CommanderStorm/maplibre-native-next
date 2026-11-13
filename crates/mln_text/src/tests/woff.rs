@@ -6,19 +6,19 @@
 
 use std::sync::Arc;
 
-use mln_text::glyph::{FontData, GlyphID, GlyphIDType};
-use mln_text::woff::{self, WoffError};
-use mln_text::{FreeTypeFace, FreeTypeLibrary, HBShapeAdjust, HBShaper};
+use crate::glyph::{FontData, GlyphID, GlyphIDType};
+use crate::woff::{self, WoffError};
+use crate::{FreeTypeFace, FreeTypeLibrary, HBShapeAdjust, HBShaper};
 
-const TTF: &[u8] = include_bytes!("fixtures/khmer.ttf");
-const WOFF: &[u8] = include_bytes!("fixtures/khmer.woff");
-const WOFF2: &[u8] = include_bytes!("fixtures/khmer.woff2");
+const TTF: &[u8] = include_bytes!("../../tests/fixtures/khmer.ttf");
+const WOFF: &[u8] = include_bytes!("../../tests/fixtures/khmer.woff");
+const WOFF2: &[u8] = include_bytes!("../../tests/fixtures/khmer.woff2");
 
 /// "ខ្មែរ": a subscript consonant and a split vowel, which the font's GSUB
 /// and GPOS rearrange and position.
 const KHMER: &str = "ខ្មែរ";
 
-fn shape(font: &[u8]) -> (Vec<GlyphID>, Vec<HBShapeAdjust>, Vec<mln_text::glyph::Glyph>) {
+fn shape(font: &[u8]) -> (Vec<GlyphID>, Vec<HBShapeAdjust>, Vec<crate::glyph::Glyph>) {
     let type_ = GlyphIDType(1);
     let shaper = HBShaper::new(type_, font.to_vec(), &FreeTypeLibrary::new());
     assert!(shaper.valid());

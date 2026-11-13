@@ -50,3 +50,6 @@ pub mod tiny_sdf;
 pub mod token;
 pub mod url;
 pub mod vectors;
+
+#[cfg(test)]
+mod tests;

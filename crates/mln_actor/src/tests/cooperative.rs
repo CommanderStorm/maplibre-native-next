@@ -6,8 +6,8 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 
-use mln_actor::actor::Actor;
-use mln_actor::{CooperativeScheduler, RunLoop, Thread, scheduler};
+use crate::actor::Actor;
+use crate::{CooperativeScheduler, RunLoop, Thread, scheduler};
 use parking_lot::Mutex;
 
 /// The scheduler, installed by whichever test runs first.

@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use mln_actor::{RunLoop, Timer};
-use mln_renderer::text::font_face_engine::{FontFaceEngine, FontFaceShaper};
-use mln_renderer::text::glyph_manager::{GlyphManager, GlyphManagerObserver, GlyphRequestor, glyph_requestor_key};
+use crate::text::font_face_engine::{FontFaceEngine, FontFaceShaper};
+use crate::text::glyph_manager::{GlyphManager, GlyphManagerObserver, GlyphRequestor, glyph_requestor_key};
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{FileSource, Kind, Resource, Response};

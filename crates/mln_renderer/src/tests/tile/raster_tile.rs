@@ -1,10 +1,10 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_renderer::buckets::raster_bucket::RasterBucket;
-use mln_renderer::tile::raster_tile::RasterTile;
-use mln_renderer::tile::tile::Tile;
-use mln_renderer::tile::tile_loader::{LoaderTile, VectorTileEncoding};
+use crate::buckets::raster_bucket::RasterBucket;
+use crate::tile::raster_tile::RasterTile;
+use crate::tile::tile::Tile;
+use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 use mln_style::layer::Layer;
 use mln_style::layers::RasterLayer;
 use mln_tile_id::OverscaledTileID;
@@ -134,7 +134,7 @@ fn parse_through_the_codec() {
         tile.inner().set_data(Some(png(size, size)), VectorTileEncoding::Mvt);
         assert!(!tile.is_complete());
     }
-    while !tiles.iter().all(mln_renderer::tile::Tile::is_complete) {
+    while !tiles.iter().all(crate::tile::Tile::is_complete) {
         test.run_loop.run_once();
     }
     let layer = RasterLayer::new("r", "s").base_impl();

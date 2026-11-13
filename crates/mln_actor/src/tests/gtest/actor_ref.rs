@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use mln_actor::actor::{Actor, PoolActorRef};
-use mln_actor::scheduler;
+use crate::actor::{Actor, PoolActorRef};
+use crate::scheduler;
 
-use crate::{get, wait};
+use crate::tests::gtest::{get, wait};
 
 // gtest: ActorRef.CanOutliveActor
 #[test]

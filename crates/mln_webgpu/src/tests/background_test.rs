@@ -41,7 +41,7 @@ use mln_tile_id::{OverscaledTileID, UnwrappedTileID};
 use mln_util::Color;
 use mln_util::range::Range;
 use mln_util::size::Size;
-use mln_webgpu::{Device, OffscreenTarget, RendererBackend};
+use crate::{Device, OffscreenTarget, RendererBackend};
 
 /// A backend on a device of its own, and an offscreen target on it.
 struct Headless {

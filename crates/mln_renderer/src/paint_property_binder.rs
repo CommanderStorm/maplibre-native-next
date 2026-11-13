@@ -753,7 +753,6 @@ pub fn read_data_driven_paint_property(
 /// struct with one binder per property (fields in the C++ type-list order,
 /// which is also the interleaved vertex order) and the shared
 /// `InterleavedVertexBuffer`.
-#[macro_export]
 macro_rules! paint_property_binders {
     (
         $(#[$meta:meta])*
@@ -842,3 +841,4 @@ macro_rules! paint_property_binders {
     };
 
 }
+pub(crate) use paint_property_binders;

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use mln_actor::RunLoop;
-use mln_map::{
+use crate::{
     AnimationOptions, BoundOptions, CameraBounds, CameraDelta, CameraOptions, CameraUpdate, CameraUpdateMode,
     ConstrainMode, FreeCamera, FreeCameraOptions, GesturePhase, Map, MapDebugOptions, MapMode, MapOptions,
     MapProjection, MapView, NorthOrientation, ProjectionMode, TileLodMode, UpdateReader, ViewportMode,

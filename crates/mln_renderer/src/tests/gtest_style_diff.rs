@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mln_renderer::style_diff::diff_layers;
+use crate::style_diff::diff_layers;
 use mln_style::layer::{Impl, ImplBase, LayerTypeInfo, layer_type_info};
 
 #[derive(Debug)]

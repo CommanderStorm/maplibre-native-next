@@ -15,3 +15,6 @@ pub use types::*;
 pub use variable_anchor_offset_collection::{AnchorOffsetPair, VariableAnchorOffsetCollection};
 pub mod image;
 pub mod sprite;
+
+#[cfg(test)]
+mod tests;

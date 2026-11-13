@@ -4,11 +4,11 @@
 // sits below mln_tile_id), called with the tile ids' fields.
 
 use mln_tile_id::{CanonicalTileID, UnwrappedTileID};
-use mln_util::Error;
-use mln_util::constants::{LATITUDE_MAX, LONGITUDE_MAX};
-use mln_util::geo::{EdgeInsets, LatLng, LatLngBounds, WrapMode};
+use crate::Error;
+use crate::constants::{LATITUDE_MAX, LONGITUDE_MAX};
+use crate::geo::{EdgeInsets, LatLng, LatLngBounds, WrapMode};
 
-use crate::assert_double_eq;
+use crate::tests::gtest::assert_double_eq;
 
 fn ll(lat: f64, lon: f64) -> LatLng {
     LatLng::new(lat, lon).unwrap()

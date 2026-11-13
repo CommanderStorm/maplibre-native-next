@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mln_actor::actor::{Actor, PoolActorRef};
 use mln_actor::scheduler;
-use mln_renderer::query::SourceQueryOptions;
-use mln_renderer::tile::custom_tile::CustomVectorTile;
-use mln_renderer::tile::tile::{Tile, TileNecessity};
+use crate::query::SourceQueryOptions;
+use crate::tile::custom_tile::CustomVectorTile;
+use crate::tile::tile::{Tile, TileNecessity};
 use mln_style::custom_tile_loader::{CustomTileLoader, CustomTileSubscriber, TileFunction};
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;

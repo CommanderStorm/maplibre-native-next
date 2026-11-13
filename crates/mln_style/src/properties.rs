@@ -389,7 +389,6 @@ where
 ///
 /// This is what a Rust port of scripts/generate-style-code.mjs will emit,
 /// one invocation per layer type.
-#[macro_export]
 macro_rules! paint_properties {
     ($(#[$meta:meta])* $vis:vis mod $module:ident { $($field:ident: $prop:ty),+ $(,)? }) => {
         $(#[$meta])*
@@ -527,11 +526,10 @@ macro_rules! paint_properties {
         }
     };
 }
+pub(crate) use paint_properties;
 
 /// Defines `PossiblyEvaluated::evaluate::<P>(z, feature, ...)` and its
 /// variants, which evaluate one property for a feature.
-#[doc(hidden)]
-#[macro_export]
 macro_rules! __possibly_evaluated_feature_methods {
     () => {
         pub fn evaluate<P>(
@@ -630,9 +628,8 @@ macro_rules! __possibly_evaluated_feature_methods {
         }
     };
 }
+pub(crate) use __possibly_evaluated_feature_methods;
 
-#[doc(hidden)]
-#[macro_export]
 macro_rules! __properties_field_impls {
     (Transitionable; $($field:ident: $prop:ty),+) => {
         $crate::__properties_field_impls!(@impl Transitionable;
@@ -679,6 +676,7 @@ macro_rules! __properties_field_impls {
         }
     };
 }
+pub(crate) use __properties_field_impls;
 
 /// What an overridable property's `hasOverride(const T& t)` reads
 /// (`!!t.textColor`): C++ calls it on both `expression::FormattedSection` and

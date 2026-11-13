@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mln_webgpu::shaders::wgsl_preprocessor::{get_directive_argument, is_directive, preprocess_wgsl};
+use crate::shaders::wgsl_preprocessor::{get_directive_argument, is_directive, preprocess_wgsl};
 
 fn defines(keys: &[&str]) -> HashMap<String, bool> {
     keys.iter().map(|k| ((*k).to_owned(), true)).collect()

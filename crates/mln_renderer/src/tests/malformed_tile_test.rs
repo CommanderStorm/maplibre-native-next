@@ -9,9 +9,9 @@ use std::time::Duration;
 use mln_actor::{RunLoop, TaggedScheduler, Timer, scheduler};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{CameraOptions, ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
-use mln_renderer::image_manager::ImageManagerObserver;
-use mln_renderer::render_source::{self as render_source, RenderSourceObserver};
-use mln_renderer::tile_parameters::TileParameters;
+use crate::image_manager::ImageManagerObserver;
+use crate::render_source::{self as render_source, RenderSourceObserver};
+use crate::tile_parameters::TileParameters;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{FileSource, Kind, Response};
 use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
@@ -127,7 +127,7 @@ fn load(tile: Vec<u8>, layers: &[Arc<dyn LayerProperties>]) -> Outcome {
     // The observer answers missing icons as Map::Impl does, and the timer
     // stands in for the RenderOrchestrator updates that then notify the
     // tile.
-    let image_manager = mln_renderer::image_manager::ImageManager::create();
+    let image_manager = crate::image_manager::ImageManager::create();
     image_manager.set_observer(Some(Rc::new(AnswerMissingImages)));
     let frame = Timer::new();
     {
@@ -164,10 +164,10 @@ fn load(tile: Vec<u8>, layers: &[Arc<dyn LayerProperties>]) -> Outcome {
             is_update_synchronous: false,
             capture_rendered_features: false,
             image_manager: image_manager.clone(),
-            glyph_manager: mln_renderer::text::glyph_manager::GlyphManager::new(None),
-            dynamic_texture_atlas: Arc::new(mln_renderer::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
+            glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
+            dynamic_texture_atlas: Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
             tile_worker_transport: std::rc::Rc::new(
-                mln_renderer::tile::tile_worker_transport::InProcessTransport::new(thread_pool.clone()),
+                crate::tile::tile_worker_transport::InProcessTransport::new(thread_pool.clone()),
             ),
         },
     );
@@ -380,10 +380,10 @@ fn query_of_a_bad_value_is_an_error() {
     let data = mln_tile::VectorMVTTileData::new(Arc::new(tile_with_bad_value()));
     let layer = data.get_layer("l").unwrap().unwrap();
     let mut result = Vec::new();
-    let error = mln_renderer::tile::geometry_tile::query_layer_source_features(
+    let error = crate::tile::geometry_tile::query_layer_source_features(
         &*layer,
         &mut result,
-        &mln_renderer::query::SourceQueryOptions::default(),
+        &crate::query::SourceQueryOptions::default(),
         None,
         &OverscaledTileID::from_zxy(0, 0, 0),
     )

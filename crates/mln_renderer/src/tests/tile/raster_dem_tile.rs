@@ -1,10 +1,10 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_renderer::buckets::hillshade_bucket::HillshadeBucket;
-use mln_renderer::tile::raster_dem_tile::{DEMTileNeighbors, RasterDEMTile};
-use mln_renderer::tile::tile::Tile;
-use mln_renderer::tile::tile_loader::{LoaderTile, VectorTileEncoding};
+use crate::buckets::hillshade_bucket::HillshadeBucket;
+use crate::tile::raster_dem_tile::{DEMTileNeighbors, RasterDEMTile};
+use crate::tile::tile::Tile;
+use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 use mln_tile_id::OverscaledTileID;
 use mln_util::error::Error;
 use mln_util::image::PremultipliedImage;
@@ -133,7 +133,7 @@ fn parse_and_backfill_through_the_codec() {
     for tile in &tiles {
         tile.inner().set_data(Some(png(16, 16)), VectorTileEncoding::Mvt);
     }
-    while !tiles.iter().all(mln_renderer::tile::Tile::is_complete) {
+    while !tiles.iter().all(crate::tile::Tile::is_complete) {
         test.run_loop.run_once();
     }
     for tile in &tiles {

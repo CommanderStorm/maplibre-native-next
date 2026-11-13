@@ -15,10 +15,10 @@ use mln_gfx::shader_group::StringIDSetsPair;
 use mln_gfx::shader_registry::ShaderRegistry;
 use mln_gfx::shaders::program_parameters::ProgramParameters;
 use mln_gfx::shaders::shader_program_base::ShaderProgramBase;
-use mln_gl::shaders::glsl_sources::PRELUDE;
-use mln_gl::shaders::shader_program::as_gl_shader;
-use mln_gl::shaders::shader_source::{REGISTERED_SHADERS, ShaderSource, shader_source};
-use mln_gl::{Api, Device, DeviceOptions, RendererBackend};
+use crate::shaders::glsl_sources::PRELUDE;
+use crate::shaders::shader_program::as_gl_shader;
+use crate::shaders::shader_source::{REGISTERED_SHADERS, ShaderSource, shader_source};
+use crate::{Api, Device, DeviceOptions, RendererBackend};
 
 /// A backend on a device of `api`, or none where there is no EGL to make a
 /// context of it with, as on macOS: the test is skipped there, unless

@@ -36,3 +36,6 @@ pub use glyph_cache::GlyphCache;
 pub use harfbuzz::{HBShapeAdjust, HBShaper};
 pub use shaping::{AnchorAlignment, PositionedIcon, get_anchor_justification, get_shaping};
 pub use tagged_string::{SectionOptions, TaggedString};
+
+#[cfg(test)]
+mod tests;

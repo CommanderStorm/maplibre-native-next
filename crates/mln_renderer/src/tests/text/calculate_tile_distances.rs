@@ -1,6 +1,6 @@
 use geometry::Point;
-use mln_renderer::geometry::anchor::Anchor;
-use mln_renderer::layout::symbol_layout::SymbolLayout;
+use crate::geometry::anchor::Anchor;
+use crate::layout::symbol_layout::SymbolLayout;
 use mln_tile_id::GeometryCoordinates;
 
 // gtest: calculateTileDistances.Point

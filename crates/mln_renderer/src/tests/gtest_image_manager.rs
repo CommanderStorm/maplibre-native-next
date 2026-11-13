@@ -8,8 +8,8 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use mln_actor::RunLoop;
-use mln_renderer::gfx::dynamic_texture_atlas::ImageVersionMap;
-use mln_renderer::image_manager::{ImageManager, ImageManagerObserver, ImageRequestor, ImageRequestorBase};
+use crate::gfx::dynamic_texture_atlas::ImageVersionMap;
+use crate::image_manager::{ImageManager, ImageManagerObserver, ImageRequestor, ImageRequestorBase};
 use mln_style_types::image::{ImageDependencies, ImageMap, ImageType, Impl as ImageImpl};
 use mln_util::constants::DEFAULT_ON_DEMAND_IMAGES_CACHE_SIZE;
 use mln_util::image::PremultipliedImage;
