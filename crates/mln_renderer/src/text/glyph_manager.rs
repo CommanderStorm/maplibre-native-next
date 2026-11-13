@@ -44,9 +44,7 @@ use mln_util::error::Error;
 use mln_util::font_stack::FontStack;
 use mln_util::logging::{Event, Log};
 use mln_util::tiny_sdf::transform_raster_to_sdf;
-use mln_vec_map::VecMap;
-#[cfg(test)]
-use mln_vec_map::VecSet;
+use mln_vec_map::{VecMap, VecSet};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -505,10 +503,23 @@ impl GlyphManager {
         }
     }
 
-    /// `evict(keep)`: remove glyphs for all but the supplied font stacks.
-    #[cfg(test)]
+    /// Drops the glyphs and pending requests of the font stacks not in
+    /// `keep`, except those of the font stacks a live requestor still waits
+    /// to be answered with: it would never be answered, or be answered
+    /// without glyphs it was waiting for.
     pub(crate) fn evict(&self, keep: &VecSet<FontStack>) {
-        self.entries.borrow_mut().retain(|font_stack, _| keep.contains(font_stack));
+        // Dropping a request cancels it; that happens after the borrow ends.
+        let _evicted: Vec<(FontStack, Entry)> = {
+            let mut entries = self.entries.borrow_mut();
+            let awaited: HashSet<FontStack> = entries
+                .values()
+                .flat_map(|entry| entry.ranges.values())
+                .flat_map(|request| request.requestors.values())
+                .filter(|(requestor, _)| requestor.strong_count() > 0)
+                .flat_map(|(_, dependencies)| dependencies.glyphs.keys().cloned())
+                .collect();
+            entries.extract_if(|font_stack, _| !keep.contains(font_stack) && !awaited.contains(font_stack)).collect()
+        };
     }
 
     pub(crate) fn get_glyph(&self, font_stack: &FontStack, glyph_id: GlyphID) -> Arc<Glyph> {

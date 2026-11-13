@@ -505,6 +505,41 @@ fn releases_the_glyphs_of_evicted_font_stacks() {
     assert_eq!(0, cache.size());
 }
 
+// Evicting keeps the font stacks a requestor still waits to be answered with:
+// the one still loading, and the one it already has.
+#[test]
+fn evict_keeps_the_font_stacks_requestors_wait_for() {
+    let mut test = GlyphManagerTest::new();
+    let loaded_stack = vec!["Loaded Stack".to_owned()];
+    test.load(loaded_stack.clone(), &['a']);
+
+    let answer = Rc::new(RefCell::new(None));
+    let (a, run_loop) = (Rc::clone(&answer), test.run_loop.clone());
+    *test.requestor.glyphs_available.borrow_mut() = Some(Rc::new(move |glyphs: GlyphMap| {
+        *a.borrow_mut() = Some(glyphs);
+        run_loop.stop();
+    }));
+    let ids: GlyphIDs = [gid('a')].into_iter().collect();
+    let dependencies = GlyphDependencies {
+        glyphs: VecMap::from([(loaded_stack.clone(), ids.clone()), (test_stack(), ids)]),
+        shapes: HBShapeRequests::default(),
+    };
+    test.glyph_manager.get_glyphs(&test.requestor(), dependencies, Some(&test.file_source()));
+
+    test.glyph_manager.evict(&VecSet::new());
+
+    let timeout = Timer::new();
+    let run_loop = test.run_loop.clone();
+    timeout.start(Duration::from_millis(1000), Duration::ZERO, move || run_loop.stop());
+    test.run_loop.run();
+
+    let answer = answer.borrow();
+    let glyphs = answer.as_ref().expect("an answer");
+    for font_stack in [loaded_stack, test_stack()] {
+        assert!(glyphs[&font_stack_hash(&font_stack)][&gid('a')].is_some(), "{font_stack:?}");
+    }
+}
+
 // gtest: GlyphManager.DoesNotKeepTheRangeGlyphsItDrawsLocally
 #[test]
 fn does_not_keep_the_range_glyphs_it_draws_locally() {
