@@ -76,8 +76,7 @@ static COOPERATIVE: OnceLock<Arc<CooperativeScheduler>> = OnceLock::new();
 /// browser), which runs the tasks with `CooperativeScheduler::run_until`.
 /// It must come before anything gets a scheduler or starts a `Thread`, and
 /// only once.
-#[cfg(test)]
-pub(crate) fn install_cooperative(scheduler: Arc<CooperativeScheduler>) {
+pub fn install_cooperative(scheduler: Arc<CooperativeScheduler>) {
     if COOPERATIVE.set(scheduler).is_err() {
         panic!("a cooperative scheduler is already installed");
     }

@@ -41,7 +41,7 @@ impl Default for CooperativeScheduler {
 
 impl CooperativeScheduler {
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         CooperativeScheduler {
             unique_id: SimpleIdentity::new(),
             queues: Mutex::new(HashMap::new()),

@@ -3,6 +3,3 @@
 // .cargo/config.toml), as gtest runs them: they share the background pool and
 // the sequenced schedulers.
 mod gtest;
-// Port-only: a cooperative scheduler installed for the whole process
-// (tests/cooperative.rs), so apart from the tests that start threads.
-mod cooperative;
