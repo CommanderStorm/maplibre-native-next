@@ -3,12 +3,14 @@
 //! ```text
 //! mln-bench run [--filter <s>]... [--scale <x>] [--fixtures <dir>] [--frames <dir>] [--json]
 //! mln-bench compare <ref> [--rounds <n>] [--threshold <percent>] [--verbose]
-//!                         [--filter <s>]... [--scale <x>] [--fixtures <dir>]
+//!                         [--fail-on <metric>]... [--filter <s>]... [--scale <x>]
+//!                         [--fixtures <dir>]
 //! mln-bench list
 //! ```
 //!
 //! `--filter` keeps the cases whose name contains one of the strings;
-//! `--scale` multiplies every case's iteration count.
+//! `--scale` multiplies every case's iteration count; `--fail-on` makes
+//! `compare` fail when the metric gets a worse verdict in any case.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -41,6 +43,8 @@ struct Options {
     json: bool,
     rounds: usize,
     threshold: f64,
+    /// `compare`'s metrics whose worse verdict fails it.
+    fail_on: Vec<String>,
     verbose: bool,
     positional: Vec<String>,
 }
@@ -54,6 +58,7 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
         json: false,
         rounds: 6,
         threshold: 5.0,
+        fail_on: Vec::new(),
         verbose: false,
         positional: Vec::new(),
     };
@@ -67,6 +72,7 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
             "--frames" => options.frames = Some(value()?.into()),
             "--rounds" => options.rounds = value()?.parse().map_err(|_| "--rounds needs a number")?,
             "--threshold" => options.threshold = value()?.parse().map_err(|_| "--threshold needs a number")?,
+            "--fail-on" => options.fail_on.push(value()?),
             "--json" => options.json = true,
             "--verbose" => options.verbose = true,
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}")),
@@ -96,7 +102,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             if let Some(scale) = &options.scale {
                 run_args.extend(["--scale".to_string(), scale.clone()]);
             }
-            let report = compare::compare(&compare::Options {
+            let (report, worse) = compare::compare(&compare::Options {
                 base: base.clone(),
                 rounds: options.rounds,
                 threshold: options.threshold,
@@ -105,7 +111,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 verbose: options.verbose,
             })?;
             print!("{report}");
-            Ok(())
+            let failed: Vec<String> = worse
+                .into_iter()
+                .filter(|(_, metric)| options.fail_on.contains(metric))
+                .map(|(case, metric)| format!("{case} {metric}"))
+                .collect();
+            if failed.is_empty() { Ok(()) } else { Err(format!("worse: {}", failed.join(", "))) }
         }
         _ => Err("usage: mln-bench [run | list | compare <ref>] [options] (see tools/bench/README.md)".into()),
     }

@@ -39,8 +39,9 @@ pub struct Options {
 
 const ALPHA: f64 = 0.05;
 
-/// Runs the comparison and returns its Markdown report.
-pub fn compare(options: &Options) -> Result<String, String> {
+/// Runs the comparison and returns its Markdown report, and the case and
+/// metric of each worse verdict.
+pub fn compare(options: &Options) -> Result<(String, Vec<(String, String)>), String> {
     if options.rounds < 2 || !options.rounds.is_multiple_of(2) {
         return Err("--rounds must be even, and at least 2".into());
     }
@@ -102,10 +103,10 @@ pub fn compare(options: &Options) -> Result<String, String> {
         let _ = writeln!(out, "\n**A software rasterizer measures something else than a GPU.**");
     }
     let _ = writeln!(out);
-    write_table(&mut out, &runs[&Side::Base], &runs[&Side::Candidate], options, comparable);
+    let worse = write_table(&mut out, &runs[&Side::Base], &runs[&Side::Candidate], options, comparable);
     let _ = writeln!(out);
     write_frames(&mut out, &frames);
-    Ok(out)
+    Ok((out, worse))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -254,10 +255,18 @@ fn samples(reports: &[Report], case: &str) -> Vec<(String, bool, Vec<f64>)> {
         .collect()
 }
 
-fn write_table(out: &mut String, base: &[Report], candidate: &[Report], options: &Options, comparable: bool) {
+/// Writes the verdicts' table, and returns the case and metric of each
+/// worse one.
+fn write_table(
+    out: &mut String,
+    base: &[Report],
+    candidate: &[Report],
+    options: &Options,
+    comparable: bool,
+) -> Vec<(String, String)> {
     let _ = writeln!(out, "| case | metric | base | candidate | change | p | verdict |");
     let _ = writeln!(out, "|---|---|--:|--:|--:|--:|---|");
-    let (mut better, mut worse) = (0, 0);
+    let (mut better, mut worse) = (0, Vec::new());
     for case in candidate[0].cases.iter().map(|c| c.name.as_str()) {
         let base_samples: BTreeMap<String, Vec<f64>> =
             samples(base, case).into_iter().map(|(name, _, values)| (name, values)).collect();
@@ -284,7 +293,7 @@ fn write_table(out: &mut String, base: &[Report], candidate: &[Report], options:
                         better += 1;
                         "better"
                     } else {
-                        worse += 1;
+                        worse.push((case.to_string(), name.clone()));
                         "**worse**"
                     }
                 }
@@ -295,7 +304,8 @@ fn write_table(out: &mut String, base: &[Report], candidate: &[Report], options:
                 writeln!(out, "| {case} | {name} | {} | {} | {change:+.1}% | {p} | {verdict} |", number(b), number(c));
         }
     }
-    let _ = writeln!(out, "\n{better} better, {worse} worse.");
+    let _ = writeln!(out, "\n{better} better, {} worse.", worse.len());
+    worse
 }
 
 fn number(value: f64) -> String {
