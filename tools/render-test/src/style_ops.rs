@@ -34,7 +34,12 @@ pub(crate) fn set_layer_property(
 }
 
 /// Sets the zoom range of the layer `layer_name`.
-pub(crate) fn set_layer_zoom_range(style: &mut Style, layer_name: &str, min_zoom: f32, max_zoom: f32) -> Result<(), MapError> {
+pub(crate) fn set_layer_zoom_range(
+    style: &mut Style,
+    layer_name: &str,
+    min_zoom: f32,
+    max_zoom: f32,
+) -> Result<(), MapError> {
     let Some(mut layer) = style.get_layer_mut(layer_name) else {
         return Err(MapError::LayerNotFound);
     };
@@ -59,7 +64,11 @@ pub(crate) fn add_layer(style: &mut Style, json: &str) -> Result<(), MapError> {
 
 /// Converts `filter` (a conversion error first) and sets it on the layer
 /// `layer_name` (`LayerNotFound` if there is none).
-pub(crate) fn set_layer_filter(style: &mut Style, layer_name: &str, filter: &serde_json::Value) -> Result<(), MapError> {
+pub(crate) fn set_layer_filter(
+    style: &mut Style,
+    layer_name: &str,
+    filter: &serde_json::Value,
+) -> Result<(), MapError> {
     let mut error = mln_conversion::Error::default();
     let Some(filter) =
         mln_style::conversion::convert::<mln_style::filter::Filter>(&Convertible::from(filter), &mut error)

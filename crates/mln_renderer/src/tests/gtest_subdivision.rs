@@ -4,15 +4,6 @@ use std::rc::Rc;
 use feature::{Identifier, PropertyMap, Value};
 use geometry::Point;
 use mln_gfx::shaders::segment::MAX_SEGMENT_VERTICES;
-use crate::bucket::Bucket;
-use crate::buckets::fill_extrusion_bucket::FillExtrusionBucket;
-use crate::globe_tile_mesh::{GlobeTileMesh, GlobeTileMeshCache};
-use crate::layout::pattern_layout::PatternLayerMap;
-use crate::tile_mask::TileMask;
-use crate::util::subdivision::{
-    NORTH_POLE_Y, SOUTH_POLE_Y, SubdivisionResult, subdivide_polygon, subdivide_vertex_line,
-};
-use crate::util::tile_mesh::{TileMeshOptions, create_tile_mesh};
 use mln_style::layers::fill_extrusion_layer_properties::FillExtrusionLayoutProperties;
 use mln_style_types::image::ImagePositions;
 use mln_tile_id::CanonicalTileID;
@@ -23,6 +14,16 @@ use mln_util::constants::EXTENT;
 use mln_util::geometry::FeatureType;
 use mln_util::subdivision_granularity::{SubdivisionGranularityExpression, SubdivisionGranularitySetting};
 use mln_vec_map::VecMap;
+
+use crate::bucket::Bucket;
+use crate::buckets::fill_extrusion_bucket::FillExtrusionBucket;
+use crate::globe_tile_mesh::{GlobeTileMesh, GlobeTileMeshCache};
+use crate::layout::pattern_layout::PatternLayerMap;
+use crate::tile_mask::TileMask;
+use crate::util::subdivision::{
+    NORTH_POLE_Y, SOUTH_POLE_Y, SubdivisionResult, subdivide_polygon, subdivide_vertex_line,
+};
+use crate::util::tile_mesh::{TileMeshOptions, create_tile_mesh};
 
 /// `EXTENT` as a tile coordinate.
 const EXTENT_I16: i16 = EXTENT as i16;

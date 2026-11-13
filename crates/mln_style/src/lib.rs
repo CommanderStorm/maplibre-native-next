@@ -61,12 +61,6 @@ pub mod transition_options;
 
 pub use layer::{Layer, LayerTypeInfo};
 pub use layers::background_layer::BackgroundLayer;
-pub use property_value::PropertyValue;
-pub use renderer::property_evaluation_parameters::{CrossfadeParameters, PropertyEvaluationParameters};
-pub use renderer::transition_parameters::{GlobalStateChange, TransitionParameters};
-pub use style::{Style, StyleLoadError};
-pub use transition_options::TransitionOptions;
-
 // The property macros, at the root so that the generated code and the
 // macros themselves name them as `crate::name!`.
 pub(crate) use layout_property::{data_driven_layout_property, layout_properties, layout_property};
@@ -76,6 +70,11 @@ pub(crate) use paint_property::{
     cross_faded_paint_property, data_driven_paint_property, paint_property,
 };
 pub(crate) use properties::{__possibly_evaluated_feature_methods, __properties_field_impls, paint_properties};
+pub use property_value::PropertyValue;
+pub use renderer::property_evaluation_parameters::{CrossfadeParameters, PropertyEvaluationParameters};
+pub use renderer::transition_parameters::{GlobalStateChange, TransitionParameters};
+pub use style::{Style, StyleLoadError};
+pub use transition_options::TransitionOptions;
 
 #[cfg(test)]
 mod tests;

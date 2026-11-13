@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use geometry::Point;
 use mln_gfx::shaders::segment::{MAX_SEGMENT_VERTICES, SegmentBase};
+use mln_tile_id::CanonicalTileID;
+use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryCoordinate, GeometryCoordinates};
+use mln_util::constants::EXTENT;
+
 use crate::buckets::fill_bucket::FillLayoutVertex;
 use crate::buckets::line_bucket::LineLayoutVertex;
 use crate::gfx::fill_generator::generate_fill_and_outline_buffers;
 use crate::util::subdivision::{SubdivisionResult, subdivide_polygon};
-use mln_tile_id::CanonicalTileID;
-use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryCoordinate, GeometryCoordinates};
-use mln_util::constants::EXTENT;
 
 /// `EXTENT` as a tile coordinate.
 const EXTENT_I16: i16 = EXTENT as i16;

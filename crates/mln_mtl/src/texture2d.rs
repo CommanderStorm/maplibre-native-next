@@ -206,7 +206,11 @@ impl Texture2D {
     /// Port-only: encodes a copy of the texture's pixels into `buffer`,
     /// which holds `get_data_size()` bytes, rows tightly packed. False if
     /// there is nothing to copy.
-    pub(crate) fn encode_copy_to(&self, command_buffer: &ProtocolObject<dyn MTLCommandBuffer>, buffer: &MTLBufferPtr) -> bool {
+    pub(crate) fn encode_copy_to(
+        &self,
+        command_buffer: &ProtocolObject<dyn MTLCommandBuffer>,
+        buffer: &MTLBufferPtr,
+    ) -> bool {
         let Some(texture) = self.metal_texture.as_ref() else {
             return false;
         };

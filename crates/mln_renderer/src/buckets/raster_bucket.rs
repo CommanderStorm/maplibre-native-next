@@ -110,7 +110,12 @@ impl RasterBucket {
     }
 
     /// Image sources fill the geometry themselves (`bucket->vertices.emplace_back`).
-    pub(crate) fn set_geometry(&self, vertices: Vec<RasterLayoutVertex>, indices: Vec<u16>, segments: Vec<SegmentBase>) {
+    pub(crate) fn set_geometry(
+        &self,
+        vertices: Vec<RasterLayoutVertex>,
+        indices: Vec<u16>,
+        segments: Vec<SegmentBase>,
+    ) {
         let mut geometry = self.geometry();
         geometry.vertices = vertices;
         geometry.indices = indices;

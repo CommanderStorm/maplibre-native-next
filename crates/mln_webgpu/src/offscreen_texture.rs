@@ -58,7 +58,13 @@ pub(crate) struct OffscreenTextureResource {
 }
 
 impl OffscreenTextureResource {
-    pub(crate) fn new(context: Rc<Context>, size: Size, type_: TextureChannelDataType, depth: bool, stencil: bool) -> Self {
+    pub(crate) fn new(
+        context: Rc<Context>,
+        size: Size,
+        type_: TextureChannelDataType,
+        depth: bool,
+        stencil: bool,
+    ) -> Self {
         debug_assert!(size.width != 0 && size.height != 0);
         let mut res = OffscreenTextureResource {
             context,
@@ -293,7 +299,13 @@ pub(crate) struct OffscreenTexture {
 }
 
 impl OffscreenTexture {
-    pub(crate) fn new(context: Rc<Context>, size: Size, type_: TextureChannelDataType, depth: bool, stencil: bool) -> Self {
+    pub(crate) fn new(
+        context: Rc<Context>,
+        size: Size,
+        type_: TextureChannelDataType,
+        depth: bool,
+        stencil: bool,
+    ) -> Self {
         let resource = Rc::new(OffscreenTextureResource::new(context, size, type_, depth, stencil));
         OffscreenTexture { target: DrawTarget::new(size, resource.clone()), resource }
     }

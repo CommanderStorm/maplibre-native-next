@@ -759,7 +759,11 @@ impl SymbolBucket {
     }
 
     #[must_use]
-    pub(crate) fn collision_layout_vertex(a: Point<f32>, anchor: Point<f32>, o: Point<f32>) -> CollisionBoxLayoutVertex {
+    pub(crate) fn collision_layout_vertex(
+        a: Point<f32>,
+        anchor: Point<f32>,
+        o: Point<f32>,
+    ) -> CollisionBoxLayoutVertex {
         CollisionBoxLayoutVertex {
             a1: [a.x as i16, a.y as i16],
             a2: [anchor.x as i16, anchor.y as i16],
@@ -768,7 +772,11 @@ impl SymbolBucket {
     }
 
     #[must_use]
-    pub(crate) fn collision_dynamic_vertex(placed: bool, not_used: bool, shift: Point<f32>) -> CollisionBoxDynamicVertex {
+    pub(crate) fn collision_dynamic_vertex(
+        placed: bool,
+        not_used: bool,
+        shift: Point<f32>,
+    ) -> CollisionBoxDynamicVertex {
         CollisionBoxDynamicVertex { a1: [u16::from(placed), u16::from(not_used)], a2: [shift.x, shift.y] }
     }
 }

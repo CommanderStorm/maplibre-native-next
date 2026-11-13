@@ -460,7 +460,11 @@ pub(crate) fn subdivide_polygon(
 /// Inserts a vertex wherever the line crosses a cell boundary; `is_ring`
 /// closes the line first. (C++ defaults `is_ring` to false.)
 #[must_use]
-pub(crate) fn subdivide_vertex_line(line: &GeometryCoordinates, granularity: u32, is_ring: bool) -> GeometryCoordinates {
+pub(crate) fn subdivide_vertex_line(
+    line: &GeometryCoordinates,
+    granularity: u32,
+    is_ring: bool,
+) -> GeometryCoordinates {
     if line.len() < 2 {
         return GeometryCoordinates::new();
     }

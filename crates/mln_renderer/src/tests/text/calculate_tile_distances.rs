@@ -1,7 +1,8 @@
 use geometry::Point;
+use mln_tile_id::GeometryCoordinates;
+
 use crate::geometry::anchor::Anchor;
 use crate::layout::symbol_layout::SymbolLayout;
-use mln_tile_id::GeometryCoordinates;
 
 // gtest: calculateTileDistances.Point
 #[test]

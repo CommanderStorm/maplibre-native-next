@@ -13,11 +13,7 @@ pub(crate) struct RenderStaticData {
 impl RenderStaticData {
     #[must_use]
     pub(crate) fn new(shaders: Box<ShaderRegistry>) -> Self {
-        RenderStaticData {
-            has_3d: false,
-            uploaded: std::cell::Cell::new(false),
-            shaders,
-        }
+        RenderStaticData { has_3d: false, uploaded: std::cell::Cell::new(false), shaders }
     }
 
     /// Uploads the static data. Takes `&self` (the flag is a `Cell`): the

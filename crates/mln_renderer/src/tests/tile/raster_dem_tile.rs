@@ -1,10 +1,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::buckets::hillshade_bucket::HillshadeBucket;
-use crate::tile::raster_dem_tile::{DEMTileNeighbors, RasterDEMTile};
-use crate::tile::tile::Tile;
-use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 use mln_tile_id::OverscaledTileID;
 use mln_util::error::Error;
 use mln_util::image::PremultipliedImage;
@@ -12,6 +8,10 @@ use mln_util::size::Size;
 use mln_util::tileset::RasterEncoding;
 
 use super::{ErrorObserver, RasterTileTest, png, serializing_transport};
+use crate::buckets::hillshade_bucket::HillshadeBucket;
+use crate::tile::raster_dem_tile::{DEMTileNeighbors, RasterDEMTile};
+use crate::tile::tile::Tile;
+use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 
 fn tile(test: &RasterTileTest) -> RasterDEMTile {
     RasterDEMTile::new(

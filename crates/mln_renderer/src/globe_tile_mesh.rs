@@ -29,7 +29,11 @@ pub(crate) struct GlobeTileMesh<V: bytemuck::Pod> {
 }
 
 impl<V: bytemuck::Pod> GlobeTileMesh<V> {
-    pub(crate) fn new(canonical: &CanonicalTileID, mask: &TileMask, layout_vertex: fn(Point<i16>, Point<u16>) -> V) -> Self {
+    pub(crate) fn new(
+        canonical: &CanonicalTileID,
+        mask: &TileMask,
+        layout_vertex: fn(Point<i16>, Point<u16>) -> V,
+    ) -> Self {
         let mut vertices: Vec<V> = Vec::new();
         let mut indices: Vec<u16> = Vec::new();
         let mut segments: Vec<SegmentBase> = Vec::new();

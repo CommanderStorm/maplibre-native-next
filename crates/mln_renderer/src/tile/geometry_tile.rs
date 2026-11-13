@@ -901,6 +901,3 @@ pub(crate) fn query_layer_source_features(
     }
     Ok(())
 }
-
-impl GeometryTile {
-}

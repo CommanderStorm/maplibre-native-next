@@ -538,28 +538,16 @@ impl RenderLayer for RenderFillExtrusionLayer {
             let do_depth_pass = !opaque || has_pattern;
 
             if do_depth_pass && depth_builder.is_none() {
-                depth_builder =
-                    Some(create_builder(context, &shader, false, tweaker.as_ref()));
+                depth_builder = Some(create_builder(context, &shader, false, tweaker.as_ref()));
             }
             if color_builder.is_none() {
-                color_builder =
-                    Some(create_builder(context, &shader, true, tweaker.as_ref()));
+                color_builder = Some(create_builder(context, &shader, true, tweaker.as_ref()));
             }
             if do_depth_pass && instanced_depth_builder.is_none() {
-                instanced_depth_builder = Some(create_builder(
-                    context,
-                    &instanced_shader,
-                    false,
-                    tweaker.as_ref(),
-                ));
+                instanced_depth_builder = Some(create_builder(context, &instanced_shader, false, tweaker.as_ref()));
             }
             if instanced_color_builder.is_none() {
-                instanced_color_builder = Some(create_builder(
-                    context,
-                    &instanced_shader,
-                    true,
-                    tweaker.as_ref(),
-                ));
+                instanced_color_builder = Some(create_builder(context, &instanced_shader, true, tweaker.as_ref()));
             }
 
             if has_pattern

@@ -647,10 +647,8 @@ impl RenderOrchestrator {
         let _tilted_view = self.transform_state.get_pitch() != 0.0;
 
         // Create parameters for the render tree.
-        let mut render_tree_parameters = Box::new(RenderTreeParameters::new(
-            &update_parameters.transform_state,
-            update_parameters.debug_options,
-        ));
+        let mut render_tree_parameters =
+            Box::new(RenderTreeParameters::new(&update_parameters.transform_state, update_parameters.debug_options));
         // conformance: the RenderTreeParameters ctor's `renderLight.getEvaluated()`.
         render_tree_parameters.light = self.render_light.get_evaluated().clone();
         render_tree_parameters.sky = self.render_sky.as_ref().map(|render_sky| render_sky.get_evaluated().clone());
@@ -730,9 +728,9 @@ impl RenderOrchestrator {
                             if zoom_fits_layer {
                                 source_needs_rendering = true;
                                 let source_id = source_impl.base().id.clone();
-                                layer_render_items.entry(index as u32).or_insert_with(|| {
-                                    LayerRenderItem::new(layer_ptr.clone(), Some(source_id))
-                                });
+                                layer_render_items
+                                    .entry(index as u32)
+                                    .or_insert_with(|| LayerRenderItem::new(layer_ptr.clone(), Some(source_id)));
                                 update_list[index] = true;
                             }
                         }

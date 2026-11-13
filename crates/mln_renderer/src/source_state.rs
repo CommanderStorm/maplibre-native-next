@@ -245,7 +245,12 @@ impl SourceFeatureState {
         }
     }
 
-    pub(crate) fn remove_state(&mut self, source_layer_id: Option<&str>, feature_id: Option<&str>, state_key: Option<&str>) {
+    pub(crate) fn remove_state(
+        &mut self,
+        source_layer_id: Option<&str>,
+        feature_id: Option<&str>,
+        state_key: Option<&str>,
+    ) {
         let source_layer = source_layer_id.unwrap_or("");
 
         let layer_deletions = self.deleted_states.get(source_layer);

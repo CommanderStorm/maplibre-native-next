@@ -6,16 +6,17 @@ use std::rc::Rc;
 use geometry::{Geometry, LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{CameraOptions, ConstrainMode, TileLodMode, ViewportMode};
-use crate::util::tile_cover::{
-    TileCover, TileCoverParameters, covering_zoom_level, tile_count_bounds, tile_cover, tile_cover_bounds,
-    tile_cover_geometry,
-};
 use mln_style_types::{ProjectionDefinition, SourceType};
 use mln_tile_id::{CanonicalTileID, OverscaledTileID, UnwrappedTileID};
 use mln_util::constants;
 use mln_util::geo::{EdgeInsets, LatLng, LatLngBounds, WrapMode};
 use mln_util::range::Range;
 use mln_util::size::Size;
+
+use crate::util::tile_cover::{
+    TileCover, TileCoverParameters, covering_zoom_level, tile_count_bounds, tile_cover, tile_cover_bounds,
+    tile_cover_geometry,
+};
 
 const ZOOM_RANGE: Range<u8> = Range::new(0, 14);
 

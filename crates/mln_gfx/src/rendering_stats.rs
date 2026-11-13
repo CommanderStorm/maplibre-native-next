@@ -155,6 +155,3 @@ pub struct RenderingStats {
     /// `MapOptions::capture_rendered_features`.
     pub frame_rendered_features: FrameRenderedFeaturesMap,
 }
-
-impl RenderingStats {
-}

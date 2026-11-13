@@ -67,5 +67,4 @@ pub const LAST_RESORT_ALPHABETIC_FONT: &str = "Open Sans Regular";
 pub const LAST_RESORT_PAN_UNICODE_FONT: &str = "Arial Unicode MS Regular";
 
 /// Debug warning switches; the ones that are on are on in debug builds only.
-pub(crate) mod debug {
-}
+pub(crate) mod debug {}

@@ -86,7 +86,7 @@ pub(crate) fn parse_json(json: &str) -> serde_json::Value {
     serde_json::from_str(json).expect("test JSON must parse")
 }
 
-pub use mln_conversion::value_to_json;
+pub(super) use mln_conversion::value_to_json;
 
 pub(crate) struct StubGeometryTileFeature {
     pub(crate) properties: feature::PropertyMap,

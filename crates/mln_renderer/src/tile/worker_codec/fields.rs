@@ -90,11 +90,16 @@ pub(crate) mod texture {
     use super::{Arc, Deserializer, DynamicTexture, Serializer, SharedTexture, shared};
 
     #[expect(clippy::ref_option, reason = "`#[serde(with)]` passes the field by reference")]
-    pub(crate) fn serialize<S: Serializer>(texture: &Option<Arc<DynamicTexture>>, serializer: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(
+        texture: &Option<Arc<DynamicTexture>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         shared::serialize_option::<SharedTexture, S>(texture, serializer)
     }
 
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Arc<DynamicTexture>>, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Arc<DynamicTexture>>, D::Error> {
         shared::deserialize_option::<SharedTexture, D>(deserializer)
     }
 }
@@ -106,11 +111,16 @@ pub(crate) mod layers {
     #[derive(Serialize, Deserialize)]
     struct Layer(#[serde(with = "shared_layer_properties")] Arc<dyn LayerProperties>);
 
-    pub(crate) fn serialize<S: Serializer>(layers: &[Arc<dyn LayerProperties>], serializer: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(
+        layers: &[Arc<dyn LayerProperties>],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         layers.iter().cloned().map(Layer).collect::<Vec<_>>().serialize(serializer)
     }
 
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Arc<dyn LayerProperties>>, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<Arc<dyn LayerProperties>>, D::Error> {
         Ok(Vec::<Layer>::deserialize(deserializer)?.into_iter().map(|layer| layer.0).collect())
     }
 }

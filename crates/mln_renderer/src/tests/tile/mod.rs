@@ -15,12 +15,13 @@ use std::sync::Arc;
 
 use mln_actor::{TaggedScheduler, scheduler};
 use mln_map_types::{MapDebugOptions, MapMode, TileLodMode, TransformState};
-use crate::tile_parameters::TileParameters;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_util::identity::SimpleIdentity;
 use mln_util::range::Range;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_util::tileset::Tileset;
+
+use crate::tile_parameters::TileParameters;
 
 /// The fixture shared by `RasterTileTest` and `RasterDEMTileTest`
 /// (`test/tile/raster_tile.test.cpp`, `raster_dem_tile.test.cpp`).
@@ -74,9 +75,9 @@ impl RasterTileTest {
             image_manager: crate::image_manager::ImageManager::create(),
             glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
             dynamic_texture_atlas: Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
-            tile_worker_transport: std::rc::Rc::new(
-                crate::tile::tile_worker_transport::InProcessTransport::new(self.thread_pool.clone()),
-            ),
+            tile_worker_transport: std::rc::Rc::new(crate::tile::tile_worker_transport::InProcessTransport::new(
+                self.thread_pool.clone(),
+            )),
         }
     }
 }

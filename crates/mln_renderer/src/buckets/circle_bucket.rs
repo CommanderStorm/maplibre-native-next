@@ -57,7 +57,11 @@ pub(crate) struct CircleBucket {
 
 impl CircleBucket {
     #[must_use]
-    pub(crate) fn new(layer_paint_properties: &VecMap<String, Arc<dyn LayerProperties>>, mode: MapMode, zoom: f32) -> Self {
+    pub(crate) fn new(
+        layer_paint_properties: &VecMap<String, Arc<dyn LayerProperties>>,
+        mode: MapMode,
+        zoom: f32,
+    ) -> Self {
         let mut paint_property_binders = VecMap::new();
         for (id, properties) in layer_paint_properties {
             paint_property_binders.entry(id.clone()).or_insert_with(|| {
@@ -77,7 +81,11 @@ impl CircleBucket {
     /// The layout vertex for `p` with extrusion (`ex`, `ey`). As in C++,
     /// `p.x * 2` is an integer, added to a float and truncated to `i16`.
     #[must_use]
-    pub(crate) fn vertex(p: mln_tile_id::geometry_tile_data::GeometryCoordinate, ex: f32, ey: f32) -> CircleLayoutVertex {
+    pub(crate) fn vertex(
+        p: mln_tile_id::geometry_tile_data::GeometryCoordinate,
+        ex: f32,
+        ey: f32,
+    ) -> CircleLayoutVertex {
         CircleLayoutVertex {
             a1: [
                 ((i32::from(p.x) * 2) as f32 + f32::midpoint(ex, 1.0)) as i32 as i16,

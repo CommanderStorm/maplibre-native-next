@@ -497,7 +497,11 @@ impl DynamicTextureAtlas {
         }
     }
 
-    pub(crate) fn remove_textures(&self, texture_handles: &[TextureHandle], dynamic_texture: &Option<DynamicTexturePtr>) {
+    pub(crate) fn remove_textures(
+        &self,
+        texture_handles: &[TextureHandle],
+        dynamic_texture: &Option<DynamicTexturePtr>,
+    ) {
         let Some(dynamic_texture) = dynamic_texture else {
             return;
         };

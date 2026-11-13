@@ -44,7 +44,9 @@ pub(crate) fn conversion(property: &Property) -> String {
 
 /// Groups properties by conversion, in order of first appearance (JS object
 /// key order of the template's `conversions`).
-pub(crate) fn conversion_groups<'a>(properties: impl Iterator<Item = &'a Property>) -> Vec<(String, Vec<&'a Property>)> {
+pub(crate) fn conversion_groups<'a>(
+    properties: impl Iterator<Item = &'a Property>,
+) -> Vec<(String, Vec<&'a Property>)> {
     let mut groups: Vec<(String, Vec<&'a Property>)> = Vec::new();
     for p in properties {
         let key = conversion(p);

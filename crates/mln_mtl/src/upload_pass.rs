@@ -49,7 +49,10 @@ impl UploadPass {
 
     /// An index buffer of `indexes`.
     #[must_use]
-    pub(crate) fn create_index_buffer_of(&self, indexes: &IndexVectorBase) -> Box<dyn vertex_buffer::IndexBufferResource> {
+    pub(crate) fn create_index_buffer_of(
+        &self,
+        indexes: &IndexVectorBase,
+    ) -> Box<dyn vertex_buffer::IndexBufferResource> {
         upload_pass::UploadPass::create_index_buffer_resource(
             self,
             bytemuck::cast_slice(indexes.data()),

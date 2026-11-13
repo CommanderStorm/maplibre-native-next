@@ -64,4 +64,3 @@ impl GeometryTileFeature for SymbolFeature {
         &self.original_geometry
     }
 }
-

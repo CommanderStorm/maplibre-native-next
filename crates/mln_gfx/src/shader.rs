@@ -7,4 +7,3 @@ pub trait Shader: Any {
     /// Get the type name of this shader
     fn type_name(&self) -> &'static str;
 }
-

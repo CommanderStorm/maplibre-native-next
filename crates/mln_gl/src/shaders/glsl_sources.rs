@@ -5564,4 +5564,3 @@ lowp float halo_blur = u_halo_blur;
 }
 ",
 };
-

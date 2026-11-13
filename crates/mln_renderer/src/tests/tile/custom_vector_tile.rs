@@ -6,9 +6,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mln_actor::actor::{Actor, PoolActorRef};
 use mln_actor::scheduler;
-use crate::query::SourceQueryOptions;
-use crate::tile::custom_tile::CustomVectorTile;
-use crate::tile::tile::{Tile, TileNecessity};
 use mln_style::custom_tile_loader::{CustomTileLoader, CustomTileSubscriber, TileFunction};
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;
@@ -21,6 +18,9 @@ use mln_util::geo::{LatLng, LatLngBounds};
 use parking_lot::Mutex;
 
 use super::RasterTileTest;
+use crate::query::SourceQueryOptions;
+use crate::tile::custom_tile::CustomVectorTile;
+use crate::tile::tile::{Tile, TileNecessity};
 
 /// The loader actor, on the test's run loop.
 fn loader(fetch: Option<TileFunction>, cancel: Option<TileFunction>) -> Actor<CustomVectorTileLoader> {

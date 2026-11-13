@@ -18,7 +18,6 @@ use mln_tile_id::OverscaledTileID;
 use mln_util::constants;
 use mln_util::error::Error;
 
-
 use crate::paint_parameters::TransformParameters;
 use crate::render_tile::RenderTile;
 use crate::render_tree::RenderItem;

@@ -47,10 +47,7 @@ pub(crate) mod util;
 pub mod value;
 pub(crate) mod within;
 
-pub use expression::{
-    Dependency, EvaluationContext, EvaluationResult, Expression, ExpressionBase, Kind,
-    downcast,
-};
+pub use expression::{Dependency, EvaluationContext, EvaluationResult, Expression, ExpressionBase, Kind, downcast};
 pub use find_zoom_curve::{ZoomCurvePtr, find_zoom_curve_checked};
 pub use formatted::{Formatted, FormattedSection};
 pub use image::Image;

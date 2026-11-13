@@ -1,5 +1,4 @@
 use crate::Position;
-
 use crate::tests::assert_near;
 
 #[track_caller]

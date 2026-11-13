@@ -1,8 +1,9 @@
 use std::time::Duration;
 
+use mln_util::chrono::{Timestamp, now};
+
 use crate::http_timeout::{error_retry_timeout, expiration_timeout};
 use crate::response::Reason;
-use mln_util::chrono::{Timestamp, now};
 
 fn now_plus(s: i64) -> Timestamp {
     Timestamp::from_secs(now().secs_since_epoch() + s)

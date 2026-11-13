@@ -109,7 +109,10 @@ pub fn create_render_layer(impl_: &Arc<dyn layer::Impl>) -> Option<RenderLayerPt
 }
 
 /// Creates the bucket of a layer type that has no layout.
-pub(crate) fn create_bucket(parameters: &BucketParameters, layers: &[Arc<dyn LayerProperties>]) -> Option<Box<dyn Bucket>> {
+pub(crate) fn create_bucket(
+    parameters: &BucketParameters,
+    layers: &[Arc<dyn LayerProperties>],
+) -> Option<Box<dyn Bucket>> {
     debug_assert!(!layers.is_empty());
     debug_assert_eq!(parameters.layer_type.layout, layer_type_info::Layout::NotRequired);
     // dem-heatmap: HeatmapLayerFactory::createBucket

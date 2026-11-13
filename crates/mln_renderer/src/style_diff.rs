@@ -81,7 +81,10 @@ pub(crate) fn diff_images(a: &Arc<Vec<Arc<image::Impl>>>, b: &Arc<Vec<Arc<image:
 }
 
 #[must_use]
-pub(crate) fn diff_sources(a: &ImmutableVector<dyn source::Impl>, b: &ImmutableVector<dyn source::Impl>) -> SourceDifference {
+pub(crate) fn diff_sources(
+    a: &ImmutableVector<dyn source::Impl>,
+    b: &ImmutableVector<dyn source::Impl>,
+) -> SourceDifference {
     diff(
         a,
         b,
@@ -91,7 +94,10 @@ pub(crate) fn diff_sources(a: &ImmutableVector<dyn source::Impl>, b: &ImmutableV
 }
 
 #[must_use]
-pub(crate) fn diff_layers(a: &ImmutableVector<dyn layer::Impl>, b: &ImmutableVector<dyn layer::Impl>) -> LayerDifference {
+pub(crate) fn diff_layers(
+    a: &ImmutableVector<dyn layer::Impl>,
+    b: &ImmutableVector<dyn layer::Impl>,
+) -> LayerDifference {
     diff(a, b, |l| l.id.clone(), |lhs, rhs| lhs.id == rhs.id && std::ptr::eq(lhs.get_type_info(), rhs.get_type_info()))
 }
 

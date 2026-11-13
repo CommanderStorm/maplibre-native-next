@@ -33,8 +33,8 @@ use mln_actor::{AsyncTask, AsyncTaskSender};
 use mln_storage::{AsyncRequest, FileSource, Resource, Response};
 use mln_text::HBShapeAdjust;
 use mln_text::glyph::{
-    FontData, FontFaces, Glyph, GlyphDependencies, GlyphID, GlyphIDType, GlyphMap, GlyphRange, Glyphs,
-    HBShapeRequests, get_glyph_range,
+    FontData, FontFaces, Glyph, GlyphDependencies, GlyphID, GlyphIDType, GlyphMap, GlyphRange, Glyphs, HBShapeRequests,
+    get_glyph_range,
 };
 use mln_text::glyph_cache::{GlyphCache, GlyphCacheRange};
 use mln_text::glyph_pbf::parse_glyph_pbf;
@@ -652,4 +652,3 @@ impl GlyphManager {
         faces.as_ref()?.iter().find(|face| face.type_ == type_)?.data.clone()
     }
 }
-

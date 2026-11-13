@@ -82,7 +82,14 @@ pub(crate) fn vec_from3<T: Copy + Default, A: AsArray<T>, B: AsArray<T>, C: AsAr
 }
 
 #[cfg(test)]
-pub(crate) fn vec_from4<T: Copy + Default, A: AsArray<T>, B: AsArray<T>, C: AsArray<T>, D: AsArray<T>, const N: usize>(
+pub(crate) fn vec_from4<
+    T: Copy + Default,
+    A: AsArray<T>,
+    B: AsArray<T>,
+    C: AsArray<T>,
+    D: AsArray<T>,
+    const N: usize,
+>(
     a: &A,
     b: &B,
     c: &C,

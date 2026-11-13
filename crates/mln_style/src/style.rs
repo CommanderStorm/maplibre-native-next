@@ -11,8 +11,7 @@ use crate::map::camera::CameraOptions;
 use crate::projection::Projection;
 use crate::sky::Sky;
 use crate::source::Source;
-pub use crate::style_impl::LayerRefMut;
-pub(crate) use crate::style_impl::{Impl, LightRefMut, ProjectionRefMut};
+pub(crate) use crate::style_impl::{Impl, LayerRefMut, LightRefMut, ProjectionRefMut};
 use crate::transition_options::TransitionOptions;
 
 /// Why a style failed to load.

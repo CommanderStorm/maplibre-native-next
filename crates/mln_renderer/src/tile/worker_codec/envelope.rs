@@ -146,11 +146,16 @@ mod textures {
         DynamicTexturePtr,
     );
 
-    pub(crate) fn serialize<S: serde::Serializer>(textures: &[DynamicTexturePtr], serializer: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: serde::Serializer>(
+        textures: &[DynamicTexturePtr],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         textures.iter().cloned().map(Texture).collect::<Vec<_>>().serialize(serializer)
     }
 
-    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<DynamicTexturePtr>, D::Error> {
+    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<DynamicTexturePtr>, D::Error> {
         Ok(Vec::<Texture>::deserialize(deserializer)?.into_iter().map(|texture| texture.0).collect())
     }
 }

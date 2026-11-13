@@ -15,6 +15,11 @@ use mln_expression::match_::Match;
 use mln_expression::parsing_context::ParsingContext;
 use mln_expression::type_::Type;
 use mln_expression::value::{ObjectType, Value};
+use mln_tile_id::geometry_tile_data::GeometryTileFeature;
+use mln_util::Color;
+use mln_util::geometry::FeatureType;
+use mln_vec_map::{VecMap, VecSet};
+
 use crate::format_section_override::{FormatSectionOverride, set_overrides};
 use crate::layers::symbol_layer_impl::SymbolLayerPaintPropertyOverrides as MockOverrides;
 use crate::layers::symbol_layer_properties::{TextColor, TextField};
@@ -24,10 +29,6 @@ use crate::property_expression::PropertyExpression;
 use crate::property_value::PropertyValue;
 use crate::renderer::possibly_evaluated_property_value::PossiblyEvaluatedPropertyValue;
 use crate::transition_options::TransitionOptions;
-use mln_tile_id::geometry_tile_data::GeometryTileFeature;
-use mln_util::Color;
-use mln_util::geometry::FeatureType;
-use mln_vec_map::{VecMap, VecSet};
 
 /// `test/include/mln/test/stub_geometry_tile_feature.hpp` (the property-map
 /// constructor).

@@ -1166,7 +1166,12 @@ pub(crate) fn create_result_item(metadata: &TestMetadata) -> String {
 /// The HTML report of a run, with entries for the failed and errored tests
 /// only.
 #[must_use]
-pub(crate) fn create_result_page(stats: &TestStatistics, metadatas: &[TestMetadata], shuffle: bool, seed: u32) -> String {
+pub(crate) fn create_result_page(
+    stats: &TestStatistics,
+    metadatas: &[TestMetadata],
+    shuffle: bool,
+    seed: u32,
+) -> String {
     let failed_or_errored = |metadata: &&TestMetadata| metadata.status == "failed" || metadata.status == "errored";
     let unsuccessful = stats.errored_tests + stats.failed_tests;
     let mut results_page = String::new();

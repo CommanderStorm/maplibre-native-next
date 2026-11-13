@@ -4,18 +4,6 @@ use std::sync::Arc;
 use feature::{Feature, PropertyMap, Value};
 use geometry::{Geometry, Point};
 use mln_map_types::MapMode;
-use crate::bucket::BucketPtr;
-use crate::bucket_parameters::BucketParameters;
-use crate::buckets::symbol_bucket::SymbolBucket;
-use crate::buckets::circle_bucket::CircleBucket;
-use crate::buckets::fill_bucket::FillBucket;
-use crate::buckets::line_bucket::LineBucket;
-use crate::geometry::feature_index::FeatureIndex;
-use crate::layermanager;
-use crate::layout::filter_groups::FilterGroups;
-use crate::layout::layout::{LayoutParameters, SourceLayer};
-use crate::render_layer::LayerRenderData;
-use crate::tile::geojson_tile_data::GeoJSONTileData;
 use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
 use mln_style::layer::downcast_arc;
 use mln_style::layer_properties::LayerProperties;
@@ -29,6 +17,19 @@ use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_vec_map::VecSet;
 use serde_json::json;
+
+use crate::bucket::BucketPtr;
+use crate::bucket_parameters::BucketParameters;
+use crate::buckets::circle_bucket::CircleBucket;
+use crate::buckets::fill_bucket::FillBucket;
+use crate::buckets::line_bucket::LineBucket;
+use crate::buckets::symbol_bucket::SymbolBucket;
+use crate::geometry::feature_index::FeatureIndex;
+use crate::layermanager;
+use crate::layout::filter_groups::FilterGroups;
+use crate::layout::layout::{LayoutParameters, SourceLayer};
+use crate::render_layer::LayerRenderData;
+use crate::tile::geojson_tile_data::GeoJSONTileData;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SortKeyType {

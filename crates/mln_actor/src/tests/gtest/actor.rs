@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use crate::actor::{Actor, PoolActorRef};
-use crate::scheduler::{self, Scheduler, SchedulerPtr, Task};
 use parking_lot::Mutex;
 
+use crate::actor::{Actor, PoolActorRef};
+use crate::scheduler::{self, Scheduler, SchedulerPtr, Task};
 use crate::tests::gtest::{get, wait, wait_for};
 
 // gtest: Actor.Construction

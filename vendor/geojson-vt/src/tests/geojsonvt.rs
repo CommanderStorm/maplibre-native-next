@@ -4,11 +4,12 @@
 // tests/fixtures.rs has the rest.
 
 use feature::Value;
+use geometry::{Geometry, Point};
+
 use crate::clip::Clipper;
 use crate::detail::{VtGeometry, VtLineString, VtLinearRing, VtPoint};
 use crate::simplify::simplify;
 use crate::{GeoJSONVT, Options};
-use geometry::{Geometry, Point};
 
 fn p(x: f64, y: f64) -> VtPoint {
     VtPoint::xy(x, y)

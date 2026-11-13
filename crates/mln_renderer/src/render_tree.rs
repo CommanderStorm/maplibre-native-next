@@ -63,10 +63,7 @@ pub(crate) struct RenderTreeParameters {
 }
 
 impl RenderTreeParameters {
-    pub(crate) fn new(
-        state: &TransformState,
-        debug_options: MapDebugOptions,
-    ) -> Self {
+    pub(crate) fn new(state: &TransformState, debug_options: MapDebugOptions) -> Self {
         RenderTreeParameters {
             transform_params: TransformParameters::new(state),
             debug_options,

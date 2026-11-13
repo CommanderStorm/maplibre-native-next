@@ -26,7 +26,11 @@ impl VertexBufferResource {
 
     /// A vertex buffer holding `data`, written from the JS array it is in.
     #[cfg(target_family = "wasm")]
-    pub(crate) fn new_from_host(context: &Context, data: &mln_util::host_bytes::HostBytes, usage: BufferUsageType) -> Self {
+    pub(crate) fn new_from_host(
+        context: &Context,
+        data: &mln_util::host_bytes::HostBytes,
+        usage: BufferUsageType,
+    ) -> Self {
         let buffer = context.create_buffer_from_host(glow::ARRAY_BUFFER, data, enums::buffer_usage(usage));
         Self::of(context, buffer, data.len())
     }
@@ -100,7 +104,11 @@ impl IndexBufferResource {
 
     /// An index buffer holding `data`, written from the JS array it is in.
     #[cfg(target_family = "wasm")]
-    pub(crate) fn new_from_host(context: &Context, data: &mln_util::host_bytes::HostBytes, usage: BufferUsageType) -> Self {
+    pub(crate) fn new_from_host(
+        context: &Context,
+        data: &mln_util::host_bytes::HostBytes,
+        usage: BufferUsageType,
+    ) -> Self {
         let buffer = context.create_buffer_from_host(glow::ELEMENT_ARRAY_BUFFER, data, enums::buffer_usage(usage));
         Self::of(context, buffer, data.len())
     }

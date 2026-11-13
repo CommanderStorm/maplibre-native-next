@@ -31,11 +31,11 @@ use mln_style::layer::downcast_arc;
 use mln_style::layer_properties::{LayerProperties, get_evaluated};
 use mln_style::layers::symbol_layer_impl::{Impl as SymbolLayerImpl, SymbolLayerPaintPropertyOverrides};
 use mln_style::layers::symbol_layer_properties::{
-    IconColor, IconHaloBlur, IconHaloColor, IconHaloWidth, IconOffset, IconOpacity,
-    IconPitchAlignment, IconRotationAlignment, IconSize, IconTextFit, IconTranslate, IconTranslateAnchor,
-    SymbolLayerProperties, SymbolLayoutProperties, SymbolPaintProperties, SymbolPlacement, SymbolScreenSpace,
-    SymbolSortKey, TextColor, TextField, TextHaloBlur, TextHaloColor, TextHaloWidth, TextOpacity,
-    TextPitchAlignment, TextRotationAlignment, TextTranslate, TextTranslateAnchor,
+    IconColor, IconHaloBlur, IconHaloColor, IconHaloWidth, IconOffset, IconOpacity, IconPitchAlignment,
+    IconRotationAlignment, IconSize, IconTextFit, IconTranslate, IconTranslateAnchor, SymbolLayerProperties,
+    SymbolLayoutProperties, SymbolPaintProperties, SymbolPlacement, SymbolScreenSpace, SymbolSortKey, TextColor,
+    TextField, TextHaloBlur, TextHaloColor, TextHaloWidth, TextOpacity, TextPitchAlignment, TextRotationAlignment,
+    TextTranslate, TextTranslateAnchor,
 };
 use mln_style::properties::Property;
 use mln_style::{PropertyEvaluationParameters, TransitionParameters, layer};

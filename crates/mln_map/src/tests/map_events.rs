@@ -7,14 +7,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mln_actor::RunLoop;
-use crate::{
-    CameraChange, CameraChangeMode, CameraChangeSource, CameraOptions, Map, MapEvent, MapMode, MapOptions,
-};
-use crate::map_options::UnusedStyleImagePolicy;
 use mln_renderer::RendererEvent;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_util::image::PremultipliedImage;
 use mln_util::size::Size;
+
+use crate::map_options::UnusedStyleImagePolicy;
+use crate::{CameraChange, CameraChangeMode, CameraChangeSource, CameraOptions, Map, MapEvent, MapMode, MapOptions};
 
 fn map(options: MapOptions) -> Map {
     Map::with_file_source(Arc::new(StubFileSource::new(ResponseType::Asynchronous)), options).expect("map")

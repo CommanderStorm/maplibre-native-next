@@ -23,8 +23,8 @@ use crate::expression::{
     Dependency, EvaluationContext, Expression, GlobalStateMap, ParsingContext, Type, from_expression_value,
 };
 use crate::filter::Filter;
-pub use crate::layer_impl::{Impl, ImplBase, downcast_arc};
 pub(crate) use crate::layer_impl::FontStack;
+pub use crate::layer_impl::{Impl, ImplBase, downcast_arc};
 use crate::style_property::StyleProperty;
 
 /// The enums nested in C++ `LayerTypeInfo`.

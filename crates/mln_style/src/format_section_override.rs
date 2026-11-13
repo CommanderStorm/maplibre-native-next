@@ -25,7 +25,11 @@ pub(crate) struct FormatSectionOverride {
 
 impl FormatSectionOverride {
     #[must_use]
-    pub(crate) fn new(type_: Type, default_value: PossiblyEvaluatedPropertyValue<Color>, property_name: String) -> Self {
+    pub(crate) fn new(
+        type_: Type,
+        default_value: PossiblyEvaluatedPropertyValue<Color>,
+        property_name: String,
+    ) -> Self {
         let dependencies = default_value.get_dependencies() | Dependency::OVERRIDE | Dependency::FEATURE;
         FormatSectionOverride {
             base: ExpressionBase::new(Kind::FormatSectionOverride, type_, dependencies),

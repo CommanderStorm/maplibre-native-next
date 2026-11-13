@@ -9,8 +9,7 @@ use mln_gfx::shaders::clipping_mask_ubo::ClipUBO;
 use mln_gfx::stencil_mode::Test;
 use mln_gfx::types::{DepthFunctionType, StencilOpType};
 use mln_gfx::{
-    CommandEncoder, Context, DepthMaskType, DepthMode, RendererBackend, ScissorRect, ShaderRegistry,
-    StencilMode,
+    CommandEncoder, Context, DepthMaskType, DepthMode, RendererBackend, ScissorRect, ShaderRegistry, StencilMode,
 };
 use mln_map_types::{MapDebugOptions, ProjectionData, TransformState, ViewportMode};
 use mln_tile_id::{CanonicalTileID, UnwrappedTileID};

@@ -5,11 +5,12 @@
 
 use std::sync::Arc;
 
-use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlas, GlyphAtlas, ImageAtlas, ImageVersionMap};
 use mln_style_types::image::{ImageMap, ImagePosition, Impl as ImageImpl};
 use mln_text::glyph::{Glyph, GlyphID, GlyphMap, GlyphMetrics, Glyphs};
 use mln_util::image::{AlphaImage, PremultipliedImage};
 use mln_util::size::Size;
+
+use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlas, GlyphAtlas, ImageAtlas, ImageVersionMap};
 
 fn make_glyph(code: char) -> Arc<Glyph> {
     Arc::new(Glyph {

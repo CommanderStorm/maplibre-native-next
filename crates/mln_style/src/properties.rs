@@ -136,7 +136,12 @@ impl<V: PropertyValueLike> Transitioning<V> {
 
     /// A transition from `prior` that starts at `now`, or one that has
     /// already ended for `None`.
-    pub(crate) fn with_prior(value: V, prior: Transitioning<V>, transition: &TransitionOptions, now: Option<Instant>) -> Self {
+    pub(crate) fn with_prior(
+        value: V,
+        prior: Transitioning<V>,
+        transition: &TransitionOptions,
+        now: Option<Instant>,
+    ) -> Self {
         Transitioning {
             prior: RefCell::new(if transition.is_defined() { Some(Box::new(prior)) } else { None }),
             start: now,

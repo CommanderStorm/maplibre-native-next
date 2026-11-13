@@ -72,7 +72,12 @@ struct Run {
 /// that a worker ran holds what the statistics, the return code and the
 /// report read (`ResultHeader`).
 #[must_use]
-pub(crate) fn run_jobs(arguments: &Arguments, manifest: &Manifest, output_path: &Path, jobs: usize) -> Vec<TestMetadata> {
+pub(crate) fn run_jobs(
+    arguments: &Arguments,
+    manifest: &Manifest,
+    output_path: &Path,
+    jobs: usize,
+) -> Vec<TestMetadata> {
     let dir = output_path.join(".render-test-jobs");
     let (mut crashes, not_run) = match start(arguments, manifest, &dir) {
         Ok(program) => (

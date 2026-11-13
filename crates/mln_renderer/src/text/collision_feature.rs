@@ -148,7 +148,14 @@ pub(crate) struct CollisionBox {
 
 impl CollisionBox {
     #[must_use]
-    pub(crate) fn new(anchor: Point<f32>, x1: f32, y1: f32, x2: f32, y2: f32, signed_distance_from_anchor: f32) -> Self {
+    pub(crate) fn new(
+        anchor: Point<f32>,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        signed_distance_from_anchor: f32,
+    ) -> Self {
         CollisionBox { anchor, x1, y1, x2, y2, signed_distance_from_anchor }
     }
 }

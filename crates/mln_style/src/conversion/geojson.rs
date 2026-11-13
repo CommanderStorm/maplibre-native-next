@@ -22,4 +22,3 @@ pub(crate) fn convert_json_geojson(json: &[u8], error: &mut Error) -> Option<Geo
     };
     GeoJSON::convert(&Convertible::from(&document), error)
 }
-

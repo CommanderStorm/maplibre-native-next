@@ -11,10 +11,6 @@ use feature::Feature;
 use geometry::{Geometry, Point};
 use mln_actor::actor::{Actor, PoolActorRef};
 use mln_actor::scheduler;
-use crate::query::SourceQueryOptions;
-use crate::tile::custom_tile::CustomGeometryTile;
-use crate::tile::tile::{Tile, TileBase, TileNecessity};
-use crate::tile::tile_observer::TileObserver;
 use mln_style::custom_tile_loader::{CustomTileLoader, TileFunction};
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;
@@ -26,6 +22,10 @@ use mln_util::error::Error;
 use parking_lot::Mutex;
 
 use super::RasterTileTest;
+use crate::query::SourceQueryOptions;
+use crate::tile::custom_tile::CustomGeometryTile;
+use crate::tile::tile::{Tile, TileBase, TileNecessity};
+use crate::tile::tile_observer::TileObserver;
 
 /// The loader actor, on the test's run loop.
 fn loader(fetch: Option<TileFunction>, cancel: Option<TileFunction>) -> Actor<CustomGeometryTileLoader> {

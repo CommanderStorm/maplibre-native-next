@@ -1,10 +1,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::buckets::raster_bucket::RasterBucket;
-use crate::tile::raster_tile::RasterTile;
-use crate::tile::tile::Tile;
-use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 use mln_style::layer::Layer;
 use mln_style::layers::RasterLayer;
 use mln_tile_id::OverscaledTileID;
@@ -13,6 +9,10 @@ use mln_util::image::PremultipliedImage;
 use mln_util::size::Size;
 
 use super::{ErrorObserver, RasterTileTest, png, serializing_transport};
+use crate::buckets::raster_bucket::RasterBucket;
+use crate::tile::raster_tile::RasterTile;
+use crate::tile::tile::Tile;
+use crate::tile::tile_loader::{LoaderTile, VectorTileEncoding};
 
 fn tile(test: &RasterTileTest) -> RasterTile {
     RasterTile::new(

@@ -38,4 +38,3 @@ impl BitAnd for RenderPass {
         RenderPass(self.0 & rhs.0)
     }
 }
-

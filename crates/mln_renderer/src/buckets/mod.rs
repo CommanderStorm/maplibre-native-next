@@ -9,4 +9,3 @@ pub(crate) mod hillshade_bucket; // dem-heatmap
 pub(crate) mod line_bucket;
 pub(crate) mod raster_bucket;
 pub(crate) mod symbol_bucket;
-

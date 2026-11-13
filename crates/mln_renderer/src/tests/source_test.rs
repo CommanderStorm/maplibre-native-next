@@ -9,9 +9,6 @@ use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{
     CameraOptions, ConstrainMode, MapDebugOptions, MapMode, TileLodMode, TransformState, ViewportMode,
 };
-use crate::render_source::{self as render_source, RenderSource, RenderSourceObserver};
-use crate::sources::render_geojson_source::RenderGeoJSONSource;
-use crate::tile_parameters::TileParameters;
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{AsyncRequest, Callback, FileSource, Kind, Resource, ResourceOptions, Response};
@@ -44,6 +41,10 @@ use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_util::tileset::{Tileset, VectorEncoding};
 use parking_lot::Mutex;
+
+use crate::render_source::{self as render_source, RenderSource, RenderSourceObserver};
+use crate::sources::render_geojson_source::RenderGeoJSONSource;
+use crate::tile_parameters::TileParameters;
 
 struct SourceTest {
     run_loop: RunLoop,

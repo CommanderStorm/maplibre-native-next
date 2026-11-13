@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mln_conversion::Convertible;
-use crate::render_sky::RenderSky;
 use mln_style::conversion::{Converter, Error};
 use mln_style::property_value::PropertyValue;
 use mln_style::sky::{
@@ -18,6 +17,8 @@ use mln_style::transition_options::TransitionOptions;
 use mln_style::{PropertyEvaluationParameters, TransitionParameters};
 use mln_util::Color;
 use mln_util::time::Instant;
+
+use crate::render_sky::RenderSky;
 
 fn parse_sky(source: &str, error: &mut Error) -> Option<Sky> {
     let json: serde_json::Value = serde_json::from_str(source).expect("JSON");

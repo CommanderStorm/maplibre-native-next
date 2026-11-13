@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
+use crate::freetype::FreeTypeFace;
 use crate::glyph::{FontData, GlyphID, GlyphIDType};
 use crate::woff::{self, WoffError};
-use crate::freetype::FreeTypeFace;
 use crate::{FreeTypeLibrary, HBShapeAdjust, HBShaper};
 
 const TTF: &[u8] = include_bytes!("../../tests/fixtures/khmer.ttf");

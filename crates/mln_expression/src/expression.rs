@@ -74,7 +74,10 @@ impl<'a> EvaluationContext<'a> {
     }
 
     #[must_use]
-    pub(crate) fn from_accumulated(accumulated: Option<&'a MbglValue>, feature: Option<&'a dyn GeometryTileFeature>) -> Self {
+    pub(crate) fn from_accumulated(
+        accumulated: Option<&'a MbglValue>,
+        feature: Option<&'a dyn GeometryTileFeature>,
+    ) -> Self {
         EvaluationContext { accumulated, feature, ..Default::default() }
     }
 

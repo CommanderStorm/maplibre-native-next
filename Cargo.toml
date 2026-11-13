@@ -335,6 +335,9 @@ egui-winit = { version = "0.37.0", default-features = false, features = ["links"
 [workspace.lints.rust]
 # No `unsafe` outside FFI. The FFI modules allow it.
 unsafe_code = "deny"
+# A `pub` item that no other crate can reach is `pub(crate)`, so that each
+# crate's public API is what its dependents use.
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

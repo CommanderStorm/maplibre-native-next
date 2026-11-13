@@ -188,7 +188,12 @@ pub(crate) struct CollatorComparison {
 
 impl CollatorComparison {
     #[must_use]
-    pub(crate) fn new(op: String, lhs: Box<dyn Expression>, rhs: Box<dyn Expression>, collator: Box<dyn Expression>) -> Self {
+    pub(crate) fn new(
+        op: String,
+        lhs: Box<dyn Expression>,
+        rhs: Box<dyn Expression>,
+        collator: Box<dyn Expression>,
+    ) -> Self {
         debug_assert!(is_comparable_type(&op, lhs.get_type()) && is_comparable_type(&op, rhs.get_type()));
         let needs_runtime_type_check =
             (op == "==" || op == "!=") && (*lhs.get_type() == Type::Value || *rhs.get_type() == Type::Value);

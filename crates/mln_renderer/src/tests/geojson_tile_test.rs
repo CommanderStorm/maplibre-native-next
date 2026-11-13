@@ -7,11 +7,6 @@ use geometry::{Geometry, Point};
 use mln_actor::{RunLoop, TaggedScheduler, scheduler};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
-use crate::tile::geojson_tile::GeoJSONTile;
-use crate::tile::tile::{Tile, TileBase};
-use crate::tile::tile_observer::TileObserver;
-use crate::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
-use crate::tile_parameters::TileParameters;
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;
 use mln_style::layers::circle_layer::Impl as CircleLayerImpl;
@@ -22,6 +17,12 @@ use mln_tile_id::{CanonicalTileID, OverscaledTileID};
 use mln_util::error::Error;
 use mln_util::identity::SimpleIdentity;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
+
+use crate::tile::geojson_tile::GeoJSONTile;
+use crate::tile::tile::{Tile, TileBase};
+use crate::tile::tile_observer::TileObserver;
+use crate::tile::worker_codec::{SerializingTransport, ThreadWorkerInstances};
+use crate::tile_parameters::TileParameters;
 
 struct GeoJSONTileTest {
     run_loop: RunLoop,
@@ -57,12 +58,10 @@ impl GeoJSONTileTest {
             capture_rendered_features: false,
             image_manager: crate::image_manager::ImageManager::create(),
             glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
-            dynamic_texture_atlas: std::sync::Arc::new(
-                crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new(),
-            ),
-            tile_worker_transport: std::rc::Rc::new(
-                crate::tile::tile_worker_transport::InProcessTransport::new(self.thread_pool.clone()),
-            ),
+            dynamic_texture_atlas: std::sync::Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
+            tile_worker_transport: std::rc::Rc::new(crate::tile::tile_worker_transport::InProcessTransport::new(
+                self.thread_pool.clone(),
+            )),
         }
     }
 }

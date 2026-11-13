@@ -571,7 +571,12 @@ impl Context {
     /// (`drawable_buffers`), else the layer group's, else the global one. A
     /// layer's buffer of an element per drawable is bound at the element
     /// `ubo_index`.
-    pub(crate) fn bind_uniform_blocks(&self, shader: &ShaderProgram, drawable_buffers: &UniformBufferArray, ubo_index: u32) {
+    pub(crate) fn bind_uniform_blocks(
+        &self,
+        shader: &ShaderProgram,
+        drawable_buffers: &UniformBufferArray,
+        ubo_index: u32,
+    ) {
         let gl = self.gl();
         let layer_buffers = self.layer_uniform_buffers.borrow();
         let global_buffers = self.global_uniform_buffers.borrow();

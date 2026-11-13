@@ -10,17 +10,6 @@ use mln_gfx::shaders::segment::SegmentBase;
 use mln_gfx::types::BufferUsageType;
 use mln_gfx::{AttributeDataType, DrawMode};
 use mln_map_types::MapMode;
-use crate::bucket::Bucket;
-use crate::bucket_geometry::{BucketGeometry, paint_vertices};
-use crate::buckets::raster_bucket::RasterLayoutVertex;
-use crate::buckets::symbol_bucket::SymbolBucket;
-use crate::buckets::circle_bucket::CircleBucket;
-use crate::buckets::fill_bucket::FillBucket;
-use crate::buckets::fill_extrusion_bucket::FillExtrusionBucket;
-use crate::buckets::line_bucket::LineBucket;
-use crate::buckets::raster_bucket::RasterBucket;
-use crate::layout::pattern_layout::PatternLayerMap;
-use crate::tile_mask::TileMask;
 use mln_style::CrossfadeParameters;
 use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
 use mln_style::layer::downcast_arc;
@@ -47,6 +36,17 @@ use mln_vec_map::VecMap;
 use mln_webgpu::upload_pass::UploadPass as WebGpuUploadPass;
 use mln_webgpu::{Device, OffscreenTarget};
 use parking_lot::Mutex;
+
+use crate::bucket::Bucket;
+use crate::bucket_geometry::{BucketGeometry, paint_vertices};
+use crate::buckets::circle_bucket::CircleBucket;
+use crate::buckets::fill_bucket::FillBucket;
+use crate::buckets::fill_extrusion_bucket::FillExtrusionBucket;
+use crate::buckets::line_bucket::LineBucket;
+use crate::buckets::raster_bucket::{RasterBucket, RasterLayoutVertex};
+use crate::buckets::symbol_bucket::SymbolBucket;
+use crate::layout::pattern_layout::PatternLayerMap;
+use crate::tile_mask::TileMask;
 
 struct StubGeometryTileFeature {
     properties: PropertyMap,

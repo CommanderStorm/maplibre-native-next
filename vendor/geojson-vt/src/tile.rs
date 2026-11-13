@@ -38,7 +38,15 @@ pub(crate) struct InternalTile {
 
 impl InternalTile {
     #[must_use]
-    pub(crate) fn new(source: &VtFeatures, z: u8, x: u32, y: u32, extent: u16, tolerance: f64, line_metrics: bool) -> Self {
+    pub(crate) fn new(
+        source: &VtFeatures,
+        z: u8,
+        x: u32,
+        y: u32,
+        extent: u16,
+        tolerance: f64,
+        line_metrics: bool,
+    ) -> Self {
         let mut t = InternalTile {
             extent,
             z,

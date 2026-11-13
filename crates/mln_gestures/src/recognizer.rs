@@ -6,17 +6,17 @@ use std::ops::{Add, AddAssign, Div, Mul, Sub};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(test)]
+use mln_map::CameraError;
 use mln_map::{
-    AnimationOptions, CameraDelta, CameraMomentum, CameraOptions, CameraUpdate, CameraUpdateMode,
-    CameraVelocity, GesturePhase, MomentumDecay, TransitionEnd, TransitionOutcome,
+    AnimationOptions, CameraDelta, CameraMomentum, CameraOptions, CameraUpdate, CameraUpdateMode, CameraVelocity,
+    GesturePhase, MomentumDecay, TransitionEnd, TransitionOutcome,
 };
 use mln_util::UnitBezier;
 use mln_util::geo::ScreenCoordinate;
 use parking_lot::Mutex;
 
 use crate::camera::GestureCamera;
-#[cfg(test)]
-use mln_map::CameraError;
 use crate::input::{Button, GestureEvent, Input, Key, Modifiers, PinchPhase, PointerKind, WheelDelta};
 use crate::options::GestureOptions;
 use crate::velocity::VelocityTracker;

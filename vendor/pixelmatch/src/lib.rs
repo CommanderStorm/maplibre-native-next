@@ -97,7 +97,14 @@ pub(crate) mod detail {
     ///
     /// `img2` is `nullptr` in the C++ recursive calls.
     #[must_use]
-    pub(crate) fn antialiased(img: &[u8], x1: usize, y1: usize, width: usize, height: usize, img2: Option<&[u8]>) -> bool {
+    pub(crate) fn antialiased(
+        img: &[u8],
+        x1: usize,
+        y1: usize,
+        width: usize,
+        height: usize,
+        img2: Option<&[u8]>,
+    ) -> bool {
         let x0 = if x1 > 0 { x1 - 1 } else { 0 };
         let y0 = if y1 > 0 { y1 - 1 } else { 0 };
         // `std::min(x1 + 1, width - 1)` on `size_t`.

@@ -70,7 +70,10 @@ impl UploadPass {
     /// An index buffer of `indexes`, written from the JS array they're in,
     /// if they are.
     #[must_use]
-    pub(crate) fn create_index_buffer_of(&self, indexes: &IndexVectorBase) -> Box<dyn vertex_buffer::IndexBufferResource> {
+    pub(crate) fn create_index_buffer_of(
+        &self,
+        indexes: &IndexVectorBase,
+    ) -> Box<dyn vertex_buffer::IndexBufferResource> {
         #[cfg(target_family = "wasm")]
         if let Some(data) = indexes.host_data() {
             return Box::new(IndexBufferResource::new_from_host(&self.context, data, BufferUsageType::StaticDraw));

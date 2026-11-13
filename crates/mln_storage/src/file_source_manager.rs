@@ -25,7 +25,8 @@ use crate::resource_options::ResourceOptions;
 /// Creates the file source of one type. It gets the manager that asked, so
 /// a file source built on others (the `ResourceLoader`) takes them from the
 /// same owner.
-pub(crate) type FileSourceFactory = Arc<dyn Fn(&FileSourceManager, &ResourceOptions) -> Arc<dyn FileSource> + Send + Sync>;
+pub(crate) type FileSourceFactory =
+    Arc<dyn Fn(&FileSourceManager, &ResourceOptions) -> Arc<dyn FileSource> + Send + Sync>;
 
 struct FileSourceInfo {
     type_: FileSourceType,

@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::actor::{Actor, PoolActorRef};
 use crate::scheduler;
-
 use crate::tests::gtest::{get, wait};
 
 // gtest: ActorRef.CanOutliveActor

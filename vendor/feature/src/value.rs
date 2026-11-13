@@ -24,9 +24,6 @@ pub enum Value {
     Object(ValueObject),
 }
 
-impl Value {
-}
-
 impl From<bool> for Value {
     fn from(v: bool) -> Self {
         Value::Bool(v)

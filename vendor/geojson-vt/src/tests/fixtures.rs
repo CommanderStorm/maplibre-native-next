@@ -12,9 +12,10 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use feature::{Feature, Identifier, PropertyMap, Value};
-use crate::{EMPTY_TILE, GeoJSONVT, Options, TileOptions, geojson_to_tile};
 use geometry::{Geometry, Point};
 use serde_json::Value as Json;
+
+use crate::{EMPTY_TILE, GeoJSONVT, Options, TileOptions, geojson_to_tile};
 
 fn load_file(name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

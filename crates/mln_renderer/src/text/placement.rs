@@ -169,7 +169,11 @@ pub(crate) struct RetainedQueryData {
 
 impl RetainedQueryData {
     #[must_use]
-    pub(crate) fn new(bucket_instance_id: u32, feature_index: Option<Arc<FeatureIndex>>, tile_id: OverscaledTileID) -> Self {
+    pub(crate) fn new(
+        bucket_instance_id: u32,
+        feature_index: Option<Arc<FeatureIndex>>,
+        tile_id: OverscaledTileID,
+    ) -> Self {
         RetainedQueryData { bucket_instance_id, feature_index, tile_id, feature_sort_order: RefCell::new(None) }
     }
 }
@@ -484,7 +488,12 @@ impl PlacementController {
     }
 
     #[must_use]
-    pub(crate) fn placement_is_recent(&self, now: Option<Instant>, zoom: f32, period_override: Option<Duration>) -> bool {
+    pub(crate) fn placement_is_recent(
+        &self,
+        now: Option<Instant>,
+        zoom: f32,
+        period_override: Option<Duration>,
+    ) -> bool {
         if !self.placement.transitions_enabled() {
             return false;
         }

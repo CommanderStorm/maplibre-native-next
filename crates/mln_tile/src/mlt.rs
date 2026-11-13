@@ -91,9 +91,6 @@ pub(crate) struct Geometry {
     pub(crate) triangles: Option<Range<usize>>,
 }
 
-impl Geometry {
-}
-
 /// The scalar type of a property column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScalarType {

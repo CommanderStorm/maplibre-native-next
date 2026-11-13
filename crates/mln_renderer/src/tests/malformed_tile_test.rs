@@ -9,9 +9,6 @@ use std::time::Duration;
 use mln_actor::{RunLoop, TaggedScheduler, Timer, scheduler};
 use mln_map::transform::{NullTransformObserver, Transform};
 use mln_map_types::{CameraOptions, ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
-use crate::image_manager::ImageManagerObserver;
-use crate::render_source::{self as render_source, RenderSourceObserver};
-use crate::tile_parameters::TileParameters;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{FileSource, Kind, Response};
 use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
@@ -33,6 +30,10 @@ use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_util::tileset::{Tileset, VectorEncoding};
 use proptest::prelude::*;
 use serde_json::json;
+
+use crate::image_manager::ImageManagerObserver;
+use crate::render_source::{self as render_source, RenderSourceObserver};
+use crate::tile_parameters::TileParameters;
 
 /// What the render source reported for the tile.
 #[derive(Debug, PartialEq)]
@@ -166,9 +167,9 @@ fn load(tile: Vec<u8>, layers: &[Arc<dyn LayerProperties>]) -> Outcome {
             image_manager: image_manager.clone(),
             glyph_manager: crate::text::glyph_manager::GlyphManager::new(None),
             dynamic_texture_atlas: Arc::new(crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas::new()),
-            tile_worker_transport: std::rc::Rc::new(
-                crate::tile::tile_worker_transport::InProcessTransport::new(thread_pool.clone()),
-            ),
+            tile_worker_transport: std::rc::Rc::new(crate::tile::tile_worker_transport::InProcessTransport::new(
+                thread_pool.clone(),
+            )),
         },
     );
 

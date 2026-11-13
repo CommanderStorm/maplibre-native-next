@@ -104,7 +104,12 @@ pub(crate) struct Stats {
 
 impl Stats {
     /// Adds an entry for the feature, or merges it into the existing one.
-    pub(crate) fn add_rendered_feature(&mut self, feature_id: &str, bound: &NDCBound, tile_ids: HashSet<OverscaledTileID>) {
+    pub(crate) fn add_rendered_feature(
+        &mut self,
+        feature_id: &str,
+        bound: &NDCBound,
+        tile_ids: HashSet<OverscaledTileID>,
+    ) {
         mln_gfx::rendering_stats::add_rendered_feature(&mut self.rendered_features, feature_id, bound, tile_ids);
     }
 }
@@ -834,7 +839,11 @@ pub(crate) fn activate_layer_group(
     }
 }
 
-pub(crate) fn change_layer_index(group: &Option<LayerGroupBasePtr>, new_index: i32, changes: &mut UniqueChangeRequestVec) {
+pub(crate) fn change_layer_index(
+    group: &Option<LayerGroupBasePtr>,
+    new_index: i32,
+    changes: &mut UniqueChangeRequestVec,
+) {
     if let Some(group) = group
         && group.borrow().get_layer_index() != new_index
     {

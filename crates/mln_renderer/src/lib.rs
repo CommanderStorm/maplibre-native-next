@@ -52,6 +52,7 @@ pub mod update_slot;
 pub mod util;
 
 pub use frame_projection::{ClipDepthRange, FrameProjection};
+pub(crate) use paint_property_binder::paint_property_binders;
 pub use renderer::Renderer;
 pub use renderer_event::{
     FeatureInfo, FontStack, FrameRenderedFeaturesMap, GlyphRange, LayerFeaturesMap, NDCBound, OverscaledTileID,
@@ -59,8 +60,6 @@ pub use renderer_event::{
 };
 pub use update_parameters::UpdateParameters;
 pub use update_slot::{Update, UpdateReader, UpdateSlot};
-
-pub(crate) use paint_property_binder::paint_property_binders;
 
 #[cfg(test)]
 mod tests;

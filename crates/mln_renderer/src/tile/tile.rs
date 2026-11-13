@@ -101,7 +101,12 @@ pub(crate) struct TileBase {
 
 impl TileBase {
     #[must_use]
-    pub(crate) fn new(kind: Kind, id: OverscaledTileID, source_id: String, observer: Option<Rc<dyn TileObserver>>) -> Self {
+    pub(crate) fn new(
+        kind: Kind,
+        id: OverscaledTileID,
+        source_id: String,
+        observer: Option<Rc<dyn TileObserver>>,
+    ) -> Self {
         TileBase {
             kind,
             id: Cell::new(id),

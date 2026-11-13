@@ -23,8 +23,8 @@ pub(crate) mod vector_mvt_tile_data;
 
 pub(crate) use error::Error;
 pub use geometry_tile_data::{
-    classify_rings, convert_feature, convert_geometry, convert_geometry_to_tile, limit_holes,
-    round_polygon_corners, to_geometry_collection,
+    classify_rings, convert_feature, convert_geometry, convert_geometry_to_tile, limit_holes, round_polygon_corners,
+    to_geometry_collection,
 };
 pub use vector_mlt_tile_data::VectorMLTTileData;
 pub use vector_mvt_tile_data::VectorMVTTileData;

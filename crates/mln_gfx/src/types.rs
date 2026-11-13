@@ -143,4 +143,3 @@ pub enum TextureWrapType {
     Clamp,
     Repeat,
 }
-

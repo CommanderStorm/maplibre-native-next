@@ -5,8 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use mln_actor::{RunLoop, Timer};
-use crate::text::font_face_engine::{FontFaceEngine, FontFaceShaper};
-use crate::text::glyph_manager::{GlyphManager, GlyphManagerObserver, GlyphRequestor, glyph_requestor_key};
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{FileSource, Kind, Resource, Response};
@@ -29,6 +27,8 @@ use parking_lot::Mutex;
 
 use super::glyph_manager_bitmaps::{SDF_BITMAP, STUB_BITMAP};
 use super::{SquelchLog, read_file};
+use crate::text::font_face_engine::{FontFaceEngine, FontFaceShaper};
+use crate::text::glyph_manager::{GlyphManager, GlyphManagerObserver, GlyphRequestor, glyph_requestor_key};
 
 fn stub_glyph(glyph_id: GlyphID) -> Glyph {
     Glyph {

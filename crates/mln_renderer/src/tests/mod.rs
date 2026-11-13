@@ -2,9 +2,9 @@
 // backend) and test/renderer/fill_bucket.test.cpp.
 mod bucket_test;
 // Ports test/layout/sort_key.test.cpp.
-mod sort_key_test;
-mod gtest_subdivision;
 mod gtest_sky;
+mod gtest_subdivision;
+mod sort_key_test;
 // gtests-data: the test/tile gtests that need the renderer's tiles or
 // mln_map's Transform (tests/tile/main.rs lists them).
 mod tile;
@@ -17,9 +17,9 @@ mod gtest_image_manager;
 mod gtest_dynamic_texture_atlas;
 mod gtest_fill_generator;
 // gtests-core: test/renderer/pattern_atlas.test.cpp.
+mod gtest_fill_large_mesh_arrays;
 mod gtest_pattern_atlas;
 mod gtest_tile_lod;
-mod gtest_fill_large_mesh_arrays;
 // gtests-core: test/algorithm/update_renderables.test.cpp.
 mod gtest_update_renderables;
 // gtests-core: test/geometry/line_atlas.test.cpp.

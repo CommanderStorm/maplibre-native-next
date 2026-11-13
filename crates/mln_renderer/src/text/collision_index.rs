@@ -544,7 +544,10 @@ impl CollisionIndex {
         }
     }
 
-    pub(crate) fn query_rendered_symbols(&self, query_geometry: &ScreenLineString) -> HashMap<u32, Vec<IndexedSubfeature>> {
+    pub(crate) fn query_rendered_symbols(
+        &self,
+        query_geometry: &ScreenLineString,
+    ) -> HashMap<u32, Vec<IndexedSubfeature>> {
         let mut result: HashMap<u32, Vec<IndexedSubfeature>> = HashMap::new();
         if query_geometry.is_empty() || (self.collision_grid.empty() && self.ignored_grid.empty()) {
             return result;

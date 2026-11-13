@@ -60,9 +60,6 @@ pub(crate) struct IndexedSubfeature {
     pub(crate) collision_group_id: u16,
 }
 
-impl IndexedSubfeature {
-}
-
 /// A shared order of feature indices that queries sort symbol features by.
 pub(crate) type FeatureSortOrder = Option<Arc<Vec<usize>>>;
 

@@ -748,13 +748,13 @@ macro_rules! paint_property_binders {
     ) => {
         $(#[$meta])*
         #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
-        pub struct $name {
+        pub(crate) struct $name {
             pub interleaved_vertex_buffer: $crate::paint_property_binder::InterleavedVertexBuffer,
             $(pub $field: $binder,)+
         }
 
         impl $name {
-            pub fn new(properties: &$props, z: f32) -> Self {
+            pub(crate) fn new(properties: &$props, z: f32) -> Self {
                 let mut result = $name {
                     interleaved_vertex_buffer: Default::default(),
                     $($field: <$binder>::create(
@@ -769,7 +769,7 @@ macro_rules! paint_property_binders {
             }
 
             #[allow(clippy::too_many_arguments)]
-            pub fn populate_vertex_vectors(
+            pub(crate) fn populate_vertex_vectors(
                 &mut self,
                 feature: &dyn mln_tile_id::geometry_tile_data::GeometryTileFeature,
                 length: usize,
@@ -803,7 +803,7 @@ macro_rules! paint_property_binders {
             }
 
             #[allow(dead_code, reason = "the heatmap bucket doesn't rewrite its vertices on a feature state change")]
-            pub fn update_vertex_vectors(
+            pub(crate) fn update_vertex_vectors(
                 &mut self,
                 states: &$crate::bucket::FeatureStates,
                 layer: &dyn mln_tile_id::geometry_tile_data::GeometryTileLayer,
@@ -820,7 +820,7 @@ macro_rules! paint_property_binders {
             }
 
             /// True if a feature state change rewrites the data-driven values.
-            pub fn depends_on_feature_state(&self) -> bool {
+            pub(crate) fn depends_on_feature_state(&self) -> bool {
                 false $(|| $crate::paint_property_binder::PaintPropertyBinderBase::depends_on_feature_state(
                     &self.$field))+
             }

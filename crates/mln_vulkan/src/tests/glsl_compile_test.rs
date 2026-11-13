@@ -40,6 +40,8 @@ use mln_gfx::shaders::sky_ubo::{AtmospherePropsUBO, SkyPropsUBO};
 use mln_gfx::shaders::symbol_layer_ubo::{
     CollisionDrawableUBO, CollisionTilePropsUBO, SymbolDrawableUBO, SymbolEvaluatedPropsUBO, SymbolTilePropsUBO,
 };
+use naga::{AddressSpace, ArraySize, Binding, Interpolation, Module, ScalarKind, StorageAccess, TypeInner};
+
 use crate::shaders::compiler::{Stage, compile, compose, parse};
 use crate::shaders::glsl_sources;
 use crate::shaders::layout::{
@@ -49,7 +51,6 @@ use crate::shaders::layout::{
     layer_storage_binding, layer_uniform_binding,
 };
 use crate::shaders::shader_source::{AttributeInfo, ShaderSource, shader_source};
-use naga::{AddressSpace, ArraySize, Binding, Interpolation, Module, ScalarKind, StorageAccess, TypeInner};
 
 const ALL_BUILT_INS: &[BuiltIn] = &[
     BuiltIn::ClippingMaskProgram,

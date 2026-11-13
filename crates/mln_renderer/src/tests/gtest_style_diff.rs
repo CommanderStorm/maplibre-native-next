@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use crate::style_diff::diff_layers;
 use mln_style::layer::{Impl, ImplBase, LayerTypeInfo, layer_type_info};
+
+use crate::style_diff::diff_layers;
 
 #[derive(Debug)]
 struct TestLayerImpl {
