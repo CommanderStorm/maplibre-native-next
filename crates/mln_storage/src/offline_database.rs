@@ -266,6 +266,7 @@ impl OfflineDatabase {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn change_path(&mut self, path: &str) {
         Log::info(Event::Database, "Changing the database path.");
         self.cleanup();
@@ -1269,6 +1270,7 @@ impl OfflineDatabase {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn has_region_resource(&mut self, resource: &Resource) -> Option<i64> {
         self.check_region_resource(resource).map(|(size, _)| size)
     }
@@ -1393,6 +1395,7 @@ impl OfflineDatabase {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_region_definition(&mut self, region_id: i64) -> Result<OfflineRegionDefinition, DatabaseError> {
         let result = (|| -> DbResult<OfflineRegionDefinition> {
             // `query.run(); query.get<std::string>(0)`: no row reads as "".
@@ -1675,6 +1678,7 @@ impl OfflineDatabase {
         self.exception_ptr(result, "pack storage")
     }
 
+    #[cfg(test)]
     pub(crate) fn run_pack_database_automatically(&mut self, autopack: bool) {
         self.autopack = autopack;
     }

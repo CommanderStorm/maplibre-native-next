@@ -28,10 +28,6 @@ impl StyleProperty {
         &self.value
     }
 
-    pub(crate) fn get_value_mut(&mut self) -> &mut Value {
-        &mut self.value
-    }
-
     #[must_use]
     pub fn get_kind(&self) -> Kind {
         self.kind

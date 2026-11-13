@@ -11,10 +11,6 @@ pub(crate) struct DebugGroup<'a> {
 }
 
 impl<'a> DebugGroup<'a> {
-    pub(crate) fn new(target: &'a dyn DebugGroupTarget, name: &str) -> Self {
-        target.push_debug_group(name);
-        DebugGroup { target: Some(target) }
-    }
 }
 
 impl Drop for DebugGroup<'_> {

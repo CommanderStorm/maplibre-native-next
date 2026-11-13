@@ -157,8 +157,4 @@ pub struct RenderingStats {
 }
 
 impl RenderingStats {
-    #[must_use]
-    pub(crate) fn is_zero(&self) -> bool {
-        *self == RenderingStats::default()
-    }
 }

@@ -130,13 +130,6 @@ pub enum TextureChannelDataType {
     Float,
 }
 
-/// Texture mip map type
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TextureMipMapType {
-    No,
-    Yes,
-}
-
 /// Texture filter type
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureFilterType {
@@ -151,11 +144,3 @@ pub enum TextureWrapType {
     Repeat,
 }
 
-/// Render buffer pixel type
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub(crate) enum RenderbufferPixelType {
-    RGBA,
-    Depth,
-    DepthStencil,
-}

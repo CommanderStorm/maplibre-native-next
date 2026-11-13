@@ -40,7 +40,6 @@ use crate::render_tree::RenderTree;
 use crate::update_parameters::UpdateParameters;
 
 pub(crate) type RenderLayerPtr = Rc<RefCell<dyn RenderLayer>>;
-pub(crate) type RenderLayerReferences = Vec<RenderLayerPtr>;
 
 #[derive(Clone)]
 pub(crate) struct LayerRenderData {

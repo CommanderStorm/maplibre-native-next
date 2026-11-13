@@ -188,11 +188,6 @@ impl SurfaceResource {
         self.state.borrow_mut().acquired_image_index = index;
     }
 
-    pub(crate) fn get_acquired_image(&self) -> vk::Image {
-        let state = self.state.borrow();
-        state.swapchain_images.get(state.acquired_image_index as usize).copied().unwrap_or_default()
-    }
-
     /// The semaphore the frame `frame_index` acquires its image with.
     pub(crate) fn get_acquire_semaphore(&self, frame_index: u8) -> vk::Semaphore {
         self.state.borrow().acquire_semaphores.get(usize::from(frame_index)).copied().unwrap_or_default()

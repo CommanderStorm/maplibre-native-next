@@ -32,6 +32,7 @@ impl Position {
         [self.radial, self.azimuthal, self.polar]
     }
 
+    #[cfg(test)]
     pub(crate) fn set(&mut self, position: [f32; 3]) {
         self.radial = position[0];
         self.azimuthal = position[1];

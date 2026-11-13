@@ -13,10 +13,12 @@ use mln_util::vectors::Vec3;
 
 use crate::camera::FreeCameraOptions;
 
+#[cfg(test)]
 fn mercator_x_from_lng(lng: f64) -> f64 {
     (180.0 + lng) / 360.0
 }
 
+#[cfg(test)]
 fn mercator_y_from_lat(lat: f64) -> f64 {
     (180.0 - (180.0 / PI * ((PI / 4.0) + lat * PI / 360.0).tan().ln())) / 360.0
 }
@@ -25,10 +27,12 @@ fn lat_from_mercator_y(y: f64) -> f64 {
     mln_math::rad2deg(2.0 * (PI - y * M2PI).exp().atan() - (PI / 2.0))
 }
 
+#[cfg(test)]
 fn lng_from_mercator_x(x: f64) -> f64 {
     x * 360.0 - 180.0
 }
 
+#[cfg(test)]
 fn to_mercator(location: &LatLng, altitude_meters: f64) -> Vec3 {
     let pixels_per_meter = 1.0 / Projection::get_meters_per_pixel_at_latitude(location.latitude(), 0.0);
     let world_size = Projection::world_size(2.0f64.powf(0.0));
@@ -99,14 +103,6 @@ impl Camera {
     pub(crate) fn get_position(&self) -> Vec3 {
         let p = get_column(&self.transform, 3);
         [p[0], p[1], p[2]]
-    }
-
-    #[must_use]
-    pub(crate) fn get_camera_to_world(&self, scale: f64, flipped_y: bool) -> Mat4 {
-        let mut camera_to_world = [0.0; 16];
-        // C++ ignores the result.
-        let _ = matrix::invert(&mut camera_to_world, &self.get_world_to_camera(scale, flipped_y));
-        camera_to_world
     }
 
     #[must_use]
@@ -240,6 +236,7 @@ impl Camera {
 impl FreeCameraOptions {
     /// Helper function for setting the mercator position as Lat&Lng and
     /// altitude in meters.
+    #[cfg(test)]
     pub(crate) fn set_location(&mut self, location: &LatLngAltitude) {
         self.position = Some(to_mercator(&location.location, location.altitude));
     }
@@ -247,6 +244,7 @@ impl FreeCameraOptions {
     /// Helper function for converting mercator position into Lat&Lng and
     /// altitude in meters. This function fails to return a value if
     /// `position` is invalid or is not set.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get_location(&self) -> Option<LatLngAltitude> {
         let position_value = self.position?;
@@ -270,6 +268,7 @@ impl FreeCameraOptions {
     /// focus point on the map. Up vector is required in certain scenarios
     /// where bearing can't be deduced from the viewing direction.
     /// (`lookAtPoint(const LatLng&, const std::optional<vec3>& upVector = std::nullopt)`.)
+    #[cfg(test)]
     pub(crate) fn look_at_point(&mut self, location: &LatLng, up_vector: Option<Vec3>) {
         self.orientation = None;
         let Some(position) = self.position else {
@@ -292,6 +291,7 @@ impl FreeCameraOptions {
 
     /// Helper function for setting the orientation of the camera as a roll,
     /// pitch, and a bearing. All values are in degrees.
+    #[cfg(test)]
     pub(crate) fn set_roll_pitch_bearing(&mut self, roll: f64, pitch: f64, bearing: f64) {
         self.orientation = Some(
             orientation_from_roll_pitch_bearing(

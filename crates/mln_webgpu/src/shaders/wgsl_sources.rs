@@ -5988,6 +5988,7 @@ const c_offscreen_degenerate_triangle_location: f32 = -2.0;
     ),
 };
 
+#[cfg(test)]
 pub(crate) const WIDE_VECTOR_SHADER: WgslShaderSource = WgslShaderSource {
     built_in: "WideVectorShader",
     name: r"WideVectorShader",
@@ -6059,6 +6060,7 @@ fn main(@location(0) color: vec4<f32>, @location(1) texCoord: vec2<f32>) -> @loc
 };
 
 /// Every extracted specialisation, sorted by `BuiltIn` name.
+#[cfg(test)]
 pub(crate) const ALL: &[&WgslShaderSource] = &[
     &ATMOSPHERE_SHADER,
     &BACKGROUND_PATTERN_SHADER,

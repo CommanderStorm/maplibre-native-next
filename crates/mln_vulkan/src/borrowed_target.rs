@@ -69,14 +69,6 @@ pub struct BorrowedDepth {
 }
 
 impl BorrowedImages {
-    /// The kinds of sync with which the host can wait for a frame (the
-    /// producer's) and the target for the host's reads (the consumer's), on
-    /// `device`.
-    #[must_use]
-    pub(crate) fn sync_kinds(device: &Device) -> (SyncKinds, SyncKinds) {
-        device.sync_kinds()
-    }
-
     /// Checks what the images need of `device`.
     ///
     /// Fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind) for
@@ -437,26 +429,6 @@ impl BorrowedTarget {
         }
         drop(this.reset_slots(&[]));
         Ok(this)
-    }
-
-    /// How many images the ring has.
-    pub(crate) fn depth(&self) -> usize {
-        self.images.borrow().images.len()
-    }
-
-    /// The images' size, in physical pixels.
-    pub(crate) fn size(&self) -> Size {
-        self.images.borrow().size
-    }
-
-    /// The images of the ring.
-    pub(crate) fn images(&self) -> BorrowedImages {
-        self.images.borrow().clone()
-    }
-
-    /// The kind of sync that frames are handed over with.
-    pub(crate) fn producer(&self) -> SyncKind {
-        self.producer
     }
 
     /// Has the next frame draw into the image at `slot`.

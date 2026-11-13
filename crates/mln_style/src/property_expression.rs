@@ -292,33 +292,6 @@ impl<T: Clone + ValueConverter> PropertyExpression<T> {
         )
     }
 
-    pub(crate) fn evaluate_feature_canonical(
-        &self,
-        feature: &dyn GeometryTileFeature,
-        canonical: &CanonicalTileID,
-        final_default_value: T,
-    ) -> T {
-        self.evaluate(
-            &EvaluationContext::from_feature(Some(feature)).with_canonical_tile_id(Some(canonical)),
-            final_default_value,
-        )
-    }
-
-    pub(crate) fn evaluate_feature_images_canonical(
-        &self,
-        feature: &dyn GeometryTileFeature,
-        available_images: &VecSet<String>,
-        canonical: &CanonicalTileID,
-        final_default_value: T,
-    ) -> T {
-        self.evaluate(
-            &EvaluationContext::from_feature(Some(feature))
-                .with_available_images(Some(available_images))
-                .with_canonical_tile_id(Some(canonical)),
-            final_default_value,
-        )
-    }
-
     pub fn evaluate_zoom_feature(&self, zoom: f32, feature: &dyn GeometryTileFeature, final_default_value: T) -> T {
         self.evaluate(&EvaluationContext::with_zoom_feature(zoom, Some(feature)), final_default_value)
     }

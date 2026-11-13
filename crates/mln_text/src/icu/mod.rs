@@ -34,18 +34,4 @@ impl UErrorCode {
     pub(crate) fn is_failure(self) -> bool {
         !matches!(self, UErrorCode::U_STRING_NOT_TERMINATED_WARNING | UErrorCode::U_ZERO_ERROR)
     }
-
-    #[must_use]
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            UErrorCode::U_STRING_NOT_TERMINATED_WARNING => "U_STRING_NOT_TERMINATED_WARNING",
-            UErrorCode::U_ZERO_ERROR => "U_ZERO_ERROR",
-            UErrorCode::U_ILLEGAL_ARGUMENT_ERROR => "U_ILLEGAL_ARGUMENT_ERROR",
-            UErrorCode::U_INDEX_OUTOFBOUNDS_ERROR => "U_INDEX_OUTOFBOUNDS_ERROR",
-            UErrorCode::U_INVALID_STATE_ERROR => "U_INVALID_STATE_ERROR",
-            UErrorCode::U_MEMORY_ALLOCATION_ERROR => "U_MEMORY_ALLOCATION_ERROR",
-            UErrorCode::U_BUFFER_OVERFLOW_ERROR => "U_BUFFER_OVERFLOW_ERROR",
-            UErrorCode::U_NO_SPACE_AVAILABLE => "U_NO_SPACE_AVAILABLE",
-        }
-    }
 }

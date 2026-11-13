@@ -74,11 +74,6 @@ impl Mailbox {
         }
     }
 
-    pub(crate) fn open_tagged(&self, scheduler: &Arc<dyn Scheduler + Send + Sync>, tag: SimpleIdentity, object: Rc<dyn Any>) {
-        self.state.lock().scheduler_tag = Some(tag);
-        self.open(scheduler, object);
-    }
-
     /// No message runs after this returns. Call it on the target's thread (it
     /// unregisters the target there).
     pub fn close(&self) {

@@ -60,10 +60,6 @@ impl ShaderProgram {
         }
     }
 
-    pub(crate) fn get_shader_name(&self) -> &str {
-        &self.shader_name
-    }
-
     /// The pipeline of the program with the state of `pipeline_info`, made
     /// when first asked for.
     pub(crate) fn get_pipeline(&self, pipeline_info: &PipelineInfo) -> Option<vk::Pipeline> {

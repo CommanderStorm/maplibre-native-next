@@ -92,11 +92,6 @@ impl BufferResource {
     pub(crate) fn is_valid(&self) -> bool {
         self.buffer.is_some()
     }
-    /// Used to detect whether buffer contents have changed
-    #[must_use]
-    pub(crate) fn get_version(&self) -> VersionType {
-        self.version
-    }
 }
 
 impl Drop for BufferResource {

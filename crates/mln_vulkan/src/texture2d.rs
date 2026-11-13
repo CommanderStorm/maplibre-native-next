@@ -257,11 +257,6 @@ impl Texture2D {
     }
 
     #[must_use]
-    pub(crate) fn is_dirty(&self) -> bool {
-        self.sampler_state_dirty || self.texture_dirty
-    }
-
-    #[must_use]
     pub(crate) fn get_vulkan_format(&self) -> vk::Format {
         Self::vulkan_format(self.pixel_format, self.channel_type)
     }
@@ -281,12 +276,6 @@ impl Texture2D {
     #[must_use]
     pub(crate) fn get_ids(&self) -> (u64, u64) {
         (self.image_allocation.as_ref().map_or(0, |allocation| allocation.id()), self.sampler_id)
-    }
-
-    /// The image, null until the texture is created.
-    #[must_use]
-    pub(crate) fn get_vulkan_image(&self) -> vk::Image {
-        self.image_allocation.as_ref().map_or(vk::Image::null(), |allocation| allocation.image())
     }
 
     /// The sampler of the current configuration.

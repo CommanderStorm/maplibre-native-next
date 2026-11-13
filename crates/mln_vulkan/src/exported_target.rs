@@ -985,11 +985,6 @@ impl ExportedTarget {
         })
     }
 
-    /// How the target shares its images.
-    pub(crate) fn kind(&self) -> ExportKind {
-        self.kind
-    }
-
     /// Has the next frame draw into the image at `slot`.
     pub fn select(&self, slot: usize) {
         self.generations.borrow().current().target.select(slot);

@@ -135,11 +135,6 @@ pub struct GeoJSONDataBuilder {
 }
 
 impl GeoJSONDataBuilder {
-    #[must_use]
-    pub(crate) fn options(&self) -> &Arc<GeoJSONOptions> {
-        &self.options
-    }
-
     /// Fails as [`create_geojson_data`] does.
     pub fn build(&self, geojson: &GeoJSON) -> Result<Arc<dyn GeoJSONData>, mln_util::Error> {
         create_geojson_data(geojson, self.sequenced_scheduler.clone(), &self.options)

@@ -736,11 +736,6 @@ impl TilePyramid {
         Ok(result)
     }
 
-    #[must_use]
-    pub(crate) fn get_rendered_tile(&self, tile_id: &UnwrappedTileID) -> Option<&dyn Tile> {
-        self.rendered_tiles.get(tile_id).map(|key| self.tiles[key].as_ref())
-    }
-
     /// On the globe every wrap of a tile is the same piece of the sphere, and
     /// the cover gives tiles the wraps of the world copy the center has
     /// reached. A tile the cover now wants under another wrap moves there
@@ -877,11 +872,5 @@ impl TilePyramid {
     #[must_use]
     pub(crate) fn has_fading_tiles(&self) -> bool {
         self.fading_tiles
-    }
-
-    /// The tile cache, for tests.
-    #[must_use]
-    pub(crate) fn cache(&self) -> &TileCache {
-        &self.cache
     }
 }

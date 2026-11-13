@@ -308,6 +308,7 @@ impl VectorSource {
     }
 
     /// Gets the tile urls for this vector source.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get_tiles(&self) -> Vec<String> {
         match &self.tile_source.impl_().tileset {

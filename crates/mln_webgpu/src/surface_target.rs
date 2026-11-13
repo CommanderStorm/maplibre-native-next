@@ -590,12 +590,6 @@ impl SurfaceTarget {
         Ok(SurfaceTarget { backend, state, image })
     }
 
-    /// The backend the target draws on.
-    #[must_use]
-    pub(crate) fn backend(&self) -> &Rc<RendererBackend> {
-        &self.backend
-    }
-
     /// The format the surface is configured with.
     #[must_use]
     pub fn format(&self) -> wgpu::TextureFormat {
@@ -614,10 +608,6 @@ impl SurfaceTarget {
             self.image.set_size(size);
             self.state.surface_needs_reconfigure.set(true);
         }
-    }
-
-    pub(crate) fn process_events(&self) {
-        self.state.process_events();
     }
 
     /// Port-only: copy the next presented frame (see `take_readback`).

@@ -151,10 +151,6 @@ impl Log {
         THREAD_OBSERVER.with(|o| std::mem::replace(&mut *o.borrow_mut(), observer))
     }
 
-    pub(crate) fn debug(event: Event, msg: impl AsRef<str>) {
-        Self::record(EventSeverity::Debug, event, -1, msg.as_ref());
-    }
-
     pub fn info(event: Event, msg: impl AsRef<str>) {
         Self::record(EventSeverity::Info, event, -1, msg.as_ref());
     }

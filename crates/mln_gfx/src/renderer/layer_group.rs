@@ -254,21 +254,6 @@ impl LayerGroup {
         self.drawables.len()
     }
 
-    /// Removes the drawables for which `f` returns true and returns how many
-    /// it removed. The kept ones are re-keyed, so a raised priority is
-    /// re-sorted.
-    pub(crate) fn remove_drawables_if(&mut self, mut f: impl FnMut(&mut dyn Drawable) -> bool) -> usize {
-        let old_size = self.drawables.len();
-        let old = std::mem::take(&mut self.drawables);
-        for (_, mut drawable) in old {
-            if !f(drawable.as_mut()) {
-                let key = sort_key(drawable.as_ref());
-                self.drawables.insert(key, drawable);
-            }
-        }
-        old_size - self.drawables.len()
-    }
-
     pub fn clear_drawables(&mut self) -> usize {
         let count = self.drawables.len();
         self.drawables.clear();

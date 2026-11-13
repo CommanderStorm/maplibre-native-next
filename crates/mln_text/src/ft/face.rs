@@ -164,12 +164,6 @@ impl Face {
         self.tables.iter().find(|e| e.tag == t && e.length != 0).copied()
     }
 
-    /// The `(offset, length)` of a table, as `FT_Load_Sfnt_Table` returns it.
-    #[must_use]
-    pub(crate) fn table(&self, t: &[u8; 4]) -> Option<(usize, usize)> {
-        self.lookup(tag(*t)).map(|e| (e.offset, e.length))
-    }
-
     /// Every tag of the table directory with what `tt_face_lookup_table`
     /// finds for it.
     #[must_use]

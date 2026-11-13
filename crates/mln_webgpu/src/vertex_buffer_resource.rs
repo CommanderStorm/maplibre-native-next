@@ -76,9 +76,6 @@ impl IndexBufferResource {
         IndexBufferResource { buffer: RefCell::new(buffer) }
     }
 
-    pub(crate) fn get_size_in_bytes(&self) -> usize {
-        self.buffer.borrow().get_size_in_bytes()
-    }
     pub(crate) fn get_buffer(&self) -> Ref<'_, BufferResource> {
         self.buffer.borrow()
     }

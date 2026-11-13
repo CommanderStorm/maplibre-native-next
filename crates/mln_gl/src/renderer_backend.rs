@@ -135,10 +135,6 @@ impl RendererBackend {
         unsafe { self.gl().get_parameter_string(glow::RENDERER) }
     }
 
-    pub(crate) fn backend_impl(&self) -> &Rc<BackendImpl> {
-        &self.impl_
-    }
-
     pub(crate) fn gl(&self) -> &Gl {
         self.impl_.gl()
     }

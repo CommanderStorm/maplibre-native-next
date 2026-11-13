@@ -76,6 +76,7 @@ static COOPERATIVE: OnceLock<Arc<CooperativeScheduler>> = OnceLock::new();
 /// browser), which runs the tasks with `CooperativeScheduler::run_until`.
 /// It must come before anything gets a scheduler or starts a `Thread`, and
 /// only once.
+#[cfg(test)]
 pub(crate) fn install_cooperative(scheduler: Arc<CooperativeScheduler>) {
     if COOPERATIVE.set(scheduler).is_err() {
         panic!("a cooperative scheduler is already installed");
@@ -232,21 +233,13 @@ impl TaggedScheduler {
         &self.scheduler
     }
 
+    #[cfg(test)]
     pub(crate) fn schedule(&self, task: Task) {
         self.scheduler.schedule_tagged(self.tag, task);
     }
 
     pub fn wait_for_empty(&self) {
         self.scheduler.wait_for_empty_tagged(self.tag);
-    }
-
-    pub(crate) fn schedule_and_reply_value<R, TaskFn, ReplyFn>(&self, task: TaskFn, reply: ReplyFn)
-    where
-        R: Send + 'static,
-        TaskFn: FnOnce() -> R + Send + 'static,
-        ReplyFn: FnOnce(R) + 'static,
-    {
-        schedule_and_reply_value(&*self.scheduler, self.tag, task, reply);
     }
 
     /// `schedule_and_reply_later` on this scheduler and tag.

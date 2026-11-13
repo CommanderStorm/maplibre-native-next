@@ -27,10 +27,6 @@ const LAM_CHAR: u16 = 0x0644;
 const SPACE_CHAR: u16 = 0x0020;
 const SHADDA06_CHAR: u16 = 0x0651;
 
-/// `U_SHAPE_LETTERS_SHAPE | U_SHAPE_TEXT_DIRECTION_LOGICAL`.
-pub(crate) const U_SHAPE_LETTERS_SHAPE: u32 = 8;
-pub(crate) const U_SHAPE_TEXT_DIRECTION_LOGICAL: u32 = 0;
-
 static IRRELEVANT_POS: [u8; 8] = [0x0, 0x2, 0x4, 0x6, 0x8, 0xA, 0xC, 0xE];
 
 #[rustfmt::skip]

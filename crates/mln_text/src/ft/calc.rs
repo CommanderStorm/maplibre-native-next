@@ -44,6 +44,7 @@ pub(crate) fn div_fix(a: i64, b: i64) -> i64 {
 /// `(a * b + 0x8000) >> 16`, rounding the magnitude, as FreeType's C version
 /// computes it (its x86-64 inline assembly computes the same, truncated to 32
 /// bits).
+#[cfg(test)]
 #[must_use]
 pub(crate) fn mul_fix(a: i64, b: i64) -> i64 {
     let ab = i64::from(a as i32).wrapping_mul(i64::from(b as i32));

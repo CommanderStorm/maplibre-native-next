@@ -42,6 +42,7 @@ impl Projection {
         (*self.impl_).clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn set_property(&mut self, name: &str, value: &Convertible<'_>) -> Option<Error> {
         if name != "type" {
             return Some(Error::new("projection doesn't support this property"));

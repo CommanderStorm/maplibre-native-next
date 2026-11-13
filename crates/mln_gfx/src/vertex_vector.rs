@@ -179,19 +179,6 @@ impl<V: bytemuck::Pod> VertexVector<V> {
         self.base.dirty.set(true);
     }
 
-    pub(crate) fn extend(&mut self, n: usize, val: V) {
-        debug_assert!(!self.base.released.get());
-        let v = self.v.get_mut();
-        v.resize(v.len() + n, val);
-        self.base.dirty.set(true);
-    }
-
-    pub(crate) fn at_mut(&mut self, n: usize) -> &mut V {
-        debug_assert!(!self.base.released.get());
-        self.base.dirty.set(true);
-        &mut self.v.get_mut()[n]
-    }
-
     pub fn at(&self, n: usize) -> V {
         self.v.borrow()[n]
     }
@@ -201,25 +188,8 @@ impl<V: bytemuck::Pod> VertexVector<V> {
         self.v.borrow().len() + self.host_count() + self.freed_count.get()
     }
 
-    pub(crate) fn bytes(&self) -> usize {
-        self.elements() * std::mem::size_of::<V>()
-    }
-
     pub fn empty(&self) -> bool {
         self.elements() == 0
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.base.dirty.set(true);
-        self.v.get_mut().clear();
-        #[cfg(target_family = "wasm")]
-        self.host.get_mut().take();
-        self.freed_count.set(0);
-        self.base.raw_freed.set(false);
-    }
-
-    pub(crate) fn reserve(&mut self, count: usize) {
-        self.v.get_mut().reserve(count);
     }
 
     /// Indicate that this shared vertex vector instance will no longer be updated.

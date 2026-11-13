@@ -194,6 +194,7 @@ impl DEMData {
     }
 
     /// `get(x, y)`.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get(&self, x: i32, y: i32) -> i32 {
         let unpack = self.get_unpack_vector();

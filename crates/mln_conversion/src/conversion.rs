@@ -74,6 +74,7 @@ impl<'a> Convertible<'a> {
     }
 
     /// Wraps an owned front-end value (a handle the front end created).
+    #[cfg(test)]
     pub(crate) fn owned(value: impl ConversionTraits + 'a) -> Self {
         Convertible { inner: Inner::Owned(Box::new(value)) }
     }

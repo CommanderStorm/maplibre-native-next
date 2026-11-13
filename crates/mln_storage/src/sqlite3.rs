@@ -20,36 +20,18 @@ use rusqlite::{Connection, OpenFlags, Row, Rows};
 
 /// SQLite result codes (`SQLITE_*`).
 pub(crate) mod result_code {
-    pub(crate) const OK: i32 = 0;
     pub(crate) const ERROR: i32 = 1;
-    pub(crate) const INTERNAL: i32 = 2;
-    pub(crate) const PERM: i32 = 3;
-    pub(crate) const ABORT: i32 = 4;
-    pub(crate) const BUSY: i32 = 5;
-    pub(crate) const LOCKED: i32 = 6;
-    pub(crate) const NO_MEM: i32 = 7;
     pub(crate) const READ_ONLY: i32 = 8;
-    pub(crate) const INTERRUPT: i32 = 9;
-    pub(crate) const IO_ERR: i32 = 10;
     pub(crate) const CORRUPT: i32 = 11;
-    pub(crate) const NOT_FOUND: i32 = 12;
-    pub(crate) const FULL: i32 = 13;
+    #[cfg(test)]
     pub(crate) const CANT_OPEN: i32 = 14;
-    pub(crate) const PROTOCOL: i32 = 15;
-    pub(crate) const SCHEMA: i32 = 17;
-    pub(crate) const TOO_BIG: i32 = 18;
+    #[cfg(test)]
     pub(crate) const CONSTRAINT: i32 = 19;
-    pub(crate) const MISMATCH: i32 = 20;
-    pub(crate) const MISUSE: i32 = 21;
-    pub(crate) const NO_LFS: i32 = 22;
-    pub(crate) const AUTH: i32 = 23;
-    pub(crate) const RANGE: i32 = 25;
     pub(crate) const NOT_A_DB: i32 = 26;
 }
 
 /// SQLite extended result codes, without the primary code (`err >> 8`).
 pub(crate) mod extended_result_code {
-    pub(crate) const UNKNOWN: i32 = 0;
     /// `SQLITE_READONLY_DBMOVED >> 8`.
     pub(crate) const READ_ONLY_DB_MOVED: i32 = 4;
 }
@@ -223,6 +205,7 @@ impl<'s, 'conn> Query<'s, 'conn> {
     }
 
     /// `bind(offset, value)` (before the first `run()`).
+    #[cfg(test)]
     pub(crate) fn bind<T: ToSql>(&mut self, offset: usize, value: T) -> Result<(), SqliteError> {
         let stmt = self.stmt.as_mut().expect("Query::bind after run()");
         stmt.raw_bind_parameter(offset, value)?;
@@ -245,10 +228,12 @@ impl<'s, 'conn> Query<'s, 'conn> {
         self.rows.as_ref().and_then(|rows| rows.get()).expect("Query::get without a row")
     }
 
+    #[cfg(test)]
     pub(crate) fn get_i64(&self, offset: usize) -> Result<i64, SqliteError> {
         get_i64(self.row(), offset)
     }
 
+    #[cfg(test)]
     pub(crate) fn get_i32(&self, offset: usize) -> Result<i32, SqliteError> {
         get_i32(self.row(), offset)
     }
@@ -268,11 +253,13 @@ impl<'s, 'conn> Query<'s, 'conn> {
         Ok(String::from_utf8_lossy(&get_bytes(self.row(), offset)?).into_owned())
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn last_insert_row_id(&self) -> i64 {
         *self.last_insert_row_id
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn changes(&self) -> u64 {
         (*self.changes).max(0) as u64

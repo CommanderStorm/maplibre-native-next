@@ -471,17 +471,8 @@ impl GestureRecognizer {
         }
     }
 
-    #[must_use]
-    pub(crate) fn options(&self) -> &GestureOptions {
-        &self.options
-    }
-
-    /// Takes effect with the next input.
-    pub(crate) fn set_options(&mut self, options: GestureOptions) {
-        self.options = options;
-    }
-
     /// A gesture is under way: hosts keep pointer capture and scrolling off.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn is_active(&self) -> bool {
         !matches!(self.mode, Mode::Idle) || self.scroll.is_some()
@@ -506,6 +497,7 @@ impl GestureRecognizer {
     /// the phase the recognizer's own steps get (an update of a gesture under
     /// way, or a gesture of its own), and a step that zooms takes over a
     /// running notch ease. `delta.phase` is ignored.
+    #[cfg(test)]
     pub(crate) fn step(&mut self, camera: &mut dyn GestureCamera, delta: CameraDelta) -> Result<(), CameraError> {
         delta.validate()?;
         self.eased_step(camera, delta);

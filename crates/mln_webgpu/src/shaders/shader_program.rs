@@ -366,6 +366,7 @@ impl ShaderProgram {
     }
 
     /// Whether both WGSL modules compiled.
+    #[cfg(test)]
     pub(crate) fn has_shader_modules(&self) -> bool {
         self.vertex_shader_module.is_some() && self.fragment_shader_module.is_some()
     }

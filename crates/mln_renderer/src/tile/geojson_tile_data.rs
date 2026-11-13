@@ -88,11 +88,6 @@ impl GeoJSONTileData {
     pub(crate) fn from_shared(features: Arc<TileFeatureCollection>) -> Self {
         GeoJSONTileData { features }
     }
-
-    #[must_use]
-    pub(crate) fn features(&self) -> &Arc<TileFeatureCollection> {
-        &self.features
-    }
 }
 
 impl GeometryTileData for GeoJSONTileData {

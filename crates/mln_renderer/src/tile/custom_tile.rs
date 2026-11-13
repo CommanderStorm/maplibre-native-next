@@ -127,23 +127,9 @@ impl<D: Clone + Send + 'static> CustomTile<D> {
     }
 
     /// Sets the tile's data, as the loader's message does.
+    #[cfg(test)]
     pub(crate) fn set_tile_data(&self, data: D) {
         self.link.set_tile_data(data);
-    }
-
-    /// Sets the tile's error, as the loader's message does.
-    pub(crate) fn set_tile_error(&self, error: Error) {
-        self.link.set_tile_error(error);
-    }
-
-    /// Invalidates the tile data, as the loader's message does.
-    pub(crate) fn invalidate_tile_data(&self) {
-        self.link.invalidate_tile_data();
-    }
-
-    #[must_use]
-    pub(crate) fn geometry_tile(&self) -> &GeometryTile {
-        &self.tile
     }
 
     fn subscriber(&self) -> Box<dyn CustomTileSubscriber<D>> {

@@ -23,5 +23,4 @@ pub enum ChangeRequest {
     RemoveRenderTarget(crate::render_target::RenderTargetPtr),
 }
 
-pub(crate) type UniqueChangeRequest = ChangeRequest;
 pub(crate) type UniqueChangeRequestVec = Vec<ChangeRequest>;

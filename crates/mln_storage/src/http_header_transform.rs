@@ -45,11 +45,6 @@ impl HttpHeaderTransform {
             _ => HttpHeaders::new(),
         }
     }
-
-    #[must_use]
-    pub(crate) fn is_set(&self) -> bool {
-        self.callback.is_some()
-    }
 }
 
 /// Whether `url`'s scheme is `http` or `https`, in any letter case.

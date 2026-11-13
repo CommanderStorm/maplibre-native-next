@@ -48,12 +48,6 @@ impl Padding {
         [f64::from(self.top), f64::from(self.right), f64::from(self.bottom), f64::from(self.left)]
     }
 
-    /// The edges as `[top, right, bottom, left]`.
-    #[must_use]
-    pub(crate) fn to_float_array(&self) -> [f32; 4] {
-        [self.top, self.right, self.bottom, self.left]
-    }
-
     /// Used by `ValueFactory<Padding>::make()`: floats promote to double.
     #[must_use]
     pub fn serialize(&self) -> Value {

@@ -59,15 +59,6 @@ pub(crate) struct TextureInfo {
     pub(crate) id: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct UniformBlockInfo {
-    pub(crate) index: usize,
-    pub(crate) vertex: bool,
-    pub(crate) fragment: bool,
-    pub(crate) size: usize,
-    pub(crate) id: usize,
-}
-
 /// A complete specialisation: WGSL plus the `attributes`,
 /// `instanceAttributes` and `textures` tables.
 #[derive(Debug)]

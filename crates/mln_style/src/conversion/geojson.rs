@@ -23,11 +23,3 @@ pub(crate) fn convert_json_geojson(json: &[u8], error: &mut Error) -> Option<Geo
     GeoJSON::convert(&Convertible::from(&document), error)
 }
 
-pub(crate) fn parse_geojson(value: &str, error: &mut Error) -> Option<GeoJSON> {
-    convert_json_geojson(value.as_bytes(), error)
-}
-
-#[must_use]
-pub(crate) fn stringify_geojson(geojson: &GeoJSON) -> String {
-    geojson::stringify(geojson)
-}

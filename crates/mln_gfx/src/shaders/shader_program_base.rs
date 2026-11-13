@@ -26,17 +26,6 @@ impl dyn ShaderProgramBase {
 
 pub type ShaderProgramBasePtr = Rc<dyn ShaderProgramBase>;
 
-/// The protected `set<T>(attrs, id, i, value)` helper.
-pub(crate) fn set_attribute(attrs: &mut VertexAttributeArray, id: usize, i: usize, value: ElementType) -> bool {
-    if let Some(item) = attrs.get_mut(id)
-        && i < item.get_count()
-    {
-        item.set(i, value);
-        return true;
-    }
-    false
-}
-
 /// Pointer equality for shader handles (`shader == value` in C++).
 #[must_use]
 pub fn same_shader(a: &Option<ShaderProgramBasePtr>, b: &Option<ShaderProgramBasePtr>) -> bool {

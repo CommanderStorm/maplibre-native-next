@@ -274,15 +274,6 @@ impl DashPatternTexture {
     pub(crate) fn get_to(&self) -> &LinePatternPos {
         &self.to
     }
-
-    /// The pattern image while it is not uploaded (for tests).
-    #[must_use]
-    pub(crate) fn get_image(&self) -> Option<&AlphaImage> {
-        match &self.texture {
-            DashTexture::Image(image) => Some(image),
-            DashTexture::Texture(_) => None,
-        }
-    }
 }
 
 type DashKey = (Vec<u32>, Vec<u32>, LinePatternCap);

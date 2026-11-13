@@ -25,12 +25,8 @@ pub(crate) struct MapDebugOptions(pub(crate) u32);
 impl MapDebugOptions {
     pub(crate) const NO_DEBUG: MapDebugOptions = MapDebugOptions(0);
     pub(crate) const TILE_BORDERS: MapDebugOptions = MapDebugOptions(1 << 1);
-    pub(crate) const PARSE_STATUS: MapDebugOptions = MapDebugOptions(1 << 2);
-    pub(crate) const TIMESTAMPS: MapDebugOptions = MapDebugOptions(1 << 3);
     pub(crate) const COLLISION: MapDebugOptions = MapDebugOptions(1 << 4);
     pub(crate) const OVERDRAW: MapDebugOptions = MapDebugOptions(1 << 5);
-    pub(crate) const STENCIL_CLIP: MapDebugOptions = MapDebugOptions(1 << 6);
-    pub(crate) const DEPTH_BUFFER: MapDebugOptions = MapDebugOptions(1 << 7);
 }
 
 impl std::ops::BitOrAssign for MapDebugOptions {

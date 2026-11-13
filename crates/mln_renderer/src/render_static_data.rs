@@ -38,12 +38,6 @@ impl RenderStaticData {
         vec![[0, 0], [extent, 0], [0, extent], [extent, extent]]
     }
 
-    /// The tile's outline, as a line strip over `tile_vertices()`.
-    #[must_use]
-    pub(crate) fn tile_line_strip_indices() -> Vec<u16> {
-        vec![0, 1, 3, 2, 0]
-    }
-
     #[must_use]
     pub(crate) fn quad_triangle_indices() -> Vec<u16> {
         vec![0, 1, 2, 1, 2, 3]

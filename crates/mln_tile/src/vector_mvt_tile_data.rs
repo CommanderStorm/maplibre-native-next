@@ -330,10 +330,6 @@ impl VectorMVTTileData {
         VectorMVTTileData { data, layers: OnceLock::new() }
     }
 
-    pub(crate) fn data(&self) -> &Arc<Vec<u8>> {
-        &self.data
-    }
-
     /// The tile's layers. Only a successful search is kept, as C++ sets
     /// `parsed` after it: a tile that fails is searched again next time.
     fn layers(&self) -> Result<&[LayerEntry], Error> {
@@ -364,6 +360,7 @@ impl VectorMVTTileData {
 
     /// The names of the tile's layers, each once, in byte order (C++ lists
     /// the keys of a `std::map`).
+    #[cfg(test)]
     pub(crate) fn layer_names(&self) -> Result<Vec<String>, Error> {
         let names: BTreeSet<&[u8]> =
             self.layers()?.iter().filter_map(|entry| self.data.get(entry.name.clone())).collect();

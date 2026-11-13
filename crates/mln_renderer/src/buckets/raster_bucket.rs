@@ -51,11 +51,6 @@ impl RasterBucketGeometry {
             last_modified: Instant::now(),
         }
     }
-
-    #[must_use]
-    pub(crate) fn is_modified_after(&self, t: Instant) -> bool {
-        t < self.last_modified
-    }
 }
 
 fn full_mask() -> TileMask {

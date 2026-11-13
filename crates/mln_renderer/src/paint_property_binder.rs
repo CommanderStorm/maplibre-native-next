@@ -71,14 +71,6 @@ impl InterleavedVertexBuffer {
         self.shared_vertex_vector.data().get(start..start.checked_add(len)?).map(<[u8]>::to_vec)
     }
 
-    /// The `len` bytes at `offset` in vertex `index`.
-    pub(crate) fn get(&self, index: usize, offset: usize, len: usize) -> Vec<u8> {
-        let start = self.stride * index + offset;
-        let data = self.shared_vertex_vector.data();
-        debug_assert!(start + len <= data.len());
-        data[start..start + len].to_vec()
-    }
-
     /// Appends a field of `size` bytes, aligned to `alignment`, to the vertex
     /// format and returns its offset.
     pub(crate) fn extend_vertex_format(&mut self, size: usize, alignment: usize) -> usize {
@@ -524,12 +516,6 @@ impl CrossFadedPaintPropertyBinder<Image> {
 
     pub(crate) fn get_vertex_count(&self, buffer: &InterleavedVertexBuffer) -> usize {
         if self.has_interleaved_buffer { buffer.vertex_count } else { 0 }
-    }
-
-    /// Whether the binder interpolates by zoom: never for pattern binders.
-    #[must_use]
-    pub(crate) fn is_interpolated(&self) -> bool {
-        false
     }
 
     pub(crate) fn populate_vertex_vector(

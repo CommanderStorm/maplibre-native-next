@@ -101,6 +101,7 @@ impl DatabaseFileSourceThread {
         req.invoke(move |request: &FileSourceRequestState| request.set_response(response));
     }
 
+    #[cfg(test)]
     pub(crate) fn set_database_path(&self, path: &str, callback: Option<Box<dyn FnOnce() + Send>>) {
         self.db.borrow_mut().change_path(path);
         if let Some(callback) = callback {
@@ -124,11 +125,8 @@ impl DatabaseFileSourceThread {
         callback(into_result(self.db.borrow_mut().pack()));
     }
 
-    pub(crate) fn run_pack_database_automatically(&self, autopack: bool) {
-        self.db.borrow_mut().run_pack_database_automatically(autopack);
-    }
-
     /// `put(resource, response)`.
+    #[cfg(test)]
     pub(crate) fn put(&self, resource: &Resource, response: &Response) {
         self.db.borrow_mut().put(resource, response);
     }
@@ -203,6 +201,7 @@ impl DatabaseFileSource {
 
     /// Switches to the database at `path`, creating it if needed. The
     /// callback runs on the database thread.
+    #[cfg(test)]
     pub(crate) fn set_database_path(&self, path: &str, callback: Option<Box<dyn FnOnce() + Send>>) {
         let path = path.to_owned();
         self.thread.actor().invoke(move |t: &DatabaseFileSourceThread| t.set_database_path(&path, callback));
@@ -220,13 +219,8 @@ impl DatabaseFileSource {
         self.invoke(move |t| t.pack_database(callback));
     }
 
-    /// Sets whether deleting a region or clearing the ambient cache packs the
-    /// database (the default).
-    pub(crate) fn run_pack_database_automatically(&self, autopack: bool) {
-        self.invoke(move |t| t.run_pack_database_automatically(autopack));
-    }
-
     /// `put(resource, response)`.
+    #[cfg(test)]
     pub(crate) fn put(&self, resource: &Resource, response: &Response) {
         let resource = resource.clone();
         let response = response.clone();

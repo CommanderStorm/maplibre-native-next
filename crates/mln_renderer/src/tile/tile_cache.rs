@@ -114,6 +114,7 @@ impl TileCache {
         self.tiles.get(key).map(AsRef::as_ref)
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn has(&self, key: &OverscaledTileID) -> bool {
         self.tiles.contains_key(key)
@@ -147,12 +148,6 @@ impl TileCache {
     /// file comment: here they are dropped right away).
     pub(crate) fn defer_pending_releases(&mut self) {
         self.pending_releases.clear();
-    }
-
-    /// The cached tile ids (oldest first), for tests.
-    #[must_use]
-    pub(crate) fn ordered_keys(&self) -> &[OverscaledTileID] {
-        &self.ordered_keys
     }
 }
 

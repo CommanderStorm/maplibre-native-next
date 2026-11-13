@@ -33,10 +33,12 @@ impl Manifest {
     pub(crate) fn get_test_root_path(&self) -> &str {
         &self.test_root_path
     }
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get_manifest_path(&self) -> &str {
         &self.manifest_path
     }
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get_result_path(&self) -> &str {
         &self.result_path

@@ -86,11 +86,6 @@ impl ColorRampPropertyValue {
     }
 
     #[must_use]
-    pub(crate) fn is_data_driven(&self) -> bool {
-        false
-    }
-
-    #[must_use]
     pub(crate) fn has_data_driven_property_difference(&self, _other: &ColorRampPropertyValue) -> bool {
         false
     }

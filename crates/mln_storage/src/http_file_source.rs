@@ -94,17 +94,6 @@ impl Cancellation {
         self.cancelled.load(Ordering::SeqCst)
     }
 
-    fn set_handler(&self, handler: Box<dyn FnOnce() + Send>) {
-        *self.handler.lock() = Some(handler);
-        // `cancel` may have run before the handler was there.
-        if self.is_cancelled() {
-            let handler = self.handler.lock().take();
-            if let Some(handler) = handler {
-                handler();
-            }
-        }
-    }
-
     fn clear_handler(&self) {
         drop(self.handler.lock().take());
     }
@@ -155,14 +144,6 @@ impl TransferRequest {
         self.cancellation.is_cancelled()
     }
 
-    /// Sets what stops the transfer when the request is dropped before it
-    /// finishes, such as cancelling the HTTP stack's task. It runs once, on
-    /// the thread that drops the request, or right away if the request is
-    /// already dropped; `finish` discards it.
-    pub(crate) fn set_cancel_handler(&self, handler: impl FnOnce() + Send + 'static) {
-        self.cancellation.set_handler(Box::new(handler));
-    }
-
     /// Finishes the request with the transfer's result (a transfer that
     /// failed before a response, such as a connection error, is an `Err`):
     /// builds the response, as the header callback and
@@ -188,13 +169,6 @@ pub(crate) trait HttpTransport: Send + Sync {
 }
 
 static TRANSPORT: Mutex<Option<Arc<dyn HttpTransport>>> = Mutex::new(None);
-
-/// Sets the transport of the `HTTPFileSource`s created from now on, instead of
-/// the default (`NSURLSession` on Apple platforms, fetch on wasm, ureq
-/// elsewhere): for a host with its own HTTP stack.
-pub(crate) fn set_transport(transport: Arc<dyn HttpTransport>) {
-    *TRANSPORT.lock() = Some(transport);
-}
 
 /// The transport `set_transport` set, else the default.
 fn current_transport() -> Arc<dyn HttpTransport> {

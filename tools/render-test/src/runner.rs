@@ -286,6 +286,7 @@ impl<'a> TestContext<'a> {
     }
 
     /// A context whose `runnerImpl` is already set.
+    #[cfg(test)]
     pub(crate) fn with_impl(metadata: &'a mut TestMetadata, runner_impl: &'a mut dyn TestRunnerImpl) -> Self {
         TestContext { runner_impl: Some(runner_impl), ..TestContext::new(metadata) }
     }
@@ -379,15 +380,6 @@ impl TestRunner {
     /// Errors a test that runs longer than `limit` (`None`: no limit).
     pub(crate) fn set_test_timeout(&mut self, limit: Option<Duration>) {
         self.watchdog = limit.map(crate::watchdog::Watchdog::new);
-    }
-
-    #[must_use]
-    pub(crate) fn get_manifest(&self) -> &Manifest {
-        &self.manifest
-    }
-
-    pub(crate) fn do_shuffle(&mut self, seed: u32) {
-        self.manifest.do_shuffle(seed);
     }
 
     pub(crate) fn reset(&mut self) {

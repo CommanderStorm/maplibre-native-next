@@ -25,17 +25,6 @@ pub enum Value {
 }
 
 impl Value {
-    /// Numeric accessor mirroring `Value::getDouble()`-style coercion used by
-    /// conversions: any of the three numeric alternatives as f64.
-    #[must_use]
-    pub(crate) fn as_double(&self) -> Option<f64> {
-        match self {
-            Value::Uint(v) => Some(*v as f64),
-            Value::Int(v) => Some(*v as f64),
-            Value::Double(v) => Some(*v),
-            _ => None,
-        }
-    }
 }
 
 impl From<bool> for Value {

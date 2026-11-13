@@ -83,11 +83,6 @@ impl RenderPass {
         pass
     }
 
-    #[must_use]
-    pub(crate) fn get_context(&self) -> &Rc<Context> {
-        &self.context
-    }
-
     /// The command buffer the pass records into.
     #[must_use]
     pub(crate) fn get_command_buffer(&self) -> vk::CommandBuffer {

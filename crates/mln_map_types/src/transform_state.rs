@@ -773,16 +773,6 @@ impl TransformState {
             )
     }
 
-    pub(crate) fn pixel_x(&self) -> f64 {
-        let center = (f64::from(self.size.width) - Projection::world_size(self.scale)) / 2.0;
-        center + self.x
-    }
-
-    pub(crate) fn pixel_y(&self) -> f64 {
-        let center = (f64::from(self.size.height) - Projection::world_size(self.scale)) / 2.0;
-        center + self.y
-    }
-
     // MARK: - Zoom
 
     pub fn get_zoom(&self) -> f64 {
@@ -937,17 +927,6 @@ impl TransformState {
     pub fn set_y(&mut self, val: f64) {
         if self.y != val {
             self.y = val;
-            self.invalidate_matrices();
-        }
-    }
-
-    pub(crate) fn get_z(&self) -> f64 {
-        self.z
-    }
-
-    pub(crate) fn set_z(&mut self, val: f64) {
-        if self.z != val {
-            self.z = val;
             self.invalidate_matrices();
         }
     }

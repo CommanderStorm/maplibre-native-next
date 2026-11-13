@@ -23,6 +23,7 @@ impl VtPoint {
     }
 
     /// `vt_point(x, y)`
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn xy(x: f64, y: f64) -> Self {
         VtPoint { x, y, z: 0.0 }
@@ -83,6 +84,7 @@ pub(crate) struct VtLineString {
 }
 
 impl VtLineString {
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new(points: Vec<VtPoint>) -> Self {
         VtLineString { points, ..Default::default() }
@@ -117,6 +119,7 @@ pub(crate) struct VtLinearRing {
 }
 
 impl VtLinearRing {
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new(points: Vec<VtPoint>) -> Self {
         VtLinearRing { points, area: 0.0 }

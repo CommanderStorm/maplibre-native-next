@@ -274,11 +274,6 @@ impl SurfaceTarget {
         })
     }
 
-    /// The backend the target draws on.
-    pub(crate) fn backend(&self) -> &Rc<RendererBackend> {
-        &self.backend
-    }
-
     /// The format of the swapchain's images.
     pub fn get_color_format(&self) -> vk::Format {
         self.resource.get_color_format()

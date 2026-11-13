@@ -96,17 +96,6 @@ impl<'a> EvaluationContext<'a> {
         EvaluationContext { zoom, feature, color_ramp_parameter, ..Default::default() }
     }
 
-    /// The four-argument constructor with `elevation`.
-    #[must_use]
-    pub(crate) fn with_color_ramp_elevation(
-        zoom: Option<f32>,
-        feature: Option<&'a dyn GeometryTileFeature>,
-        color_ramp_parameter: Option<f64>,
-        elevation: Option<f32>,
-    ) -> Self {
-        EvaluationContext { zoom, feature, color_ramp_parameter, elevation, ..Default::default() }
-    }
-
     #[must_use]
     pub fn with_formatted_section(mut self, formatted_section: Option<&'a Value>) -> Self {
         self.formatted_section = formatted_section;
@@ -131,6 +120,7 @@ impl<'a> EvaluationContext<'a> {
         self
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_elevation(mut self, elevation: f32) -> Self {
         self.elevation = Some(elevation);
@@ -207,8 +197,6 @@ impl Dependency {
     pub const ELEVATION: Dependency = Dependency(1 << 7);
     /// Global state ("global-state")
     pub const GLOBAL_STATE: Dependency = Dependency(1 << 8);
-    pub(crate) const MASK_COUNT: u32 = 9;
-    pub(crate) const ALL: Dependency = Dependency((1 << Self::MASK_COUNT) - 1);
 
     /// `bool(a & b)` (`util/bitmask_operations.hpp`).
     #[must_use]
@@ -351,11 +339,6 @@ pub fn downcast<T: Expression>(e: &dyn Expression) -> Option<&T> {
     (e as &dyn Any).downcast_ref()
 }
 
-/// The dependencies of an optional child; none when it is absent.
-pub(crate) fn deps_of_opt<E: std::ops::Deref<Target = dyn Expression>>(e: &Option<E>) -> Dependency {
-    e.as_ref().map_or(Dependency::NONE, |e| e.dependencies())
-}
-
 /// The union of the dependencies of `container`'s expressions.
 pub(crate) fn collect_dependencies<'a, I, E>(container: I) -> Dependency
 where
@@ -453,6 +436,7 @@ impl GeometryTileFeature for GeoJSONFeature<'_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate_feature(
     e: &dyn Expression,
     zoom: Option<f32>,

@@ -224,11 +224,6 @@ impl<O: Send + 'static> Actor<O> {
     pub fn self_ref(&self) -> PoolActorRef<O> {
         PoolActorRef { mailbox: Arc::downgrade(&self.mailbox) }
     }
-
-    /// The mailbox's `abandon()`.
-    pub(crate) fn abandon(&self) {
-        self.mailbox.abandon();
-    }
 }
 
 impl<O: Send + 'static> Drop for Actor<O> {

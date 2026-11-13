@@ -112,16 +112,6 @@ impl DrawableBuilderImpl {
         self.raw_vertices_count.max(self.vertices.elements()).max(self.polyline_vertices.len())
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.vertices.clear();
-        self.raw_vertices.clear();
-        self.raw_vertices_count = 0;
-        self.polyline_vertices.clear();
-        self.polyline_indexes.clear();
-        self.build_indexes.clear();
-        self.segments.clear();
-    }
-
     #[must_use]
     pub(crate) fn layout_vertex(
         p: Point<i16>,

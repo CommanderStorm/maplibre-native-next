@@ -22,6 +22,7 @@ pub(crate) enum WoffError {
 }
 
 /// Whether `data` starts with the WOFF or WOFF2 signature.
+#[cfg(test)]
 #[must_use]
 pub(crate) fn is_woff(data: &[u8]) -> bool {
     matches!(data.get(..4), Some(b"wOFF" | b"wOF2"))

@@ -28,10 +28,6 @@ impl<T: Clone> PossiblyEvaluatedPropertyValue<T> {
         matches!(self, PossiblyEvaluatedPropertyValue::Constant(_))
     }
 
-    pub(crate) fn is_expression(&self) -> bool {
-        matches!(self, PossiblyEvaluatedPropertyValue::Expression(_))
-    }
-
     pub fn constant(&self) -> Option<T> {
         match self {
             PossiblyEvaluatedPropertyValue::Constant(t) => Some(t.clone()),
@@ -41,17 +37,6 @@ impl<T: Clone> PossiblyEvaluatedPropertyValue<T> {
 
     pub fn constant_or(&self, t: &T) -> T {
         self.constant().unwrap_or_else(|| t.clone())
-    }
-
-    /// `evaluate(float zoom)`.
-    pub(crate) fn evaluate_zoom(&self, zoom: f32) -> T
-    where
-        T: Default + ValueConverter,
-    {
-        match self {
-            PossiblyEvaluatedPropertyValue::Constant(constant) => constant.clone(),
-            PossiblyEvaluatedPropertyValue::Expression(expression) => expression.evaluate_zoom(zoom),
-        }
     }
 
     pub fn evaluate_feature(&self, feature: &dyn GeometryTileFeature, zoom: f32, default_value: T) -> T

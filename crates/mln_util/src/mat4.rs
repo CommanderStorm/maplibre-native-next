@@ -57,11 +57,13 @@ pub mod matrix {
         out[15] = 1.0;
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn identity4() -> Mat4 {
         [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn identity4f() -> Matf4 {
         [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
@@ -168,10 +170,6 @@ pub mod matrix {
         out[13] = 0.0;
         out[14] = (2.0 * far * near) * nf;
         out[15] = 0.0;
-    }
-
-    pub(crate) fn copy(out: &mut Mat4, a: &Mat4) {
-        *out = *a;
     }
 
     pub fn translate(out: &mut Mat4, a: &Mat4, x: f64, y: f64, z: f64) {
@@ -405,6 +403,7 @@ pub mod matrix {
         result
     }
 
+    #[cfg(test)]
     pub(crate) fn diffsplit(out_value: &mut Matf4, out_diff: &mut Matf4, source: &Mat4) {
         for i in 0..16 {
             out_value[i] = source[i] as f32;

@@ -45,10 +45,6 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn extend(&mut self, other: Metrics) {
-        self.0.extend(other.0);
-    }
-
     #[must_use]
     pub(crate) fn get(&self, name: &str) -> Option<&Metric> {
         self.0.iter().find(|metric| metric.name == name)

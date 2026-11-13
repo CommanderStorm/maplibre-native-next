@@ -36,6 +36,7 @@ impl VectorTile {
         VectorTile { tile, loader: Some(loader) }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn geometry_tile(&self) -> &GeometryTile {
         &self.tile

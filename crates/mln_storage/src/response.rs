@@ -76,14 +76,6 @@ impl Response {
         Self::default()
     }
 
-    #[must_use]
-    pub(crate) fn is_fresh(&self) -> bool {
-        match self.expires {
-            Some(expires) => expires > now(),
-            None => self.error.is_none(),
-        }
-    }
-
     /// Whether HTTP caching rules allow using this response. It may or may
     /// not be stale.
     #[must_use]

@@ -28,10 +28,6 @@ impl RenderCustomGeometrySource {
     fn impl_(&self) -> Arc<custom_geometry_source::Impl> {
         downcast_arc::<custom_geometry_source::Impl>(&self.tile_source.base.base_impl)
     }
-
-    pub(crate) fn tile_source(&self) -> &RenderTileSource {
-        &self.tile_source
-    }
 }
 
 impl RenderSource for RenderCustomGeometrySource {

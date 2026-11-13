@@ -60,6 +60,7 @@ pub struct LoadingMethod(pub u8);
 
 #[allow(non_upper_case_globals)]
 impl LoadingMethod {
+    #[cfg(test)]
     pub(crate) const None: LoadingMethod = LoadingMethod(0b00);
     pub(crate) const Cache: LoadingMethod = LoadingMethod(0b01);
     pub const Network: LoadingMethod = LoadingMethod(0b10);

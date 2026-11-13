@@ -80,10 +80,6 @@ impl RenderGeoJSONSource {
     fn impl_(&self) -> Arc<geojson_source_impl::Impl> {
         downcast_arc::<geojson_source_impl::Impl>(&self.tile_source.base.base_impl)
     }
-
-    pub(crate) fn tile_source(&self) -> &RenderTileSource {
-        &self.tile_source
-    }
 }
 
 impl RenderSource for RenderGeoJSONSource {

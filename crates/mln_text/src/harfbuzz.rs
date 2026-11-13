@@ -52,9 +52,4 @@ impl HBShaper {
     pub fn valid(&self) -> bool {
         self.impl_.valid()
     }
-
-    /// The implementation, for tests.
-    pub(crate) fn impl_(&self) -> &Impl {
-        &self.impl_
-    }
 }

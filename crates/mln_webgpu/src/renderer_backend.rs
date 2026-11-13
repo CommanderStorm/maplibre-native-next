@@ -211,10 +211,6 @@ impl RendererBackend {
         context.downcast_ref::<Context>().map(Context::rc)
     }
 
-    pub(crate) fn backend_impl(&self) -> &Rc<BackendImpl> {
-        &self.impl_
-    }
-
     /// Drops the context, releasing the buffers it caches first
     /// (`Context::release_cached_buffers`).
     pub(crate) fn reset_context(&mut self) {
@@ -244,19 +240,6 @@ impl RendererBackend {
                 panic!("Failed to register {} with shader registry!", source.name);
             }
         }
-    }
-
-    pub(crate) fn set_depth_stencil_format(&self, format: Option<wgpu::TextureFormat>) {
-        self.impl_.set_depth_stencil_format(format);
-    }
-    pub(crate) fn get_depth_stencil_format(&self) -> Option<wgpu::TextureFormat> {
-        self.impl_.get_depth_stencil_format()
-    }
-    pub(crate) fn set_color_format(&self, format: Option<wgpu::TextureFormat>) {
-        self.impl_.set_color_format(format);
-    }
-    pub(crate) fn get_color_format(&self) -> Option<wgpu::TextureFormat> {
-        self.impl_.get_color_format()
     }
 }
 

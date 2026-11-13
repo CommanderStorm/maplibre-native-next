@@ -33,6 +33,7 @@ fn search<K: Borrow<Q>, Q: Ord + ?Sized>(keys: &[K], key: &Q) -> Result<usize, u
 }
 
 /// The positions in the sorted `keys` that `range` spans.
+#[cfg(test)]
 fn range_bounds<K: Borrow<Q>, Q: Ord + ?Sized, R: RangeBounds<Q>>(keys: &[K], range: &R) -> std::ops::Range<usize> {
     let start = match range.start_bound() {
         Bound::Included(q) => keys.partition_point(|k| k.borrow() < q),
@@ -116,35 +117,16 @@ impl<K, V> VecMap<K, V> {
         self.values.iter_mut()
     }
 
-    #[must_use]
-    pub(crate) fn into_keys(self) -> std::vec::IntoIter<K> {
-        self.keys.into_iter()
-    }
-
-    #[must_use]
-    pub(crate) fn into_values(self) -> std::vec::IntoIter<V> {
-        self.values.into_iter()
-    }
-
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn first_key_value(&self) -> Option<(&K, &V)> {
         Some((self.keys.first()?, self.values.first()?))
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn last_key_value(&self) -> Option<(&K, &V)> {
         Some((self.keys.last()?, self.values.last()?))
-    }
-
-    pub(crate) fn pop_first(&mut self) -> Option<(K, V)> {
-        if self.is_empty() {
-            return None;
-        }
-        Some((self.keys.remove(0), self.values.remove(0)))
-    }
-
-    pub(crate) fn pop_last(&mut self) -> Option<(K, V)> {
-        Some((self.keys.pop()?, self.values.pop()?))
     }
 
     /// Keeps the entries for which `f` returns true, visiting them in key
@@ -176,13 +158,6 @@ impl<K: Ord, V> VecMap<K, V> {
         K: Borrow<Q>,
     {
         self.search(key).ok().map(|i| &self.values[i])
-    }
-
-    pub(crate) fn get_key_value<Q: Ord + ?Sized>(&self, key: &Q) -> Option<(&K, &V)>
-    where
-        K: Borrow<Q>,
-    {
-        self.search(key).ok().map(|i| (&self.keys[i], &self.values[i]))
     }
 
     pub fn get_mut<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<&mut V>
@@ -244,6 +219,7 @@ impl<K: Ord, V> VecMap<K, V> {
     }
 
     /// The entries whose keys are in `range`, in key order.
+    #[cfg(test)]
     pub(crate) fn range<Q: Ord + ?Sized, R: RangeBounds<Q>>(&self, range: R) -> Iter<'_, K, V>
     where
         K: Borrow<Q>,
@@ -254,6 +230,7 @@ impl<K: Ord, V> VecMap<K, V> {
 
     /// Moves every entry of `other` into this map, `other`'s value winning
     /// for a key both have, as `BTreeMap::append` does.
+    #[cfg(test)]
     pub(crate) fn append(&mut self, other: &mut Self) {
         let keys = std::mem::take(&mut other.keys);
         let values = std::mem::take(&mut other.values);
@@ -312,34 +289,9 @@ impl<'a, K: Ord, V> Entry<'a, K, V> {
     {
         self.or_insert_with(V::default)
     }
-
-    #[must_use]
-    pub(crate) fn and_modify(mut self, f: impl FnOnce(&mut V)) -> Self {
-        if let Entry::Occupied(e) = &mut self {
-            f(e.get_mut());
-        }
-        self
-    }
-
-    pub(crate) fn key(&self) -> &K {
-        match self {
-            Entry::Occupied(e) => e.key(),
-            Entry::Vacant(e) => e.key(),
-        }
-    }
 }
 
 impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
-    #[must_use]
-    pub(crate) fn key(&self) -> &K {
-        &self.map.keys[self.index]
-    }
-
-    #[must_use]
-    pub(crate) fn get(&self) -> &V {
-        &self.map.values[self.index]
-    }
-
     pub(crate) fn get_mut(&mut self) -> &mut V {
         &mut self.map.values[self.index]
     }
@@ -352,27 +304,9 @@ impl<'a, K: Ord, V> OccupiedEntry<'a, K, V> {
     pub fn insert(&mut self, value: V) -> V {
         std::mem::replace(self.get_mut(), value)
     }
-
-    #[must_use]
-    pub(crate) fn remove(self) -> V {
-        self.remove_entry().1
-    }
-
-    #[must_use]
-    pub(crate) fn remove_entry(self) -> (K, V) {
-        (self.map.keys.remove(self.index), self.map.values.remove(self.index))
-    }
 }
 
 impl<'a, K: Ord, V> VacantEntry<'a, K, V> {
-    pub(crate) fn key(&self) -> &K {
-        &self.key
-    }
-
-    pub(crate) fn into_key(self) -> K {
-        self.key
-    }
-
     pub fn insert(self, value: V) -> &'a mut V {
         self.map.insert_at(self.index, self.key, value);
         &mut self.map.values[self.index]
@@ -507,33 +441,10 @@ impl<T> VecSet<T> {
         self.items.iter()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn first(&self) -> Option<&T> {
         self.items.first()
-    }
-
-    #[must_use]
-    pub(crate) fn last(&self) -> Option<&T> {
-        self.items.last()
-    }
-
-    pub(crate) fn pop_first(&mut self) -> Option<T> {
-        if self.is_empty() { None } else { Some(self.items.remove(0)) }
-    }
-
-    pub(crate) fn pop_last(&mut self) -> Option<T> {
-        self.items.pop()
-    }
-
-    /// The items in order, as a slice.
-    #[must_use]
-    pub(crate) fn as_slice(&self) -> &[T] {
-        &self.items
-    }
-
-    /// Keeps the items for which `f` returns true, visiting them in order.
-    pub(crate) fn retain(&mut self, f: impl FnMut(&T) -> bool) {
-        self.items.retain(f);
     }
 }
 
@@ -543,13 +454,6 @@ impl<T: Ord> VecSet<T> {
         T: Borrow<Q>,
     {
         search(&self.items, value).is_ok()
-    }
-
-    pub(crate) fn get<Q: Ord + ?Sized>(&self, value: &Q) -> Option<&T>
-    where
-        T: Borrow<Q>,
-    {
-        search(&self.items, value).ok().map(|i| &self.items[i])
     }
 
     /// Like `BTreeSet::insert`, keeps the item already in the set when there
@@ -584,6 +488,7 @@ impl<T: Ord> VecSet<T> {
     }
 
     /// The items in `range`, in order.
+    #[cfg(test)]
     pub(crate) fn range<Q: Ord + ?Sized, R: RangeBounds<Q>>(&self, range: R) -> std::slice::Iter<'_, T>
     where
         T: Borrow<Q>,
@@ -591,29 +496,22 @@ impl<T: Ord> VecSet<T> {
         self.items[range_bounds(&self.items, &range)].iter()
     }
 
-    /// Moves every item of `other` into this set.
-    pub(crate) fn append(&mut self, other: &mut Self) {
-        self.extend(std::mem::take(&mut other.items));
-    }
-
     /// The items of this set that are not in `other`, in order.
+    #[cfg(test)]
     pub(crate) fn difference<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = &'a T> + 'a {
         self.iter().filter(move |item| !other.contains(*item))
     }
 
     /// The items in both sets, in order.
+    #[cfg(test)]
     pub(crate) fn intersection<'a>(&'a self, other: &'a Self) -> impl Iterator<Item = &'a T> + 'a {
         self.iter().filter(move |item| other.contains(*item))
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn is_disjoint(&self, other: &Self) -> bool {
         self.intersection(other).next().is_none()
-    }
-
-    #[must_use]
-    pub(crate) fn is_subset(&self, other: &Self) -> bool {
-        self.len() <= other.len() && self.iter().all(|item| other.contains(item))
     }
 }
 

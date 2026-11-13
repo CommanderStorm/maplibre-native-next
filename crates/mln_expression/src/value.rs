@@ -65,11 +65,6 @@ impl Value {
     }
 
     #[must_use]
-    pub(crate) fn is_null(&self) -> bool {
-        matches!(self, Value::Null)
-    }
-
-    #[must_use]
     pub(crate) fn as_number(&self) -> Option<f64> {
         match self {
             Value::Number(n) => Some(*n),
@@ -97,14 +92,6 @@ impl Value {
     pub(crate) fn as_array(&self) -> Option<&Vec<Value>> {
         match self {
             Value::Array(a) => Some(a),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn as_object(&self) -> Option<&ObjectType> {
-        match self {
-            Value::Object(o) => Some(o),
             _ => None,
         }
     }
@@ -597,12 +584,6 @@ enum_value_converter!(
     TranslateAnchorType,
     VisibilityType,
 );
-
-/// The name of `t`, as `type_::to_string` writes it.
-#[must_use]
-pub(crate) fn type_to_string(t: &Type) -> String {
-    type_::to_string(t)
-}
 
 #[cfg(test)]
 mod tests {

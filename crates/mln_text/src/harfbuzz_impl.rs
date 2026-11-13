@@ -128,11 +128,6 @@ impl Impl {
         self.face.rasterize_glyph(glyph)
     }
 
-    /// The face, for the rasterizer and tests.
-    pub(crate) fn face(&self) -> &FreeTypeFace {
-        &self.face
-    }
-
     fn plan(
         &self,
         font: &Font,

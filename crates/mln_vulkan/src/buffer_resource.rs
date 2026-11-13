@@ -276,11 +276,6 @@ impl BufferResource {
         self.buffer_allocation.is_some()
     }
 
-    /// Used to detect whether buffer contents have changed.
-    pub(crate) fn get_version(&self) -> VersionType {
-        self.version.get()
-    }
-
     /// Writes `data` at `offset` of the buffer. The current frame's copy of
     /// a uniform or storage buffer holds the new contents afterwards, and
     /// the other frames' copies when they are next brought up to date

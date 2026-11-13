@@ -16,11 +16,6 @@ pub struct CustomLayerEncoder {
 }
 
 impl CustomLayerEncoder {
-    /// The GL functions of the current context.
-    #[must_use]
-    pub(crate) fn gl(&self) -> &Gl {
-        self.context.gl()
-    }
 }
 
 /// The map's framebuffer at a custom layer's place in the style, bound, with

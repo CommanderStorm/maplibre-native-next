@@ -97,16 +97,6 @@ impl Interpolate {
     }
 
     #[must_use]
-    pub(crate) fn get_interpolator(&self) -> &Interpolator {
-        &self.interpolator
-    }
-
-    #[must_use]
-    pub(crate) fn get_color_space(&self) -> ColorSpace {
-        self.color_space
-    }
-
-    #[must_use]
     pub fn get_stop_count(&self) -> usize {
         self.stops.len()
     }

@@ -742,14 +742,6 @@ impl Impl {
         self.sky.as_ref()
     }
 
-    /// The sky, if there is one, for mutation (see `get_layer_mut`).
-    pub(crate) fn get_sky_mut(&mut self) -> Option<SkyRefMut<'_>> {
-        let observer = self.observer();
-        let sky = self.sky.as_mut()?;
-        let before = sky.impl_.clone();
-        Some(SkyRefMut { sky, before, observer })
-    }
-
     // Projection
 
     pub(crate) fn set_projection(&mut self, projection: Projection) {
@@ -893,10 +885,6 @@ impl Impl {
         self.sources.iter().all(super::source::Source::loaded)
     }
 
-    pub(crate) fn pixel_ratio(&self) -> f32 {
-        self.pixel_ratio
-    }
-
     /// Sets the pixel ratio that the style loads its sprites for. Where
     /// that picks the sprites' other resolution, the style loads them
     /// again, and keeps its images until the new ones arrive.
@@ -916,16 +904,8 @@ impl Impl {
 
     // SpriteLoaderObserver implementation.
 
-    pub(crate) fn on_sprite_loaded(&mut self, sprite: Option<&Sprite>, images: Vec<Arc<image::Impl>>) {
-        on_sprite_loaded(&self.shared, sprite, images);
-    }
-
     pub(crate) fn on_sprite_error(&mut self, sprite: Option<&Sprite>, error: Error) {
         on_sprite_error(&self.shared, sprite, error);
-    }
-
-    pub(crate) fn on_sprite_requested(&mut self, sprite: Option<&Sprite>) {
-        on_sprite_requested(&self.shared, sprite);
     }
 
     // The SourceObserver implementation is StyleSourceObserver.
@@ -948,10 +928,6 @@ impl Impl {
     }
 
     // SkyObserver implementation.
-
-    pub(crate) fn on_sky_changed(&mut self) {
-        self.observer().on_update();
-    }
 
     // ProjectionObserver implementation.
 

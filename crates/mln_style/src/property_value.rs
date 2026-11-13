@@ -69,13 +69,6 @@ impl<T> PropertyValue<T> {
         }
     }
 
-    pub(crate) fn is_zoom_constant(&self) -> bool {
-        match self {
-            PropertyValue::Undefined | PropertyValue::Constant(_) => true,
-            PropertyValue::Expression(fn_) => fn_.is_zoom_constant(),
-        }
-    }
-
     /// The constant. Panics when the value isn't a constant.
     pub fn as_constant(&self) -> &T {
         match self {

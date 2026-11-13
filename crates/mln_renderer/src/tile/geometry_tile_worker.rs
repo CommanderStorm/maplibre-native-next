@@ -883,9 +883,4 @@ impl GeometryTileWorker {
         self.parent.send(TileMessage::Layout { result: layout_result, correlation_id: self.correlation_id });
         Ok(())
     }
-
-    #[must_use]
-    pub(crate) fn source_id(&self) -> &str {
-        &self.source_id
-    }
 }

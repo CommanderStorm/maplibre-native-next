@@ -80,11 +80,6 @@ impl<'l> VectorMLTTileFeature<'l> {
         let _ = self.error.set(MlnError::native(error.to_string()));
     }
 
-    /// The `mlt::Feature` (for the difftest).
-    pub(crate) fn feature(&self) -> &'l mlt::Feature {
-        self.feature
-    }
-
     /// The value of the property `key`; `None` for an unknown key or an
     /// absent value.
     pub(crate) fn try_get_value(&self, key: &str) -> Result<Option<Value>, mlt::Error> {
@@ -313,6 +308,7 @@ impl VectorMLTTileData {
 
     /// The names of the tile's layers, in tile order (MVT data lists them
     /// sorted), duplicates included.
+    #[cfg(test)]
     pub(crate) fn layer_names(&self) -> Vec<String> {
         let decode = {
             let state = self.state.lock();

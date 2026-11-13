@@ -216,6 +216,7 @@ impl GeoJSONVT {
     }
 
     /// `getInternalTiles()`
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get_internal_tiles(&self) -> &HashMap<u64, InternalTile> {
         &self.tiles

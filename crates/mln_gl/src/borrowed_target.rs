@@ -403,10 +403,6 @@ impl HostSurfaceTarget {
         Ok((backend, target))
     }
 
-    pub(crate) fn size(&self) -> Size {
-        self.size.get()
-    }
-
     /// Draws the next frame at `size` pixels, which the host's surface has.
     pub fn resize(&self, size: Size) {
         self.size.set(size);

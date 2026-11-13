@@ -294,6 +294,7 @@ impl RasterDEMTile {
         RasterDEMTile { inner, loader: Some(loader) }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn inner(&self) -> &Rc<RasterDEMTileInner> {
         &self.inner

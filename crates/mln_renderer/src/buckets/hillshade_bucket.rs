@@ -112,10 +112,6 @@ impl HillshadeBucket {
         self.demdata.write()
     }
 
-    pub(crate) fn is_prepared(&self) -> bool {
-        self.prepared.load(Ordering::SeqCst)
-    }
-
     pub(crate) fn set_prepared(&self, prepared_state: bool) {
         self.prepared.store(prepared_state, Ordering::SeqCst);
     }
@@ -127,12 +123,6 @@ impl HillshadeBucket {
     /// The number of `renderTargetPrepared = false` resets so far.
     pub(crate) fn render_target_generation(&self) -> u64 {
         self.render_target_generation.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn clear(&self) {
-        let mut geometry = self.geometry();
-        Self::clear_geometry(&mut geometry);
-        self.base.uploaded.store(false, Ordering::SeqCst);
     }
 
     fn clear_geometry(geometry: &mut HillshadeBucketGeometry) {

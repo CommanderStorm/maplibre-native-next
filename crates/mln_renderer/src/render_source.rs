@@ -55,18 +55,8 @@ impl RenderTiles {
     }
 
     #[must_use]
-    pub(crate) fn len(&self) -> usize {
-        self.indices.len()
-    }
-
-    #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         self.indices.is_empty()
-    }
-
-    #[must_use]
-    pub(crate) fn get(&self, i: usize) -> Option<&RenderTile> {
-        self.indices.get(i).map(|&i| &self.owner[i])
     }
 
     /// The tiles the selection points into.

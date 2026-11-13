@@ -30,10 +30,6 @@ impl RenderCustomVectorSource {
     fn impl_(&self) -> Arc<custom_vector_source::Impl> {
         downcast_arc::<custom_vector_source::Impl>(&self.tile_source.base.base_impl)
     }
-
-    pub(crate) fn tile_source(&self) -> &RenderTileSource {
-        &self.tile_source
-    }
 }
 
 impl RenderSource for RenderCustomVectorSource {

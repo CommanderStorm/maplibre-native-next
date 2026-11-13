@@ -50,12 +50,6 @@ impl RenderTarget {
         self.offscreen_texture.get_texture()
     }
 
-    /// The size the render target was created with (the texture's size).
-    #[must_use]
-    pub(crate) fn get_size(&self) -> Size {
-        self.size
-    }
-
     /// Add a layer group to the render target; `replace`: replace if
     /// exists. Returns whether added.
     pub(crate) fn add_layer_group(&mut self, layer_group: LayerGroupBasePtr, replace: bool) -> bool {
@@ -76,17 +70,6 @@ impl RenderTarget {
                 }
             }
         }
-    }
-
-    /// Remove a layer group by layer index; returns whether removed.
-    pub(crate) fn remove_layer_group(&mut self, layer_index: i32) -> bool {
-        self.layer_groups_by_layer_index.remove(&layer_index).is_some()
-    }
-
-    /// Get the layer group count
-    #[must_use]
-    pub(crate) fn num_layer_groups(&self) -> usize {
-        self.layer_groups_by_layer_index.len()
     }
 
     /// Get a specific layer group by index, if existent.

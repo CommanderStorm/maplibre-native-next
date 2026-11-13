@@ -65,8 +65,3 @@ impl GeometryTileFeature for SymbolFeature {
     }
 }
 
-/// `operator<` (by sort key), for the sorted insert in `SymbolLayout`.
-#[must_use]
-pub(crate) fn symbol_feature_less(lhs: &SymbolFeature, rhs: &SymbolFeature) -> bool {
-    lhs.sort_key < rhs.sort_key
-}

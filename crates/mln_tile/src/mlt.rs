@@ -48,11 +48,6 @@ impl Error {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Error { message: message.into() }
     }
-
-    #[must_use]
-    pub(crate) fn what(&self) -> &str {
-        &self.message
-    }
 }
 
 impl From<mlt_core::MltError> for Error {
@@ -76,16 +71,6 @@ impl Coordinate {
 
 pub(crate) type CoordVec = Vec<Coordinate>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GeometryType {
-    Point = 0,
-    LineString = 1,
-    Polygon = 2,
-    MultiPoint = 3,
-    MultiLineString = 4,
-    MultiPolygon = 5,
-}
-
 /// The data of the `mlt::geometry::Geometry` subclasses.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Shape {
@@ -107,17 +92,6 @@ pub(crate) struct Geometry {
 }
 
 impl Geometry {
-    #[must_use]
-    pub(crate) fn type_(&self) -> GeometryType {
-        match self.shape {
-            Shape::Point(_) => GeometryType::Point,
-            Shape::MultiPoint(_) => GeometryType::MultiPoint,
-            Shape::LineString(_) => GeometryType::LineString,
-            Shape::Polygon(_) => GeometryType::Polygon,
-            Shape::MultiLineString(_) => GeometryType::MultiLineString,
-            Shape::MultiPolygon(_) => GeometryType::MultiPolygon,
-        }
-    }
 }
 
 /// The scalar type of a property column.
@@ -297,14 +271,6 @@ impl ValueCodes<'_> {
 }
 
 impl PresentProperties {
-    pub(crate) fn get_type(&self) -> ScalarType {
-        self.type_
-    }
-
-    pub(crate) fn is_boolean(&self) -> bool {
-        self.type_ == ScalarType::Boolean
-    }
-
     /// A code for each value, equal codes for equal values (equal values may
     /// differ in code). Numbers and booleans are their bits; strings are
     /// numbered, on the first call. `None` for a string column with more
@@ -412,14 +378,6 @@ impl Layer {
     pub(crate) fn triangle_buffer(&self) -> Option<&Arc<[u32]>> {
         self.triangles.as_ref()
     }
-
-    #[must_use]
-    pub(crate) fn get_triangles(&self, feature: &Feature) -> &[u32] {
-        match (&self.triangles, &feature.geometry.triangles) {
-            (Some(buffer), Some(range)) => &buffer[range.clone()],
-            _ => &[],
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -457,12 +415,6 @@ impl MapLibreTile {
     #[must_use]
     pub(crate) fn get_layers(&self) -> &[Layer] {
         &self.layers
-    }
-
-    /// The first layer named `name`.
-    #[must_use]
-    pub(crate) fn get_layer(&self, name: &str) -> Option<&Layer> {
-        self.layers.iter().find(|layer| layer.name == name)
     }
 }
 

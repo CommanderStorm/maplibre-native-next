@@ -137,6 +137,7 @@ impl SymbolLayerPaintPropertyOverrides {
 
     /// Carries a `FormatSectionOverride` wrapper of `text-color` over from
     /// `evaluated` to `updated`.
+    #[cfg(test)]
     // gtests-data: ported for Layer.SymbolLayerOverrides.
     pub(crate) fn update_overrides(
         evaluated: &SymbolPaintProperties::PossiblyEvaluated,

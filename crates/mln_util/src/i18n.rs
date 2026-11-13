@@ -321,13 +321,6 @@ pub fn glyph_range_is_entirely_locally_generated(range_start: u16) -> bool {
     true
 }
 
-/// Returns whether any substring of the given string can be drawn as
-/// vertical text with upright glyphs.
-#[must_use]
-pub(crate) fn allows_vertical_writing_mode(string: &[u16]) -> bool {
-    string.iter().any(|&c| has_upright_vertical_orientation(c))
-}
-
 // The following logic comes from
 // <http://www.unicode.org/Public/12.0.0/ucd/VerticalOrientation.txt>.
 // Keep it synchronized with

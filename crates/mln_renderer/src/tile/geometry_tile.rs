@@ -543,10 +543,12 @@ impl GeometryTile {
         &self.inner
     }
 
+    #[cfg(test)]
     pub(crate) fn set_error(&self, err: Error) {
         self.inner.set_error(err);
     }
 
+    #[cfg(test)]
     pub(crate) fn set_data(&self, data: Option<SharedTileData>) {
         self.inner.set_data(data);
     }
@@ -901,9 +903,4 @@ pub(crate) fn query_layer_source_features(
 }
 
 impl GeometryTile {
-    /// Whether the latest layout has tile data.
-    #[must_use]
-    pub(crate) fn has_data(&self) -> bool {
-        self.inner.layout_result.borrow().as_ref().is_some_and(|result| result.feature_index.get_data().is_some())
-    }
 }

@@ -184,10 +184,6 @@ impl RenderPass {
         self.renderable_id
     }
 
-    pub(crate) fn get_context(&self) -> &Rc<Context> {
-        &self.context
-    }
-
     /// Sets whether the global uniform buffers are bound; the array is the
     /// context's.
     pub(crate) fn set_global_uniform_buffers(&self, bound: bool) {

@@ -146,13 +146,6 @@ impl State {
         }
     }
 
-    pub(crate) fn current_program(&self) -> Option<ProgramID> {
-        match self.program.get() {
-            Cached::Known(program) => program,
-            Cached::Dirty => None,
-        }
-    }
-
     pub(crate) fn bind_vertex_array(&self, gl: &Gl, vertex_array: Option<VertexArrayID>) {
         if changed(&self.vertex_array, vertex_array) {
             // SAFETY: the vertex array is alive, or none.

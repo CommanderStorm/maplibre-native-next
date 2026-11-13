@@ -354,13 +354,6 @@ impl FontFace {
 
 pub type FontFaces = Vec<FontFace>;
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct HBShapeRequest {
-    pub(crate) str_: Vec<u16>,
-    pub(crate) font_stack: FontStack,
-    pub(crate) type_: GlyphIDType,
-}
-
 pub type HBShapeRequests = VecMap<FontStack, VecMap<GlyphIDType, BTreeSet<Vec<u16>>>>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -368,8 +361,6 @@ pub struct GlyphDependencies {
     pub glyphs: VecMap<FontStack, GlyphIDs>,
     pub shapes: HBShapeRequests,
 }
-
-pub(crate) type GlyphRangeDependencies = VecMap<FontStack, HashSet<GlyphRange>>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GlyphPosition {

@@ -278,12 +278,6 @@ pub(crate) fn convert_feature(json: &Json) -> Result<Feature<f64>> {
     Ok(result)
 }
 
-/// `convert<feature_collection>`: the generic container conversion, i.e. a
-/// JSON array of features (not a "`FeatureCollection`" object).
-pub(crate) fn convert_feature_collection(json: &Json) -> Result<FeatureCollection<f64>> {
-    convert_container(json, convert_feature)
-}
-
 /// `convert<geojson>` / `convert(const rapidjson_value&)`
 pub fn convert(json: &Json) -> Result<GeoJSON> {
     let Some(object) = json.as_object() else {
@@ -328,21 +322,6 @@ fn parse_document(json: &str) -> Result<Json> {
 /// `parse(const std::string&)` = `parse<geojson>`
 pub fn parse(json: &str) -> Result<GeoJSON> {
     convert(&parse_document(json)?)
-}
-
-/// `parse<geometry>`
-pub(crate) fn parse_geometry(json: &str) -> Result<Geometry<f64>> {
-    convert_geometry(&parse_document(json)?)
-}
-
-/// `parse<feature>`
-pub(crate) fn parse_feature(json: &str) -> Result<Feature<f64>> {
-    convert_feature(&parse_document(json)?)
-}
-
-/// `parse<feature_collection>`
-pub(crate) fn parse_feature_collection(json: &str) -> Result<FeatureCollection<f64>> {
-    convert_feature_collection(&parse_document(json)?)
 }
 
 // --- stringify ---

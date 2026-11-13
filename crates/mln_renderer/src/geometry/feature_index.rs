@@ -61,22 +61,6 @@ pub(crate) struct IndexedSubfeature {
 }
 
 impl IndexedSubfeature {
-    #[must_use]
-    pub(crate) fn from_ref(other: &RefIndexedSubfeature) -> Self {
-        IndexedSubfeature {
-            index: other.index,
-            source_layer_name: other.source_layer_name.to_string(),
-            bucket_leader_id: other.bucket_leader_id.to_string(),
-            sort_index: other.sort_index,
-            bucket_instance_id: other.bucket_instance_id,
-            collision_group_id: other.collision_group_id,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn from_ref_with(other: &RefIndexedSubfeature, bucket_instance_id: u32, collision_group_id: u16) -> Self {
-        IndexedSubfeature { bucket_instance_id, collision_group_id, ..IndexedSubfeature::from_ref(other) }
-    }
 }
 
 /// A shared order of feature indices that queries sort symbol features by.

@@ -73,25 +73,6 @@ impl VertexAttribute {
         Self::with_stride(index, data_type, count, Self::get_stride_of(data_type))
     }
 
-    /// The C++ copy constructor: everything but the raw data and the buffer.
-    #[must_use]
-    pub(crate) fn copy(&self) -> Self {
-        VertexAttribute {
-            index: self.index,
-            stride: self.stride,
-            dirty: Cell::new(true),
-            data_type: self.data_type,
-            items: self.items.clone(),
-            raw_data: Vec::new(),
-            shared_raw_data: self.shared_raw_data.clone(),
-            shared_type: self.shared_type,
-            shared_offset: self.shared_offset,
-            shared_vertex_offset: self.shared_vertex_offset,
-            shared_stride: self.shared_stride,
-            buffer: None,
-        }
-    }
-
     #[must_use]
     pub fn get_stride_of(type_: AttributeDataType) -> usize {
         use AttributeDataType::{
@@ -115,9 +96,6 @@ impl VertexAttribute {
     pub fn get_index(&self) -> i32 {
         self.index
     }
-    pub(crate) fn set_index(&mut self, value: i32) {
-        self.index = value;
-    }
     pub fn get_stride(&self) -> usize {
         self.stride
     }
@@ -135,46 +113,6 @@ impl VertexAttribute {
     pub fn get_data_type(&self) -> AttributeDataType {
         self.data_type
     }
-    pub(crate) fn get(&self, i: usize) -> &ElementType {
-        &self.items[i]
-    }
-    pub(crate) fn reserve(&mut self, count: usize) {
-        self.items.reserve(count);
-    }
-
-    /// Sets element `i`, marking the attribute dirty when the value (or its
-    /// variant) changes.
-    pub(crate) fn set(&mut self, i: usize, value: ElementType) -> &ElementType {
-        if self.items.len() < i + 1 {
-            let n = self.items.len().max(i + 1);
-            self.items.resize(n, ElementType::default());
-            self.set_dirty(true); // need to rebuild the raw data next time
-        }
-        if !self.is_dirty() && self.items[i] != value {
-            // Covers both "same alternative, different value" and "different
-            // alternative" (enum equality compares the discriminant first).
-            self.set_dirty(true);
-        }
-        self.items[i] = value;
-        &self.items[i]
-    }
-
-    pub(crate) fn set_variant(&mut self, i: usize, value: ElementType) -> &ElementType {
-        if self.items.len() < i + 1 {
-            let n = self.items.len().max(i + 1);
-            self.items.resize(n, ElementType::default());
-        }
-        self.set_dirty(true);
-        self.items[i] = value;
-        &self.items[i]
-    }
-
-    pub(crate) fn clear(&mut self) {
-        if !self.items.is_empty() {
-            self.set_dirty(true);
-        }
-        self.items.clear();
-    }
 
     /// `dirty` is `mutable` in C++.
     pub fn set_dirty(&self, value: bool) {
@@ -190,9 +128,6 @@ impl VertexAttribute {
 
     pub fn get_raw_data(&self) -> &Vec<u8> {
         &self.raw_data
-    }
-    pub(crate) fn get_raw_data_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.raw_data
     }
     pub fn set_raw_data(&mut self, value: Vec<u8>) {
         self.raw_data = value;
@@ -229,19 +164,11 @@ impl VertexAttribute {
         self.shared_stride = stride;
     }
 
-    pub(crate) fn reset_shared_raw_data(&mut self) {
-        self.shared_raw_data = None;
-    }
-
     pub fn get_buffer(&self) -> Option<&UniqueVertexBufferResource> {
         self.buffer.as_ref()
     }
     pub fn set_buffer(&mut self, value: Option<UniqueVertexBufferResource>) {
         self.buffer = value;
-    }
-
-    pub(crate) fn is_dirty(&self) -> bool {
-        self.dirty.get()
     }
 }
 
@@ -274,11 +201,6 @@ impl VertexAttributeArray {
     }
 
     #[must_use]
-    pub(crate) fn get_total_size(&self) -> usize {
-        self.attrs.iter().map(|a| a.as_ref().map_or(0, |a| a.get_stride())).sum()
-    }
-
-    #[must_use]
     pub fn get_min_count(&self) -> usize {
         self.attrs.iter().fold(usize::MAX, |acc, attr| acc.min(attr.as_ref().map_or(usize::MAX, |a| a.get_count())))
     }
@@ -286,10 +208,6 @@ impl VertexAttributeArray {
     #[must_use]
     pub fn get(&self, id: usize) -> Option<&VertexAttribute> {
         self.attrs.get(id).and_then(|a| a.as_deref())
-    }
-
-    pub(crate) fn get_mut(&mut self, id: usize) -> Option<&mut VertexAttribute> {
-        self.attrs.get_mut(id).and_then(|a| a.as_deref_mut())
     }
 
     /// `set(id, index = -1, type = Invalid, count = 0)`: replaces the
@@ -312,12 +230,6 @@ impl VertexAttributeArray {
     #[must_use]
     pub fn is_modified_after(&self, time: Instant) -> bool {
         self.attrs.iter().any(|attr| attr.as_ref().is_some_and(|a| a.is_modified_after(time)))
-    }
-
-    pub(crate) fn clear(&mut self) {
-        for attr in &mut self.attrs {
-            *attr = None;
-        }
     }
 
     pub fn visit_attributes(&self, mut f: impl FnMut(&VertexAttribute)) {

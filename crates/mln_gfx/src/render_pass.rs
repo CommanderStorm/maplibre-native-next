@@ -39,8 +39,4 @@ impl dyn RenderPass {
     pub fn downcast_ref<T: RenderPass>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref()
     }
-
-    pub(crate) fn create_debug_group(&self, name: &str) -> DebugGroup<'_> {
-        DebugGroup::new(self, name)
-    }
 }

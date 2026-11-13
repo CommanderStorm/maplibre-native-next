@@ -76,10 +76,6 @@ impl RenderVectorSource {
             },
         );
     }
-
-    pub(crate) fn tile_source(&self) -> &RenderTileSource {
-        &self.tile_source
-    }
 }
 
 use mln_style::source_impl::Impl as _;

@@ -225,17 +225,6 @@ impl<T: CollectionElement + ?Sized> CollectionWithPersistentOrder<T> {
         self.base.remove_at(wrapper_index, impl_index)
     }
 
-    pub(crate) fn update(&mut self, id: &str) {
-        let impl_index = self.impls_index(id);
-        let idx = self.base.index(id);
-        if idx < self.base.size() {
-            let base_impl = self.base.wrappers[idx].base_impl();
-            self.base.update_at(impl_index, base_impl);
-        } else {
-            debug_assert!(false);
-        }
-    }
-
     /// The index of the first impl whose id is not less than `id`.
     fn impls_index(&self, id: &str) -> usize {
         self.base.impls.partition_point(|a| T::impl_id(a) < id)

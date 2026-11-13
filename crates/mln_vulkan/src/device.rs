@@ -1099,12 +1099,6 @@ impl Device {
         self.shared.device()
     }
 
-    /// Whether `self` and `other` are clones of one device.
-    #[must_use]
-    pub(crate) fn same_as(&self, other: &Device) -> bool {
-        Arc::ptr_eq(&self.shared, &other.shared)
-    }
-
     /// Whether renderers on the device can present: its instance has
     /// `VK_KHR_surface` and its device `VK_KHR_swapchain`.
     #[must_use]
@@ -1195,16 +1189,6 @@ impl Device {
                 formats
             }
         })
-    }
-
-    /// The name of the GPU.
-    #[must_use]
-    pub(crate) fn name(&self) -> String {
-        self.shared
-            .properties
-            .device_name_as_c_str()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
     }
 }
 

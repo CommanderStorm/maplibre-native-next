@@ -247,6 +247,7 @@ pub(crate) struct TileCoverParameters {
 impl TileCoverParameters {
     /// Parameters for `transform_state`, with the defaults for the other
     /// fields.
+    #[cfg(test)]
     pub(crate) fn new(transform_state: TransformState) -> Self {
         TileCoverParameters {
             transform_state,
@@ -976,6 +977,7 @@ pub fn tile_cover_bounds(bounds_: &LatLngBounds, z: u8) -> Vec<UnwrappedTileID> 
     )
 }
 
+#[cfg(test)]
 pub(crate) fn tile_cover_geometry(geometry: &Geometry<f64>, z: u8) -> Result<Vec<UnwrappedTileID>, Error> {
     let mut result = Vec::new();
     let mut tc = TileCover::new_from_geometry(geometry, z, true)?;

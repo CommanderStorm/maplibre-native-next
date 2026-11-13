@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+#[cfg(test)]
 pub(crate) const SHELF_PACK_VERSION: &str = "2.1.1";
 
 /// `Bin`
@@ -34,6 +35,7 @@ impl Default for Bin {
 
 impl Bin {
     /// `Bin(id, w, h)` (the other arguments default to -1).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new(id: i32, w: i32, h: i32) -> Self {
         Bin::with_all(id, w, h, -1, -1, -1, -1)
@@ -100,14 +102,7 @@ impl Shelf {
         true
     }
 
-    #[must_use]
-    pub(crate) fn x(&self) -> i32 {
-        self.x_
-    }
-    #[must_use]
-    pub(crate) fn y(&self) -> i32 {
-        self.y_
-    }
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn w(&self) -> i32 {
         self.w_
@@ -129,6 +124,7 @@ pub struct ShelfPackOptions {
 }
 
 /// `ShelfPack::PackOptions`
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PackOptions {
     pub(crate) in_place: bool,
@@ -181,6 +177,7 @@ impl ShelfPack {
     }
 
     /// `pack(bins, options)`
+    #[cfg(test)]
     pub(crate) fn pack(&mut self, bins: &mut [Bin], options: PackOptions) -> Vec<BinRef> {
         let mut results = Vec::new();
 
@@ -314,6 +311,7 @@ impl ShelfPack {
     }
 
     /// `shrink()`
+    #[cfg(test)]
     pub(crate) fn shrink(&mut self) {
         if !self.shelves_.is_empty() {
             let mut w2: i32 = 0;
@@ -369,6 +367,7 @@ impl ShelfPack {
     }
 
     /// `clear()`
+    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.shelves_.clear();
         self.freebins_.clear();
@@ -395,18 +394,6 @@ impl ShelfPack {
     #[must_use]
     pub fn height(&self) -> i32 {
         self.height_
-    }
-
-    /// The bin-height histogram (`stats_`, private in C++).
-    #[must_use]
-    pub(crate) fn stats(&self) -> &BTreeMap<i32, i32> {
-        &self.stats_
-    }
-
-    /// The shelves (`shelves_`, private in C++).
-    #[must_use]
-    pub(crate) fn shelves(&self) -> &VecDeque<Shelf> {
-        &self.shelves_
     }
 
     fn alloc_freebin(&mut self, r: BinRef, id: i32, w: i32, h: i32) -> BinRef {

@@ -60,16 +60,6 @@ pub fn literal(value: Value) -> Box<dyn Expression> {
 }
 
 #[must_use]
-pub(crate) fn literal_numbers(value: &[f64]) -> Box<dyn Expression> {
-    literal(Value::Array(value.iter().map(|v| Value::Number(*v)).collect()))
-}
-
-#[must_use]
-pub(crate) fn literal_strings(value: &[&str]) -> Box<dyn Expression> {
-    literal(Value::Array(value.iter().map(|v| Value::String((*v).to_owned())).collect()))
-}
-
-#[must_use]
 pub fn assertion(type_: Type, value: Box<dyn Expression>, def: Option<Box<dyn Expression>>) -> Box<dyn Expression> {
     let mut v = vec![value];
     if let Some(def) = def {
@@ -171,6 +161,7 @@ pub fn gt(lhs: Box<dyn Expression>, rhs: Box<dyn Expression>) -> Box<dyn Express
     Box::new(BasicComparison::new(">".to_owned(), lhs, rhs))
 }
 
+#[cfg(test)]
 #[must_use]
 pub(crate) fn lt(lhs: Box<dyn Expression>, rhs: Box<dyn Expression>) -> Box<dyn Expression> {
     Box::new(BasicComparison::new("<".to_owned(), lhs, rhs))
@@ -198,11 +189,6 @@ pub fn linear() -> Interpolator {
 #[must_use]
 pub fn exponential(base: f64) -> Interpolator {
     ExponentialInterpolator::new(base).into()
-}
-
-#[must_use]
-pub(crate) fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64) -> Interpolator {
-    CubicBezierInterpolator::new(x1, y1, x2, y2).into()
 }
 
 /// The `dsl::interpolate` overloads: stops as (input, output) pairs.
@@ -236,11 +222,6 @@ pub fn format_str(value: &str) -> Box<dyn Expression> {
 pub fn format(input: Box<dyn Expression>) -> Box<dyn Expression> {
     let sections = vec![FormatExpressionSection::new(input)];
     Box::new(FormatExpression::new(sections))
-}
-
-#[must_use]
-pub(crate) fn image_str(value: &str) -> Box<dyn Expression> {
-    Box::new(Literal::new(Value::Image(Image::new(value))))
 }
 
 #[must_use]

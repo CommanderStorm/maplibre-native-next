@@ -51,6 +51,7 @@ pub fn angle_between(a: Point<f64>, b: Point<f64>) -> f64 {
     (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y)
 }
 
+#[cfg(test)]
 #[must_use]
 pub(crate) fn length_f32(a: f32, b: f32) -> f32 {
     (a * a + b * b).sqrt()
@@ -81,13 +82,6 @@ pub fn rotate_i16(a: Point<i16>, angle: f32) -> Point<i16> {
     let x = cos * f32::from(a.x) - sin * f32::from(a.y);
     let y = sin * f32::from(a.x) + cos * f32::from(a.y);
     Point::new(x as i16, y as i16)
-}
-
-#[must_use]
-pub(crate) fn rotate_f32(a: Point<f32>, angle: f32) -> Point<f32> {
-    let cos = angle.cos();
-    let sin = angle.sin();
-    Point::new(cos * a.x - sin * a.y, sin * a.x + cos * a.y)
 }
 
 #[cfg(test)]

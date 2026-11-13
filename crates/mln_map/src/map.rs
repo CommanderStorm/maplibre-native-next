@@ -761,22 +761,6 @@ impl Map {
         self.on_update();
     }
 
-    pub(crate) fn is_gesture_in_progress(&self) -> bool {
-        self.transform.is_gesture_in_progress()
-    }
-
-    pub(crate) fn is_rotating(&self) -> bool {
-        self.transform.is_rotating()
-    }
-
-    pub(crate) fn is_scaling(&self) -> bool {
-        self.transform.is_scaling()
-    }
-
-    pub(crate) fn is_panning(&self) -> bool {
-        self.transform.is_panning()
-    }
-
     /// On the globe, let drags and zooms around a point turn the bearing so
     /// the planet keeps its orientation, for maps whose rotation gestures are
     /// enabled. Off, the default, they hold the bearing as GL JS does.
@@ -1076,10 +1060,6 @@ impl Map {
         self.on_update();
     }
 
-    pub(crate) fn get_frustum_offset(&self) -> EdgeInsets {
-        self.transform.get_frustum_offset()
-    }
-
     pub fn get_map_options(&self) -> MapOptions {
         let transform = &self.transform;
         let state = transform.get_state();
@@ -1267,13 +1247,9 @@ impl Map {
 
     /// Whether the globe hides a location from the camera; a Mercator map
     /// hides nothing.
+    #[cfg(test)]
     pub(crate) fn is_location_occluded(&self, lat_lng: &LatLng) -> bool {
         self.transform.is_location_occluded(lat_lng)
-    }
-
-    /// Whether the map is drawn as a globe, alone or blending into Mercator.
-    pub(crate) fn is_globe_rendering(&self) -> bool {
-        self.transform.get_state().is_globe_rendering()
     }
 
     pub fn lat_lngs_for_pixels(

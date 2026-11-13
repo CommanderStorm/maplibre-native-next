@@ -162,6 +162,7 @@ pub(crate) struct GlyphManager {
 
 impl GlyphManager {
     /// A manager with a glyph cache of its own.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new(local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>) -> Rc<GlyphManager> {
         Self::with_glyph_cache(local_glyph_rasterizer, Arc::default())
@@ -178,6 +179,7 @@ impl GlyphManager {
 
     /// A manager whose font faces load with `engine` instead of the one
     /// `set_font_face_engine` set.
+    #[cfg(test)]
     pub(crate) fn with_font_face_engine(
         local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>,
         engine: Arc<dyn FontFaceEngine>,
@@ -505,6 +507,7 @@ impl GlyphManager {
     }
 
     /// `evict(keep)`: remove glyphs for all but the supplied font stacks.
+    #[cfg(test)]
     pub(crate) fn evict(&self, keep: &VecSet<FontStack>) {
         self.entries.borrow_mut().retain(|font_stack, _| keep.contains(font_stack));
     }
@@ -648,5 +651,3 @@ impl GlyphManager {
     }
 }
 
-/// The glyph ids of a dependency set, re-exported for the worker.
-pub(crate) type GlyphIDSet = GlyphIDs;

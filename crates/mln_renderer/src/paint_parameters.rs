@@ -235,25 +235,6 @@ impl<'a> PaintParameters<'a> {
         DepthMode { func: DepthFunctionType::LessEqual, mask, range: Range::new(0.0, self.depth_range_size) }
     }
 
-    #[must_use]
-    pub(crate) fn color_mode_for_render_pass(&self) -> ColorMode {
-        if self.debug_options.contains(MapDebugOptions::OVERDRAW) {
-            let overdraw: f32 = 1.0 / 8.0;
-            ColorMode {
-                blend_function: BlendFunction::Add(LinearBlend {
-                    src_factor: ColorBlendFactorType::ConstantColor,
-                    dst_factor: ColorBlendFactorType::One,
-                }),
-                blend_color: Color::new_unchecked(overdraw, overdraw, overdraw, 0.0),
-                mask: Mask { r: true, g: true, b: true, a: true },
-            }
-        } else if self.pass == RenderPass::Translucent {
-            ColorMode::alpha_blended()
-        } else {
-            ColorMode::unblended()
-        }
-    }
-
     pub(crate) fn clear_stencil(&mut self) {
         self.next_stencil_id = 1;
         self.tile_clipping_mask_ids.clear();

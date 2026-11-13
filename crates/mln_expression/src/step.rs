@@ -26,17 +26,6 @@ impl Step {
     }
 
     #[must_use]
-    pub(crate) fn get_stop_count(&self) -> usize {
-        self.stops.len()
-    }
-
-    pub(crate) fn each_stop(&self, mut visit: impl FnMut(f64, &dyn Expression)) {
-        for (k, v) in self.stops.iter() {
-            visit(k, v);
-        }
-    }
-
-    #[must_use]
     pub(crate) fn get_input(&self) -> &dyn Expression {
         &*self.input
     }

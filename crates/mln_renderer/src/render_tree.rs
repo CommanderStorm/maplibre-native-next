@@ -50,11 +50,6 @@ impl LayerRenderItem {
     pub(crate) fn new(layer: RenderLayerPtr, source: Option<String>, index: u32) -> Self {
         LayerRenderItem { layer, source, index }
     }
-
-    #[must_use]
-    pub(crate) fn get_name(&self) -> String {
-        self.layer.borrow().get_id().to_owned()
-    }
 }
 
 pub(crate) struct RenderTreeParameters {

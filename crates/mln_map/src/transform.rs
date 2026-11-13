@@ -62,10 +62,6 @@ fn normalize_angle(mut angle: f64, anchor_angle: f64) -> f64 {
     angle
 }
 
-fn angle_between(a: &Point<f64>, b: &Point<f64>) -> f64 {
-    (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y)
-}
-
 fn lat_lng(lat: f64, lon: f64) -> LatLng {
     // C++ constructs LatLng directly, which throws std::domain_error.
     LatLng::new(lat, lon).unwrap_or_else(|e| panic!("{e}"))
@@ -1382,37 +1378,7 @@ impl Transform {
         self.state.set_frustum_offset(frustum_offset);
     }
 
-    pub(crate) fn get_frustum_offset(&self) -> EdgeInsets {
-        self.state.get_frustum_offset()
-    }
-
     // MARK: - Bearing
-
-    pub(crate) fn rotate_by(&mut self, first: &ScreenCoordinate, second: &ScreenCoordinate, animation: &AnimationOptions) {
-        let size = self.state.get_size();
-        let mut center = self.state.get_edge_insets().get_center(size.width as u16, size.height as u16);
-        let offset = ScreenCoordinate::new(first.x - center.x, first.y - center.y);
-        // C++: std::sqrt(std::pow(2, offset.x) + std::pow(2, offset.y)) (sic).
-        let distance = (2.0f64.powf(offset.x) + 2.0f64.powf(offset.y)).sqrt();
-
-        // If the first click was too close to the center, move the center of
-        // rotation by 200 pixels in the direction of the click.
-        if distance < 200.0 {
-            let height_offset = -200.0;
-            let rotate_bearing = offset.y.atan2(offset.x);
-            center.x = first.x + rotate_bearing.cos() * height_offset;
-            center.y = first.y + rotate_bearing.sin() * height_offset;
-        }
-
-        let bearing = -mln_math::rad2deg(
-            self.state.get_bearing()
-                + angle_between(
-                    &Point::new(first.x - center.x, first.y - center.y),
-                    &Point::new(second.x - center.x, second.y - center.y),
-                ),
-        );
-        self.ease_to(&CameraOptions { bearing: Some(bearing), ..Default::default() }, animation);
-    }
 
     pub(crate) fn get_bearing(&self) -> f64 {
         self.state.get_bearing()
@@ -1453,6 +1419,7 @@ impl Transform {
         self.globe_free_bearing
     }
 
+    #[cfg(test)]
     pub(crate) fn is_location_occluded(&self, lat_lng: &LatLng) -> bool {
         self.state.is_location_occluded(lat_lng)
     }
@@ -1484,18 +1451,10 @@ impl Transform {
         self.constrain_position(self.state.get_scale());
     }
 
-    pub(crate) fn get_constrain_mode(&self) -> ConstrainMode {
-        self.state.get_constrain_mode()
-    }
-
     // MARK: - Viewport mode
 
     pub fn set_viewport_mode(&mut self, mode: ViewportMode) {
         self.state.set_viewport_mode(mode);
-    }
-
-    pub(crate) fn get_viewport_mode(&self) -> ViewportMode {
-        self.state.get_viewport_mode()
     }
 
     // MARK: - Projection mode
@@ -1804,6 +1763,7 @@ impl Transform {
 
     /// Continues a gesture with momentum. The momentum replaces the running
     /// animations of the fields that it moves, as a camera command does.
+    #[cfg(test)]
     pub(crate) fn start_momentum(&mut self, options: &CameraMomentum, animation: &AnimationOptions) {
         self.with_source(CameraChangeSource::Momentum, |transform| {
             transform.start_momentum_now(options, animation, None);
@@ -2368,14 +2328,17 @@ impl Transform {
         &self.state
     }
 
+    #[cfg(test)]
     pub(crate) fn is_rotating(&self) -> bool {
         self.state.is_rotating()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_scaling(&self) -> bool {
         self.state.is_scaling()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_panning(&self) -> bool {
         self.state.is_panning()
     }
@@ -2397,6 +2360,7 @@ impl Transform {
         self.state.screen_coordinate_to_lat_lng(&flipped_point, wrap_mode)
     }
 
+    #[cfg(test)]
     pub(crate) fn get_free_camera_options(&self) -> FreeCameraOptions {
         self.state.get_free_camera_options()
     }

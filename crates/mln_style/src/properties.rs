@@ -196,10 +196,6 @@ impl<V: PropertyValueLike> Transitioning<V> {
         self.prior.borrow().is_some()
     }
 
-    pub(crate) fn is_transitioning(&self, now: Option<Instant>) -> bool {
-        self.has_transition() && matches!(self.stage(now), Stage::Running(_)) && !self.value.is_data_driven()
-    }
-
     pub fn is_undefined(&self) -> bool {
         self.value.is_undefined()
     }
@@ -215,10 +211,6 @@ impl<V: PropertyValueLike> Transitioning<V> {
 
     pub fn get_value(&self) -> &V {
         &self.value
-    }
-
-    pub(crate) fn get_value_mut(&mut self) -> &mut V {
-        &mut self.value
     }
 }
 

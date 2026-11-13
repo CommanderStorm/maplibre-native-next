@@ -154,6 +154,7 @@ impl PatternAtlas {
         self.atlas_texture_2d.as_ref()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn get_atlas_image_for_test(&self) -> &PremultipliedImage {
         &self.atlas_image

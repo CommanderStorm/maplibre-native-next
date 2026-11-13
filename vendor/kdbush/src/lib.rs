@@ -170,6 +170,7 @@ impl<N: Number, I: Index> KDBush<N, I> {
     }
 
     /// `KDBush(points, nodeSize)`
+    #[cfg(test)]
     pub(crate) fn from_points<P: Nth<Number = N>>(points: &[P], node_size: u8) -> Self {
         let mut index = Self::new(node_size);
         index.fill(points);

@@ -656,10 +656,6 @@ impl RenderTileSource {
         sorted.clone()
     }
 
-    pub(crate) fn get_rendered_tile(&self, tile_id: &UnwrappedTileID) -> Option<&dyn Tile> {
-        self.tile_pyramid.get_rendered_tile(tile_id)
-    }
-
     pub(crate) fn get_raw_render_tiles(&self) -> Rc<Vec<RenderTile>> {
         self.render_tiles.clone()
     }

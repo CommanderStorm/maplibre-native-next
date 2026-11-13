@@ -140,6 +140,7 @@ impl<V: bytemuck::Pod> GlobeTileMeshCache<V> {
         self.meshes.clear();
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn size(&self) -> usize {
         self.meshes.len()

@@ -146,11 +146,6 @@ impl Style {
         self.impl_.set_sky(sky);
     }
 
-    pub(crate) fn get_sky_mut(&mut self) -> Option<SkyRefMut<'_>> {
-        self.impl_.mutated = true;
-        self.impl_.get_sky_mut()
-    }
-
     #[must_use]
     pub(crate) fn get_sky(&self) -> Option<&Sky> {
         self.impl_.get_sky()
