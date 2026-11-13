@@ -299,8 +299,8 @@ pub(crate) fn get_bytes(row: &Row<'_>, offset: usize) -> Result<Vec<u8>, SqliteE
     Ok(match row.get_ref(offset)? {
         ValueRef::Null => Vec::new(),
         ValueRef::Integer(i) => i.to_string().into_bytes(),
-        // SQLite formats reals with "%!.15g"; this uses Rust's shortest
-        // round-trip formatting.
+        // Rust's shortest round-trip formatting, not SQLite's "%!.15g": the
+        // text is only parsed back as a number (MBTiles zooms and scale).
         ValueRef::Real(r) => format!("{r}").into_bytes(),
         ValueRef::Text(t) | ValueRef::Blob(t) => t.to_vec(),
     })
