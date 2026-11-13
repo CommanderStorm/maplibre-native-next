@@ -287,6 +287,7 @@ impl Expression for Interpolate {
             ColorSpace::Lab => "interpolate-lab",
             ColorSpace::Hcl => "interpolate-hcl",
             ColorSpace::Oklch => "interpolate-oklch",
+            ColorSpace::Oklab => "interpolate-oklab",
             ColorSpace::Rgb => "interpolate",
         }
         .to_owned()
@@ -330,6 +331,7 @@ pub(crate) fn parse_interpolate(value: &Convertible<'_>, ctx: &mut ParsingContex
         Some("interpolate-lab") => ColorSpace::Lab,
         Some("interpolate-hcl") => ColorSpace::Hcl,
         Some("interpolate-oklch") => ColorSpace::Oklch,
+        Some("interpolate-oklab") => ColorSpace::Oklab,
         _ => ColorSpace::Rgb,
     };
 

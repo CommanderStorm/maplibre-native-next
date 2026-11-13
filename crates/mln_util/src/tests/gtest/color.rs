@@ -316,3 +316,74 @@ fn stringify() {
     assert_eq!("rgba(128,0,0,1)", Color::new(0.5, 0.0, 0.0, 1.0).stringify());
     assert_eq!("rgba(0,0,0,0)", Color::new(0.0, 0.0, 0.0, 0.0).stringify());
 }
+
+// oklab(), which the C++ core doesn't read yet. Expected values come from
+// Björn Ottosson's Oklab matrices in f64, premultiplied.
+#[test]
+fn oklab() {
+    for input in [
+        "oklab(0.6 0.1 0.1)",
+        "oklab(60% 25% 25%)",
+        "OKLAB(0.6 0.1 0.1)",
+        "oklab(6e-1 1E-1 +1e-1)",
+        "oklab(+.6 .1 .1 / 1)",
+        " oklab(  0.6\t0.1\n0.1  /  100% ) ",
+    ] {
+        let color = Color::parse(input).unwrap_or_else(|| panic!("{input}: no value"));
+        expect_color(color, 0.764_660_1, 0.376_467_9, 0.181_543_6, 1.0);
+    }
+    expect_color(Color::parse("oklab(0.6 -25% 25%)").unwrap(), 0.348_346_4, 0.572_927_5, 0.198_555_5, 1.0);
+    expect_color(Color::parse("oklab(0.6 0.1 0.1 / 0.5)").unwrap(), 0.382_330_1, 0.188_234, 0.090_771_79, 0.5);
+    expect_color(Color::parse("oklab(0.6 0.1 0.1 / 50%)").unwrap(), 0.382_330_1, 0.188_234, 0.090_771_79, 0.5);
+}
+
+#[test]
+fn oklab_clamps_and_reads_none_as_zero() {
+    let darkest = Color::parse("oklab(0 0.1 0.1)").unwrap();
+    expect_color(darkest, 0.004_430_534, 0.007_690_759, 0.0, 1.0);
+    expect_color(Color::parse("oklab(-0.1 0.1 0.1)").unwrap(), darkest.r, darkest.g, darkest.b, darkest.a);
+    expect_color(Color::parse("oklab(none 0.1 0.1)").unwrap(), darkest.r, darkest.g, darkest.b, darkest.a);
+    expect_color(Color::parse("oklab(0.6 none none)").unwrap(), 0.502_110_7, 0.502_110_7, 0.502_110_7, 1.0);
+    expect_color(Color::parse("oklab(0.6 0.1 0.1 / none)").unwrap(), 0.0, 0.0, 0.0, 0.0);
+    expect_color(Color::parse("oklab(0.6 0.1 0.1 / 1.5)").unwrap(), 0.764_660_1, 0.376_467_9, 0.181_543_6, 1.0);
+    expect_color(Color::parse("oklab(0.6 0.1 0.1 / -1)").unwrap(), 0.0, 0.0, 0.0, 0.0);
+    // Deviation: CSS Color 4 clamps the lightness to 1, which makes this
+    // (1, 0.891_362_5, 0.989_415_5). The csscolorparser crate clamps it only
+    // to 0, so this clips to white.
+    expect_color(Color::parse("oklab(1.2 0.1 0)").unwrap(), 1.0, 1.0, 1.0, 1.0);
+}
+
+#[test]
+fn oklab_outside_srgb_is_clipped() {
+    expect_color(Color::parse("oklab(0.7 -0.3 0.3)").unwrap(), 0.0, 0.791_169_2, 0.0, 1.0);
+    expect_color(Color::parse("oklab(0.4 0.1 -0.3)").unwrap(), 0.346_025_5, 0.0, 0.884_697_9, 1.0);
+}
+
+#[test]
+fn oklab_invalid() {
+    for input in ["oklab()", "oklab(0.6 0.1)", "oklab(0.6 0.1 0.1 /)", "oklab(a b c)"] {
+        assert!(Color::parse(input).is_none(), "{input}");
+    }
+}
+
+#[test]
+fn oklab_interpolate() {
+    let blue = Color::blue();
+    let green = Color::parse("rgba(0,255,0,.6)").unwrap();
+    expect_color(Color::interpolate(&blue, &green, 0.25, ColorSpace::Oklab), 0.0, 0.335_304_9, 0.834_029_5, 0.9);
+    expect_color(Color::interpolate(&blue, &green, 0.5, ColorSpace::Oklab), 0.0, 0.455_239_2, 0.657_417_2, 0.8);
+    expect_color(Color::interpolate(&blue, &green, 0.75, ColorSpace::Oklab), 0.0, 0.536_822_3, 0.453_310_4, 0.7);
+}
+
+#[test]
+fn oklab_premultiplies_lightness_a_and_b() {
+    let stop = Color::parse("oklab(0.7 -0.1 0.05)").unwrap();
+    expect_color(
+        Color::interpolate(&Color::default(), &stop, 0.5, ColorSpace::Oklab),
+        0.193_221_1,
+        0.350_317_6,
+        0.245_964_5,
+        0.5,
+    );
+    expect_color(Color::interpolate(&Color::default(), &Color::default(), 0.5, ColorSpace::Oklab), 0.0, 0.0, 0.0, 0.0);
+}

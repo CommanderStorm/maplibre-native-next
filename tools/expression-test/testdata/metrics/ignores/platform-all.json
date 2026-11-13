@@ -8,6 +8,8 @@
     "expression-tests/legacy/categorical/string": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
     "expression-tests/legacy/exponential/color-hcl": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
     "expression-tests/legacy/exponential/color-lab": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
+    "expression-tests/legacy/exponential/color-oklab": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
+    "expression-tests/legacy/exponential/composite-color-oklab": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
     "expression-tests/legacy/identity/color-default": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
     "expression-tests/legacy/identity/enum-default": "https://github.com/mapbox/mapbox-gl-native/issues/12747",
     "expression-tests/legacy/interval/composite": "https://github.com/mapbox/mapbox-gl-native/issues/12747",

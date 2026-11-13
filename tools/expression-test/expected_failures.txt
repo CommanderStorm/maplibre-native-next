@@ -22,3 +22,21 @@ to-color/oklch#40
 to-color/oklch#42
 to-color/oklch#48
 to-color/oklch#50
+#
+# to-color/oklab: the same differences, for oklab():
+# - #26 oklab(1.2 0.1 0), #27 oklab(120% 0.1 0): it doesn't clamp the
+#   lightness to 1, so these clip to white.
+# - #35 oklab(0.6 0 1e110), #36 oklab(0.6 -1e300 -1e300): a and b overflow
+#   f32, so they don't parse.
+# - #37 oklab(0.6, 0.1, 0.1): it reads commas.
+# - #39 oklab(0.6 0.1 0.1 0.5): it reads an alpha without its slash.
+# - #44 oklab (0.6 0.1 0.1): it reads a space before the parenthesis.
+# - #46 oklab(1. 0.1 0.1): it reads a number that ends in a dot.
+to-color/oklab#26
+to-color/oklab#27
+to-color/oklab#35
+to-color/oklab#36
+to-color/oklab#37
+to-color/oklab#39
+to-color/oklab#44
+to-color/oklab#46

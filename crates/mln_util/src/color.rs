@@ -14,13 +14,14 @@ use crate::string::to_string_double;
 
 /// The space a color interpolation runs in: RGB blends the premultiplied
 /// channels, LAB and HCL the straight color, OKLCH the premultiplied lightness
-/// and chroma.
+/// and chroma, and OKLAB the premultiplied lightness, a and b.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorSpace {
     Rgb,
     Lab,
     Hcl,
     Oklch,
+    Oklab,
 }
 
 /// Stores a premultiplied color, with all four channels ranging from 0..1.
@@ -129,6 +130,21 @@ fn interpolate_oklch(from: &Color, to: &Color, t: f32) -> Color {
     ))
 }
 
+// https://drafts.csswg.org/css-color-4/#interpolation: lightness, a and b
+// are premultiplied, and there is no hue to fix up.
+fn interpolate_oklab(from: &Color, to: &Color, t: f32) -> Color {
+    let [l1, a1, b1, alpha1] = straight(from).to_oklaba();
+    let [l2, a2, b2, alpha2] = straight(to).to_oklaba();
+    let alpha = lerp(alpha1, alpha2, t);
+    let divisor = if alpha == 0.0 { 1.0 } else { alpha };
+    premultiplied(&CssColor::from_oklaba(
+        lerp(l1 * alpha1, l2 * alpha2, t) / divisor,
+        lerp(a1 * alpha1, a2 * alpha2, t) / divisor,
+        lerp(b1 * alpha1, b2 * alpha2, t) / divisor,
+        alpha,
+    ))
+}
+
 impl Color {
     #[must_use]
     pub fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
@@ -179,8 +195,8 @@ impl Color {
         let text = s.trim();
         if let Some(open) = text.find('(') {
             let name = text[..open].trim_end();
-            // oklch() keeps its float channels, clipped to sRGB.
-            if name.eq_ignore_ascii_case("oklch") {
+            // oklch() and oklab() keep their float channels, clipped to sRGB.
+            if name.eq_ignore_ascii_case("oklch") || name.eq_ignore_ascii_case("oklab") {
                 return csscolorparser::parse(text).ok().map(|color| premultiplied(&color));
             }
             if !["rgb", "rgba", "hsl", "hsla"].iter().any(|function| name.eq_ignore_ascii_case(function)) {
@@ -205,6 +221,7 @@ impl Color {
             ColorSpace::Lab => premultiplied(&straight(from).interpolate_lab(&straight(to), t as f32)),
             ColorSpace::Hcl => interpolate_hcl(from, to, t as f32),
             ColorSpace::Oklch => interpolate_oklch(from, to, t as f32),
+            ColorSpace::Oklab => interpolate_oklab(from, to, t as f32),
         }
     }
 
