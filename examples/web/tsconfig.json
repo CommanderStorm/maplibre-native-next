@@ -21,6 +21,7 @@
     "web/debug.ts",
     "web/styles.ts",
     "web/protocol.ts",
+    "web/wheel.ts",
     "vite.config.ts"
   ]
 }
