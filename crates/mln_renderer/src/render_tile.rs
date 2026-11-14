@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use geometry::Point;
+use glam::Vec2;
 use mln_gfx::UploadPass;
 use mln_map_types::{MapDebugOptions, ProjectionData, TransformState};
 use mln_style::layer;
@@ -20,14 +20,6 @@ use crate::render_layer::LayerRenderData;
 use crate::render_source::SourcePrepareParameters;
 use crate::tile::tile::Tile;
 use crate::tile_render_data::{TileAtlasTextures, TileRenderData};
-
-fn rotate(a: Point<f32>, angle: f32) -> Point<f32> {
-    let cos = angle.cos();
-    let sin = angle.sin();
-    let x = cos * a.x - sin * a.y;
-    let y = sin * a.x + cos * a.y;
-    Point::new(x, y)
-}
 
 pub(crate) struct RenderTile {
     pub(crate) id: UnwrappedTileID,
@@ -71,7 +63,7 @@ impl RenderTile {
             return [0.0, 0.0];
         }
         let angle = if anchor == TranslateAnchorType::Viewport { (-state.get_bearing()) as f32 } else { 0.0f32 };
-        let translate = rotate(Point::new(translation[0], translation[1]), angle);
+        let translate = Vec2::from_angle(angle).rotate(Vec2::new(translation[0], translation[1]));
         let zoom = state.get_zoom() as f32;
         [id.pixels_to_tile_units(translate.x, zoom), id.pixels_to_tile_units(translate.y, zoom)]
     }

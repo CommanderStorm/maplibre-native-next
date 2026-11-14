@@ -1,10 +1,10 @@
-use geometry::Point;
+use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
 /// `Anchor`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Anchor {
-    pub(crate) point: Point<f32>,
+    pub(crate) point: Vec2,
     pub(crate) angle: f32,
     pub(crate) segment: Option<usize>,
 }
@@ -12,7 +12,7 @@ pub(crate) struct Anchor {
 impl Anchor {
     #[must_use]
     pub(crate) fn new(x: f32, y: f32, angle: f32, segment: Option<usize>) -> Self {
-        Anchor { point: Point::new(x, y), angle, segment }
+        Anchor { point: Vec2::new(x, y), angle, segment }
     }
 }
 

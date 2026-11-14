@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use geometry::Point;
+use glam::Vec2;
 use mln_gfx::context::Context;
 use mln_gfx::shaders::layer_ubo::ProjectionUBO;
 use mln_gfx::shaders::shader_defines::ID_PROJECTION_UBO;
@@ -243,11 +244,7 @@ pub(crate) fn translate_vtx_matrix(
         0.0
     };
 
-    // util::rotate(Point<float>, float): computed in float.
-    let cos = angle.cos();
-    let sin = angle.sin();
-    let translate =
-        Point::new(cos * translation[0] - sin * translation[1], sin * translation[0] + cos * translation[1]);
+    let translate = Vec2::from_angle(angle).rotate(Vec2::new(translation[0], translation[1]));
 
     if in_viewport_pixel_units {
         matrix::translate(&mut vtx_matrix, tile_matrix, f64::from(translate.x), f64::from(translate.y), 0.0);

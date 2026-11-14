@@ -4,6 +4,7 @@
 // `IndexedSubfeature`, so it is cloned.
 
 use geometry::Point;
+use glam::Vec2;
 use mln_math::deg2radf;
 use mln_style_types::SymbolPlacementType;
 use mln_text::PositionedIcon;
@@ -22,14 +23,6 @@ fn dist(a: GeometryCoordinate, b: GeometryCoordinate) -> f32 {
     let dx = f64::from(i32::from(b.x) - i32::from(a.x));
     let dy = f64::from(i32::from(b.y) - i32::from(a.y));
     (dx * dx + dy * dy).sqrt() as f32
-}
-
-fn util_rotate(a: Point<f32>, angle: f32) -> Point<f32> {
-    let cos = angle.cos();
-    let sin = angle.sin();
-    let x = cos * a.x - sin * a.y;
-    let y = sin * a.x + cos * a.y;
-    Point::new(x, y)
 }
 
 /// The first smallest of `values` by `<`, as `std::min` picks it.
@@ -131,7 +124,7 @@ impl ProjectedCollisionBox {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CollisionBox {
     /// the box is centered around the anchor point
-    pub(crate) anchor: Point<f32>,
+    pub(crate) anchor: Vec2,
 
     // the offset of the box from the label's anchor point.
     // TODO: might be needed for #13526
@@ -148,14 +141,7 @@ pub(crate) struct CollisionBox {
 
 impl CollisionBox {
     #[must_use]
-    pub(crate) fn new(
-        anchor: Point<f32>,
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
-        signed_distance_from_anchor: f32,
-    ) -> Self {
+    pub(crate) fn new(anchor: Vec2, x1: f32, y1: f32, x2: f32, y2: f32, signed_distance_from_anchor: f32) -> Self {
         CollisionBox { anchor, x1, y1, x2, y2, signed_distance_from_anchor }
     }
 }
@@ -306,10 +292,11 @@ impl CollisionFeature {
             // Doesn't account for icon-text-fit
             let rotate_radians = deg2radf(rotate);
 
-            let tl = util_rotate(Point::new(x1, y1), rotate_radians);
-            let tr = util_rotate(Point::new(x2, y1), rotate_radians);
-            let bl = util_rotate(Point::new(x1, y2), rotate_radians);
-            let br = util_rotate(Point::new(x2, y2), rotate_radians);
+            let rotation = Vec2::from_angle(rotate_radians);
+            let tl = rotation.rotate(Vec2::new(x1, y1));
+            let tr = rotation.rotate(Vec2::new(x2, y1));
+            let bl = rotation.rotate(Vec2::new(x1, y2));
+            let br = rotation.rotate(Vec2::new(x2, y2));
 
             // Collision features require an "on-axis" geometry,
             // so take the envelope of the rotated geometry
@@ -421,7 +408,7 @@ impl CollisionFeature {
             let p0 = &line[index];
             let p1 = &line[index + 1];
 
-            let box_anchor = Point::new(
+            let box_anchor = Vec2::new(
                 f32::from(p0.x) + segment_box_distance / segment_length * (i32::from(p1.x) - i32::from(p0.x)) as f32,
                 f32::from(p0.y) + segment_box_distance / segment_length * (i32::from(p1.y) - i32::from(p0.y)) as f32,
             );
