@@ -1,8 +1,6 @@
 use std::sync::{Arc, Weak};
 
 use feature::{Feature, PropertyMap, Value};
-use geojson::GeoJSON;
-use geometry::Geometry;
 use mln_actor::scheduler::{self, SchedulerPtr};
 use mln_expression::expression::evaluate_accumulated;
 use mln_style_types::SourceType;
@@ -110,16 +108,16 @@ fn evaluate_feature(f: &Feature<f64>, expression: &Arc<dyn Expression>, accumula
     Value::default()
 }
 
+/// The data of `features`. Only the features of a feature collection
+/// (`collection`) cluster.
 pub(super) fn create(
-    geojson: &GeoJSON,
+    features: Features,
+    collection: bool,
     sequenced_scheduler: SchedulerPtr,
     options: &Arc<GeoJSONOptions>,
 ) -> Result<Arc<dyn GeoJSONData>, Error> {
     let scale: f64 = f64::from(constants::EXTENT) / constants::TILE_SIZE_D;
-    if options.cluster
-        && let GeoJSON::FeatureCollection(features) = geojson
-        && !features.is_empty()
-    {
+    if options.cluster && collection && !features.is_empty() {
         let mut cluster_options = supercluster::Options {
             max_zoom: options.cluster_max_zoom,
             extent: constants::EXTENT as u16,
@@ -138,8 +136,7 @@ pub(super) fn create(
                 return ret;
             }
             for (key, (map_expression, _)) in &map_options.cluster_properties {
-                let mut feature = Feature::new(Geometry::Empty);
-                feature.properties = properties.clone();
+                let feature = Feature { properties: properties.clone(), ..Feature::default() };
                 ret.insert(key.clone(), evaluate_feature(&feature, map_expression, None));
             }
             ret
@@ -150,8 +147,7 @@ pub(super) fn create(
                 if !to_fill.contains_key(key) {
                     continue;
                 }
-                let mut feature = Feature::new(Geometry::Empty);
-                feature.properties = to_fill.clone();
+                let feature = Feature { properties: to_fill.clone(), ..Feature::default() };
                 // `toReturn[p.first]` default-constructs a missing entry.
                 let accumulated = to_return.entry(key.clone()).or_default().clone();
                 let value = evaluate_feature(&feature, reduce_expression, Some(&accumulated));
@@ -173,7 +169,7 @@ pub(super) fn create(
         ..Default::default()
     };
     Ok(Arc::new(GeoJSONVTData {
-        impl_: Arc::new(Mutex::new(geojson_vt::GeoJSONVT::from_geojson(geojson, vt_options))),
+        impl_: Arc::new(Mutex::new(geojson_vt::GeoJSONVT::new(&features, vt_options))),
         sequenced_scheduler,
     }))
 }

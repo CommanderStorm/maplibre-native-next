@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-use geojson::GeoJSON;
+use geojson::{GeoJson, GeometryValue};
 use mln_actor::scheduler;
 use mln_style::image::Impl as StyleImage;
 use mln_style::source::{Source, same_source, set_volatile};
@@ -286,7 +286,7 @@ struct GeoJsonUpdate {
     /// resolves when the data is installed or when something replaced the
     /// source's data first.
     building: Option<(u64, Resolver<Applied>)>,
-    waiting: Option<(GeoJSON, Resolver<Applied>)>,
+    waiting: Option<(GeoJson, Resolver<Applied>)>,
 }
 
 /// The GeoJSON sources whose new data is still being built, by source ID.
@@ -452,56 +452,43 @@ fn layer_info(layer: &dyn mln_style::Layer) -> LayerInfo {
 }
 
 /// Parses GeoJSON text, on the runtime's thread.
-fn parse_geojson(json: &str) -> Result<GeoJSON, Error> {
-    let document: serde_json::Value = serde_json::from_str(json)
-        .map_err(|error| Error::invalid_argument(format!("GeoJSON data is not valid JSON: {error}")))?;
-    let mut error = mln_conversion::Error::default();
-    mln_conversion::to_geojson(&mln_conversion::Convertible::from(&document), &mut error)
-        .ok_or_else(|| Error::invalid_argument(format!("GeoJSON data is invalid: {}", error.message)))
-}
-
-fn geometry_name(geometry: &geometry::Geometry<f64>) -> &'static str {
-    match geometry {
-        geometry::Geometry::Empty => "empty",
-        geometry::Geometry::Point(_) => "point",
-        geometry::Geometry::MultiPoint(_) => "multi-point",
-        geometry::Geometry::LineString(_) => "line string",
-        geometry::Geometry::MultiLineString(_) => "multi-line string",
-        geometry::Geometry::Polygon(_) => "polygon",
-        geometry::Geometry::MultiPolygon(_) => "multi-polygon",
-        geometry::Geometry::GeometryCollection(_) => "geometry collection",
-    }
+fn parse_geojson(json: &str) -> Result<GeoJson, Error> {
+    serde_json::from_str(json).map_err(|error| {
+        let what = if error.is_data() { "invalid" } else { "not valid JSON" };
+        Error::invalid_argument(format!("GeoJSON data is {what}: {error}"))
+    })
 }
 
 /// Clustering reads a feature collection of points, so a clustered source
 /// refuses other data up front, naming what it found. An empty collection
 /// holds nothing to cluster.
-fn check_clusterable(geojson: &GeoJSON) -> Result<(), Error> {
+fn check_clusterable(geojson: &GeoJson) -> Result<(), Error> {
     let features = match geojson {
-        GeoJSON::FeatureCollection(features) => features,
+        GeoJson::FeatureCollection(collection) => &collection.features,
         other => {
-            let found = if matches!(other, GeoJSON::Feature(_)) { "a single feature" } else { "a bare geometry" };
+            let found = if matches!(other, GeoJson::Feature(_)) { "a single feature" } else { "a bare geometry" };
             return Err(Error::invalid_argument(format!(
                 "clustered GeoJSON data requires a feature collection; the data is {found}"
             )));
         }
     };
-    match features.iter().position(|feature| !matches!(feature.geometry, geometry::Geometry::Point(_))) {
+    let point = |feature: &geojson::Feature| matches!(&feature.geometry, Some(g) if matches!(g.value, GeometryValue::Point { .. }));
+    match features.iter().position(|feature| !point(feature)) {
         None => Ok(()),
         Some(index) => Err(Error::invalid_argument(format!(
             "clustered GeoJSON data requires point geometry on every feature; feature {index} has {} geometry",
-            geometry_name(&features[index].geometry)
+            features[index].geometry.as_ref().map_or("no", |g| g.value.type_name())
         ))),
     }
 }
 
 /// The features a custom geometry tile draws: its core draws only a feature
 /// collection, so a lone feature or geometry becomes one.
-fn feature_collection(geojson: GeoJSON) -> GeoJSON {
+fn feature_collection(geojson: GeoJson) -> GeoJson {
     match geojson {
-        GeoJSON::FeatureCollection(_) => geojson,
-        GeoJSON::Feature(feature) => GeoJSON::FeatureCollection(vec![feature]),
-        GeoJSON::Geometry(geometry) => GeoJSON::FeatureCollection(vec![feature::Feature::new(geometry)]),
+        GeoJson::FeatureCollection(_) => geojson,
+        GeoJson::Feature(feature) => GeoJson::from(vec![feature]),
+        GeoJson::Geometry(geometry) => GeoJson::from(vec![geojson::Feature::from(geometry)]),
     }
 }
 
@@ -1070,7 +1057,7 @@ fn queue_geojson(
         Err(error) => return Err((error, resolver)),
     };
     if source.is_update_synchronous() {
-        return match source.data_builder().build(&geojson) {
+        return match source.data_builder().build(geojson) {
             Ok(data) => {
                 source.set_geojson_data(Some(data));
                 Ok(Some(resolver))
@@ -1098,7 +1085,7 @@ fn start_geojson(
     update: &mut GeoJsonUpdate,
     map_id: MapId,
     source_id: String,
-    geojson: GeoJSON,
+    geojson: GeoJson,
     resolver: Resolver<Applied>,
     run_loop: mln_actor::RunLoopHandle,
 ) {
@@ -1111,7 +1098,7 @@ fn start_geojson(
     let generation = update.source.data_generation();
     let next = run_loop.clone();
     scheduler::get_background().schedule(Box::new(move || {
-        let data = builder.build(&geojson);
+        let data = builder.build(geojson);
         post(&run_loop, move |core, outbox| {
             install_geojson(core, map_id, &source_id, (build, generation), data, next, outbox);
         });

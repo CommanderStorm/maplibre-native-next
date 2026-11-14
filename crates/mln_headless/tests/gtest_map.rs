@@ -12,7 +12,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use feature::Value;
-use geojson::{Feature, GeoJSON, Geometry, Point};
+use geo_types::{LineString, Point};
+use geojson::{GeoJson, Geometry};
 use mln_actor::{RunLoop, Timer};
 use mln_gfx::shaders::shader_source::BuiltIn;
 use mln_gfx::{BackendScope, ScopeType};
@@ -247,14 +248,15 @@ fn lat_lngs_to_camera_with_bearing_and_pitch_min_max() {
 /// A geometry fits as its points do, wherever they sit in it.
 #[test]
 fn geometry_to_camera() {
-    use mln_util::geometry::{Geometry as G, Point as P};
+    use geo_types::{Geometry as G, GeometryCollection, MultiPoint, Polygon};
     let test = MapTest::new();
-    let points: Vec<P<f64>> = lat_lngs().iter().map(|ll| P::new(ll.longitude(), ll.latitude())).collect();
-    let geometry = G::GeometryCollection(vec![
-        G::Point(points[0]),
-        G::Polygon(vec![vec![points[1], points[2], points[1]]]),
-        G::Empty,
-    ]);
+    let points: LineString<f64> = lat_lngs().iter().map(|ll| (ll.longitude(), ll.latitude())).collect();
+    let empty = G::GeometryCollection(GeometryCollection(Vec::new()));
+    let geometry = G::GeometryCollection(GeometryCollection(vec![
+        G::Point(points.0[0].into()),
+        G::Polygon(Polygon::new(LineString(vec![points.0[1], points.0[2], points.0[1]]), vec![])),
+        empty.clone(),
+    ]));
 
     let expected = test.map().camera_for_lat_lngs(&lat_lngs(), &EdgeInsets::default(), Some(23.0), Some(20.0)).unwrap();
     let fitted = test.map().camera_for_geometry(&geometry, &EdgeInsets::default(), Some(23.0), Some(20.0)).unwrap();
@@ -269,9 +271,9 @@ fn geometry_to_camera() {
     assert_double_eq(fitted.zoom.unwrap(), expected.zoom.unwrap());
 
     // No points: the camera as cameraForLatLngs leaves it, unset.
-    assert!(test.map().camera_for_geometry(&G::Empty, &EdgeInsets::default(), None, None).unwrap().zoom.is_none());
+    assert!(test.map().camera_for_geometry(&empty, &EdgeInsets::default(), None, None).unwrap().zoom.is_none());
     // A point with no LatLng.
-    let bad = G::MultiPoint(vec![P::new(0.0, 0.0), P::new(0.0, 91.0)]);
+    let bad = G::MultiPoint(MultiPoint(vec![Point::new(0.0, 0.0), Point::new(0.0, 91.0)]));
     assert!(test.map().camera_for_geometry(&bad, &EdgeInsets::default(), None, None).is_err());
 }
 
@@ -1554,7 +1556,7 @@ fn source_changes_reach_the_observer() {
         let mut map = test.map();
         let style = map.style_mut();
         let source = style.get_source("points").unwrap().downcast_ref::<GeoJSONSource>().unwrap();
-        source.set_geojson(&GeoJSON::Geometry(Geometry::Point(Point::new(1.0, 1.0)))).unwrap();
+        source.set_geojson(GeoJson::from(Geometry::new_point([1.0, 1.0]))).unwrap();
         assert!(changed.borrow().is_empty());
     }
     assert_eq!(changed.take(), ["points"]);
@@ -2119,7 +2121,7 @@ fn counted_custom_source(requested_tiles: &Arc<AtomicI32>, prefetch_zoom_delta: 
         Arc::new(move |tile_id: &CanonicalTileID| {
             requested_tiles.fetch_add(1, Ordering::SeqCst);
             if let Some(handle) = handle.get() {
-                handle.set_tile_data(*tile_id, GeoJSON::default());
+                handle.set_tile_data(*tile_id, GeoJson::from(Vec::<geojson::Feature>::new()));
             }
         })
     };
@@ -2909,7 +2911,7 @@ fn stencil_overflow() {
         let handle = Arc::clone(&handle);
         Arc::new(move |tile_id: &CanonicalTileID| {
             if let Some(handle) = handle.get() {
-                handle.set_tile_data(*tile_id, GeoJSON::default());
+                handle.set_tile_data(*tile_id, GeoJson::from(Vec::<geojson::Feature>::new()));
             }
         })
     };
@@ -3656,12 +3658,10 @@ fn line_layer_depth_distribution() {
         let y = (bounds.north() - bounds.south()) * 0.95 / f64::from(LAYER_COUNT) * f64::from(index + 1) / 2.0;
         let x = (bounds.east() - bounds.west()) * 0.95 / f64::from(LAYER_COUNT) * f64::from(index + 1) / 2.0;
 
-        let geo = vec![Point::new(-x, y), Point::new(x, y), Point::new(x, -y), Point::new(-x, -y), Point::new(-x, y)];
-
-        let features = vec![Feature::new(Geometry::LineString(geo))];
+        let geo = Geometry::new_line_string([[-x, y], [x, y], [x, -y], [-x, -y], [-x, y]]);
 
         let source = GeoJSONSource::with_default_options(format!("GeoJSONSource_{index}"));
-        source.set_geojson(&GeoJSON::FeatureCollection(features)).unwrap();
+        source.set_geojson(GeoJson::from(vec![geojson::Feature::from(geo)])).unwrap();
 
         source
     };
@@ -3733,7 +3733,7 @@ fn add_geojson_symbol(test: &MapTest, index: usize, longitude: f64, synchronous:
     let source_id = format!("point-{index}");
     let options = GeoJSONOptions { synchronous_update: synchronous, ..GeoJSONOptions::default() };
     let source = GeoJSONSource::new(source_id.clone(), Arc::new(options));
-    source.set_geojson(&GeoJSON::Geometry(Geometry::Point(Point::new(longitude, 0.0)))).unwrap();
+    source.set_geojson(GeoJson::from(Geometry::new_point([longitude, 0.0]))).unwrap();
     test.map().style_mut().add_source(Box::new(source)).unwrap();
 
     let text = if with_text { "New place" } else { "" };

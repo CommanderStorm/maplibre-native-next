@@ -31,6 +31,7 @@ gl = ["mln_runtime/gl", "dep:mln_gl"]
 
 [dependencies]
 feature.workspace = true
+geo-types.workspace = true
 geojson.workspace = true
 mln_conversion.workspace = true
 mln_expression.workspace = true

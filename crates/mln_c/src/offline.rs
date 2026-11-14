@@ -2,12 +2,13 @@
 //! their downloads, and the events that a download reports.
 
 use ::mln_runtime::{EventMask, Offline};
+use geo_types::Geometry;
 use mln_storage::offline::{
     OfflineGeometryRegionDefinition, OfflineRegion, OfflineRegionDefinition, OfflineRegionDownloadState,
     OfflineRegionStatus, OfflineTilePyramidRegionDefinition,
 };
 use mln_util::geo::LatLngBounds;
-use mln_util::geometry::{Geometry, for_each_point};
+use mln_util::geometry::for_each_point;
 
 use crate::buffer::LentText;
 use crate::completion::{self, CompletionValue, Generations, PendingCompletion};
@@ -21,7 +22,7 @@ use crate::generated::types::{
     mln_offline_region_info, mln_offline_region_status, mln_offline_tile_pyramid_region_definition, mln_runtime,
     mln_runtime_event_flags, mln_status,
 };
-use crate::{abi, buffer, geo, parse_thread, runtime};
+use crate::{abi, buffer, geo, runtime};
 
 abi::versioned!(mln_offline_region_definition);
 
@@ -57,7 +58,7 @@ impl LentRegion {
                 northeast: geo::from_lat_lng(pyramid.bounds.northeast()),
             }),
             OfflineRegionDefinition::Geometry(shaped) => {
-                Shape::Geometry(LentText::new(&geojson::stringify_geometry(&shaped.geometry)))
+                Shape::Geometry(LentText::new(&geojson::Geometry::new((&shaped.geometry).into()).to_string()))
             }
         };
         LentRegion {
@@ -210,22 +211,13 @@ fn geometry(json: &str) -> Result<Geometry<f64>, Error> {
     if json.is_empty() {
         return Err(Error::invalid_argument("geometry must not be empty"));
     }
-    let json = json.to_owned();
-    parse_thread::run(move || {
-        let document: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|error| Error::invalid_argument(format!("geometry is not valid JSON: {error}")))?;
-        let geometry = match geojson::convert(&document) {
-            Ok(geojson::GeoJSON::Geometry(geometry)) => geometry,
-            Ok(_) => return Err(Error::invalid_argument("geometry must contain one GeoJSON Geometry")),
-            Err(error) => return Err(Error::invalid_argument(format!("geometry is invalid: {}", error.message()))),
-        };
-        let mut points = 0usize;
-        for_each_point(&geometry, &mut |_| points += 1);
-        if points == 0 {
-            return Err(Error::invalid_argument("offline region geometry must contain at least one coordinate"));
-        }
-        Ok(geometry)
-    })?
+    let geometry = geo::geometry(json, "geometry")?;
+    let mut points = 0usize;
+    for_each_point(&geometry, &mut |_| points += 1);
+    if points == 0 {
+        return Err(Error::invalid_argument("offline region geometry must contain at least one coordinate"));
+    }
+    Ok(geometry)
 }
 
 /// The definition that a caller's `mln_offline_region_definition` gives.
@@ -613,7 +605,7 @@ mod tests {
     #[test]
     fn a_geometry_is_one_geojson_geometry_with_a_coordinate() {
         assert!(message(&shaped("not json")).starts_with("geometry is not valid JSON"));
-        assert!(message(&shaped(r#"{"type":"Feature"}"#)).starts_with("geometry is invalid"));
+        assert!(message(&shaped(r#"{"type":"Point"}"#)).starts_with("geometry is invalid"));
         let feature = r#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}"#;
         assert_eq!(message(&shaped(feature)), "geometry must contain one GeoJSON Geometry");
         assert_eq!(

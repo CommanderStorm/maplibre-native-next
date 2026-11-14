@@ -19,10 +19,12 @@ doctest = false
 
 [dependencies]
 feature.workspace = true
-geojson.workspace = true
+geo-traits.workspace = true
+geo-types.workspace = true
 geometry.workspace = true
 
 [dev-dependencies]
+geojson.workspace = true
 serde_json.workspace = true
 
 [lints]

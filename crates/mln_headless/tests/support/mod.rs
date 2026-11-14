@@ -141,7 +141,7 @@ pub(crate) fn answer_with(
     let handle = Arc::clone(handle);
     Arc::new(move |tile_id: &CanonicalTileID| {
         if let Some(handle) = handle.get() {
-            handle.set_tile_data(*tile_id, geojson::GeoJSON::FeatureCollection(features(tile_id)));
+            handle.set_tile_data(*tile_id, geojson::GeoJson::from(features(tile_id)));
         }
     })
 }
