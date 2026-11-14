@@ -98,7 +98,7 @@ impl<T: CollectionElement + ?Sized> CollectionBase<T> {
 
     #[must_use]
     pub(crate) fn index(&self, id: &str) -> usize {
-        self.wrappers.iter().position(|e| e.get_id() == id).unwrap_or(self.wrappers.len())
+        self.wrappers.iter().position(|e| T::impl_id(&e.base_impl()) == id).unwrap_or(self.wrappers.len())
     }
 
     fn add_at(&mut self, wrapper_index: usize, impl_index: usize, wrapper: Box<T>) -> &mut T {

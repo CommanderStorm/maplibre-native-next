@@ -12,7 +12,7 @@ use mln_util::image::PremultipliedImage;
 use mln_util::size::Size;
 
 use crate::latency::{set_tile_latency, take_tile_requests};
-use crate::meter::{Meter, live_heap_mib, ms};
+use crate::meter::{Meter, live_heap_mib, ms, process_cpu};
 use crate::scene::{
     BASEMAP_SIZE, BASEMAP_ZOOM, CJK_SIZE, CJK_STYLE, CJK_ZOOM, Mode, REAL_WORLD, REAL_WORLD_SIZE, REFRESH, Scene,
     basemap_center, basemap_mlt_style, basemap_north_west, basemap_point, basemap_south_east, basemap_style,
@@ -132,6 +132,7 @@ pub fn all() -> Vec<Case> {
         let name = format!("Load/Style/{}", view.name);
         cases.push(Case::new(name, move |cx| load_style(cx, &view)));
     }
+    cases.push(Case::new("Style/Replace600", style_replace));
     cases.push(Case::new("Load/Concurrent", load_concurrent));
     cases.push(Case::new("Load/GlyphCache/Private", |cx| load_glyph_cache(cx, false)));
     cases.push(Case::new("Load/GlyphCache/Shared", |cx| load_glyph_cache(cx, true)));
@@ -899,5 +900,62 @@ fn load_jump(cx: &Context, cold: bool) -> Metrics {
     }
     let mut metrics = meter.finish();
     metrics.other("frames", median(&frames));
+    metrics
+}
+
+/// A style of `layers` circle layers over 100 GeoJSON points, each layer
+/// filtered to the points whose id is its index modulo `layers`, as
+/// maplibre-compose's style benchmarks build one: `variant` sets the
+/// background's color, all that differs between the two.
+fn partitioned_style(layers: usize, variant: usize) -> String {
+    let features: Vec<String> = (0..100)
+        .map(|i| {
+            let (x, y) = (f64::from(i % 10) * 0.01, f64::from(i / 10) * 0.01);
+            format!(
+                r#"{{"type":"Feature","id":{i},"properties":{{}},"geometry":{{"type":"Point","coordinates":[{x},{y}]}}}}"#
+            )
+        })
+        .collect();
+    let data_layers: Vec<String> = (0..layers)
+        .map(|i| {
+            format!(
+                r##"{{"id":"workload-{i}","type":"circle","source":"data","filter":["==",["%",["number",["id"]],{layers}],{i}],"paint":{{"circle-color":"#e0457b","circle-radius":["interpolate",["linear"],["zoom"],0,2,12,5,20,9]}}}}"##
+            )
+        })
+        .collect();
+    let background = if variant == 0 { "#202020" } else { "#303030" };
+    format!(
+        r#"{{"version":8,"transition":{{"duration":0,"delay":0}},"sources":{{"data":{{"type":"geojson","data":{{"type":"FeatureCollection","features":[{}]}}}}}},"layers":[{{"id":"background","type":"background","paint":{{"background-color":"{background}"}}}},{}]}}"#,
+        features.join(","),
+        data_layers.join(",")
+    )
+}
+
+/// Replacing a style of 600 layers with its other variant, to the new
+/// style's first complete still, as maplibre-compose's style-publication
+/// case replaces one through maplibre-native-ffi. `load_json_cpu_ms` is the
+/// part `load_json` takes before the map renders.
+fn style_replace(cx: &Context) -> Metrics {
+    let styles = [partitioned_style(600, 0), partitioned_style(600, 1)];
+    let center = LatLng::new(0.045, 0.045).expect("a center");
+    let mut scene = Scene::new(Size::new(512, 512), Mode::Still);
+    scene.jump(center, 12.0);
+    scene.load_json(&styles[0]);
+    scene.render_still();
+    let mut meter = Meter::new();
+    let mut load_json = Vec::new();
+    for i in 0..cx.iterations(20) {
+        meter.start();
+        let cpu = process_cpu();
+        scene.load_json(&styles[(i + 1) % 2]);
+        load_json.push(ms(process_cpu().checked_sub(cpu).unwrap_or_default()));
+        scene.render_still();
+        meter.stop();
+    }
+    if let Some(dir) = &cx.frames {
+        write_frame(dir, "Style/Replace600", &scene.render_still());
+    }
+    let mut metrics = meter.finish();
+    metrics.lead("load_json_cpu_ms", median(&load_json));
     metrics
 }

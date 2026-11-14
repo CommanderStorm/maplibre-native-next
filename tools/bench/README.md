@@ -46,6 +46,7 @@ mise run bench:compare main         # this checkout, uncommitted changes include
 | `Frame/AddImages`                                   | from adding 50 icons to a settled basemap, five on each refresh, until it stops asking for frames; a symbol layer over 20 points draws five of them, which its tile asked for before they were added, and nothing draws the rest                        |
 | `Load/Concurrent`                                   | 16 renderers on threads of their own, each from loading a real-world style on a new map to its first complete still through `HeadlessFrontend::render`, as the render tests' workers draw; the GPU devices are set up before                            |
 | `Load/GlyphCache/Private`, `Load/GlyphCache/Shared` | `Load/Concurrent` over the render suite's `text-font/chinese` style (500 labels, about 2,500 CJK characters over 80 glyph ranges), each renderer with a glyph cache of its own, or all sharing one `GlyphCache`                                         |
+| `Style/Replace600`                                  | replacing a style of 600 circle layers over 100 GeoJSON points, each filtered by point id as maplibre-compose's style benchmarks build one, with its other variant, to the first complete still                                                         |
 | `Load/JumpWarm`, `Load/JumpCold`                    | a jump between two views that share no tile until a frame shows the new view complete, on the display's clock; cold drops the loaded tiles first                                                                                                        |
 
 In `Frame/Paced`, refreshes are absolute deadlines, and at each refresh with no
@@ -91,6 +92,8 @@ metrics only; `--verbose` also shows the others.
   heap and the GPU's vertex and index buffers live while the layers are hidden.
 - In `Frame/Extrusions`: **`gpu_mib`**, the GPU's vertex and index buffers live
   once the view is complete.
+- In `Style/Replace600`: **`load_json_cpu_ms`**, the CPU time that `load_json`
+  takes before the map renders.
 
 ## Comparing
 
