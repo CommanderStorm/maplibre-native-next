@@ -152,14 +152,14 @@ jobs:
       - name: Package
         run: mise run ci:package
 
-  # Formatting (`mise run fmt`, every Rust file, with the nightly rustfmt
-  # mise.toml pins), the panic and RefCell-borrow ratchet (`mise run ratchet`,
-  # tools/ratchet), clippy with the workspace's lints (Cargo.toml), the API
+  # The formatters and linters (`mise run check`, hk.pkl): formatting
+  # (dprint.jsonc), the workflows, the tasks' scripts, the panic and
+  # RefCell-borrow ratchet (tools/ratchet), clippy with the workspace's lints
+  # (Cargo.toml) and the packages' licenses against deny.toml. Then the API
   # docs as docs.rs builds them, and clippy on the libraries and examples/web
-  # for wasm32-unknown-unknown (`mise run check:wasm`, the browser build) and on
-  # the C library for 32-bit x86 Linux (`mise run check:32bit`), all with
-  # warnings as errors (mise.toml denies them in CI), and the packages'
-  # licenses against deny.toml (`mise run licenses`).
+  # for wasm32-unknown-unknown (`mise run check:wasm`, the browser build) and
+  # on the C library for 32-bit x86 Linux (`mise run check:32bit`), all with
+  # warnings as errors (mise.toml denies them in CI).
   lint:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -238,7 +238,9 @@ jobs:
 
       # The build and the native runner are the ones the step above made.
       - name: Check the WebGL2 module
-        run: node examples/web/check/check.mjs --backend webgl2 --out "$RUNNER_TEMP/web-check-webgl2"
+        run:
+          node examples/web/check/check.mjs --backend webgl2 --out
+          "$RUNNER_TEMP/web-check-webgl2"
 
       # The C library's browser package, one per backend, driven through its
       # raw C ABI from a Web Worker (crates/mln_c/web-check). The dev profile:
@@ -277,5 +279,7 @@ jobs:
         run: echo "$NEEDS"
 
       - name: Fail if a job failed or was cancelled
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        if:
+          contains(needs.*.result, 'failure') || contains(needs.*.result,
+          'cancelled')
         run: exit 1
