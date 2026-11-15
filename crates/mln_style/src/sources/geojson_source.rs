@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use feature::Feature;
 use geojson::GeoJson;
 use mln_actor::scheduler::{self, SchedulerPtr};
-use mln_storage::{AsyncRequest, FileSource, Resource, Response};
+use mln_storage::{FileSource, FileSourceExt, Request, Resource, Response};
 use mln_tile_id::CanonicalTileID;
 use mln_util::constants;
 use mln_util::logging::{Event, Log};
@@ -104,7 +104,13 @@ pub type Features = Vec<Feature<f64>>;
 pub trait GeoJSONData: Send + Sync {
     /// Gets the features of tile `id`. `callback` runs on the calling thread,
     /// either right away or later from its `RunLoop`.
-    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures)>, run_synchronously: bool);
+    fn get_tile(
+        &self,
+        id: &CanonicalTileID,
+        callback: Box<dyn FnOnce(TileFeatures)>,
+        run_synchronously: bool,
+        reply_to: &SchedulerPtr,
+    );
 
     // SuperclusterData: data that isn't clustered has no clusters, and
     // gives empty results. A cluster ID the data doesn't have fails with
@@ -146,7 +152,7 @@ impl GeoJSONDataBuilder {
 struct Inner {
     base: SourceBase,
     url: RefCell<Option<String>>,
-    req: RefCell<Option<Box<dyn AsyncRequest>>>,
+    req: RefCell<Option<Request>>,
     request_generation: Cell<u64>,
     sequenced_scheduler: SchedulerPtr,
     /// Keeps `Scheduler::GetBackground()` alive while a description loads
