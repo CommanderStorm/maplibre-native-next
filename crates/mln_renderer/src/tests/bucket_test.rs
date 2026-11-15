@@ -795,6 +795,31 @@ fn vertex_vector_that_is_not_released_keeps_its_data() {
     });
 }
 
+// A staged vector frees its CPU copy once its vertices are in a buffer, and
+// still takes updates of as many vertices, which the next upload writes over
+// the buffer's.
+#[test]
+fn staged_vertex_vector_frees_its_data_and_takes_updates() {
+    with_context(|context| {
+        let staged = Rc::new(VertexVector::from_vec_staged(vec![[1i16, 2], [3, 4]]));
+        let vertices: VertexVectorBasePtr = Rc::<VertexVector<[i16; 2]>>::clone(&staged);
+        let buffer = vertex_buffer(context, &vertices, false).expect("uploads").expect("a buffer");
+        assert!(!vertices.has_raw_data());
+        assert_eq!(vertices.get_raw_count(), 2);
+
+        assert!(!staged.update(&[[5, 6]]), "another count");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(staged.update(&[[5, 6], [7, 8]]));
+        assert_eq!(vertices.get_raw_data().len(), 8);
+        let before = context.rendering_stats().clone();
+        let rewritten = vertex_buffer(context, &vertices, false).expect("uploads").expect("a buffer");
+        assert!(Rc::ptr_eq(&buffer, &rewritten));
+        assert_eq!(context.rendering_stats().vertex_update_bytes, before.vertex_update_bytes + 8);
+        assert!(!vertices.has_raw_data());
+        assert_eq!(vertices.get_raw_count(), 2);
+    });
+}
+
 // Rewriting a vector's buffer counts as a buffer update, and makes no new
 // buffer.
 #[test]
