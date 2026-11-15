@@ -196,6 +196,7 @@ impl WebGpu {
             clear_stencil_with_pass: false,
             line_expressions: false,
             cpu_rasterizer: device.adapter_info().device_type == wgpu::DeviceType::Cpu,
+            max_line_width: 1.0,
         };
         WebGpu {
             index_table: IndexTable::new(device.device()),

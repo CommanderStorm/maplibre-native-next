@@ -107,6 +107,20 @@ impl RenderStaticData {
             .collect()
     }
 
+    /// The corners of the quad that an instanced fill outline draws a
+    /// segment with: x picks the segment's start (0) or end (1), y its side.
+    #[must_use]
+    pub(crate) fn fill_outline_vertices() -> Vec<[i16; 2]> {
+        vec![[0, 0], [0, 1], [1, 0], [1, 1]]
+    }
+
+    /// A segment that draws `instance_count` fill outline segments, as
+    /// quads of `fill_outline_vertices` and `quad_triangle_indices`.
+    #[must_use]
+    pub(crate) fn fill_outline_segment(instance_count: usize) -> SegmentBase {
+        SegmentBase { instance_count, ..SegmentBase::with_lengths(0, 0, 4, 6) }
+    }
+
     #[must_use]
     pub(crate) fn tile_triangle_segments() -> Vec<SegmentBase> {
         vec![SegmentBase::with_lengths(0, 0, 4, 6)]
