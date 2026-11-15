@@ -2,6 +2,8 @@ use mln_gfx::gpu::conformance::{
     clip_mask_and_background, custom_layers, depth_only, foreign_ids, imported_textures, instanced_walls,
     invalid_calls, readbacks, topologies, transparent_replace, vertex_layouts, wall_quads,
 };
+use mln_gfx::gpu::{Gpu, TextureDesc, TextureFormat, TextureRegion, TextureUsage};
+use mln_util::size::Size;
 
 use crate::{CustomLayerEncoder, CustomLayerPass, Device, WebGpu};
 
@@ -51,6 +53,32 @@ fn vertex_layouts_through_gpu() {
 fn readbacks_through_gpu() {
     let device = Device::new(None).expect("WebGPU device");
     readbacks(&mut WebGpu::new(&device)).expect("the readbacks");
+}
+
+// A frame read back each time copies into the buffer of the readback
+// before, which holds what the last copy wrote.
+#[test]
+fn a_readback_copies_into_the_last_ones_buffer() {
+    let device = Device::new(None).expect("WebGPU device");
+    let mut gpu = WebGpu::new(&device);
+    let size = Size { width: 4, height: 2 };
+    let texture = gpu
+        .create_texture(&TextureDesc {
+            label: "read back",
+            size,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsage { sampled: true, copy_src: true, ..TextureUsage::default() },
+        })
+        .expect("a texture");
+    let whole = TextureRegion::whole(size);
+    gpu.write_texture(texture, whole, &[1; 4 * 4 * 2]).expect("the first texels");
+    let first = gpu.read_texture(texture, whole).expect("a readback");
+    let buffer = gpu.readback_buffer(first).cloned();
+    assert_eq!(gpu.take_readback(first, true).expect("the texels"), Some(vec![1; 4 * 4 * 2]));
+    gpu.write_texture(texture, whole, &[2; 4 * 4 * 2]).expect("the second texels");
+    let second = gpu.read_texture(texture, whole).expect("a readback");
+    assert!(buffer.is_some() && gpu.readback_buffer(second) == buffer.as_ref(), "the first readback's buffer");
+    assert_eq!(gpu.take_readback(second, true).expect("the texels"), Some(vec![2; 4 * 4 * 2]));
 }
 
 #[test]

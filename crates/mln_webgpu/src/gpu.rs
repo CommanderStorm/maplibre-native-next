@@ -170,6 +170,9 @@ pub struct WebGpu {
     bindings: SlotMap<BindingsId, Bindings>,
     geometries: SlotMap<GeometryId, Geometry>,
     readbacks: SlotMap<ReadbackId, Readback>,
+    /// The buffer of the last readback taken, which the next readback of
+    /// its size copies into, as a frame read back each time is.
+    spare_readback: Option<wgpu::Buffer>,
     /// The commands recorded since the last flush.
     encoder: Option<wgpu::CommandEncoder>,
     pass: Option<OpenPass>,
@@ -214,6 +217,7 @@ impl WebGpu {
             bindings: SlotMap::with_key(),
             geometries: SlotMap::with_key(),
             readbacks: SlotMap::with_key(),
+            spare_readback: None,
             encoder: None,
             pass: None,
         }
@@ -231,6 +235,12 @@ impl WebGpu {
     #[cfg(test)]
     pub(crate) fn native_texture(&self, texture: TextureId) -> Option<&wgpu::Texture> {
         self.textures.get(texture).map(|texture| &texture.texture)
+    }
+
+    /// The wgpu buffer that `readback` copies into.
+    #[cfg(test)]
+    pub(crate) fn readback_buffer(&self, readback: ReadbackId) -> Option<&wgpu::Buffer> {
+        self.readbacks.get(readback).map(|readback| &readback.buffer)
     }
 
     /// Submits the commands since the last flush after the copies of the
@@ -977,7 +987,8 @@ impl Gpu for WebGpu {
         Ok(())
     }
 
-    /// Copies into a buffer that is mapped once the copy is done.
+    /// Copies into a buffer that is mapped once the copy is done: the last
+    /// readback's where it's as big, else a new one.
     fn read_texture(&mut self, texture: TextureId, region: TextureRegion) -> Result<ReadbackId, GpuError> {
         if self.pass.is_some() {
             return Err(Self::open_pass("a readback"));
@@ -987,14 +998,18 @@ impl Gpu for WebGpu {
         let texture = texture.ok_or(GpuError::UnknownId("texture"))?;
         let padded_bytes_per_row = readback.bytes_per_row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
         let (width, rows) = (region.size.width, region.size.height);
-        let buffer = self.validated("readback", |device| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("readback"),
-                size: (padded_bytes_per_row * rows as usize) as u64,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            })
-        })?;
+        let size = (padded_bytes_per_row * rows as usize) as u64;
+        let buffer = match self.spare_readback.take() {
+            Some(buffer) if buffer.size() == size => buffer,
+            _ => self.validated("readback", |device| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("readback"),
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            })?,
+        };
         let submission = self.submit(|encoder| {
             encoder.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
@@ -1070,6 +1085,7 @@ impl Gpu for WebGpu {
             }
         };
         buffer.unmap();
+        self.spare_readback = Some(buffer);
         Ok(Some(texels))
     }
 }

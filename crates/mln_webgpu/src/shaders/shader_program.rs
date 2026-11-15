@@ -45,7 +45,10 @@ pub(crate) struct BindingInfo {
 /// the middle of a frame expires the canvas texture. Errors there reach the
 /// device's uncaptured-error callback instead.
 pub(crate) fn validated<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, wgpu::Error> {
-    if device.adapter_info().backend == wgpu::Backend::BrowserWebGpu {
+    // The browser's WebGPU is wgpu's only backend in the browser build
+    // (Cargo.toml). Asking the device for its backend would copy the
+    // adapter's names on every call.
+    if cfg!(target_family = "wasm") {
         return Ok(create());
     }
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
