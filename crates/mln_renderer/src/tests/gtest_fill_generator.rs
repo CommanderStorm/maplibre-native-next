@@ -32,9 +32,11 @@ struct Buffers {
     fill_segments: Vec<SegmentBase>,
     basic_line_indexes: Vec<u16>,
     basic_line_segments: Vec<SegmentBase>,
+    outline_ends: Vec<FillLayoutVertex>,
 }
 
-/// Runs `generate_fill_and_outline_buffers` into fresh buffers.
+/// Runs `generate_fill_and_outline_buffers` into fresh buffers, and checks
+/// that the outline's instances draw the segments its lines do.
 fn generate(geometry: &GeometryCollection, canonical: &CanonicalTileID, granularity: u32) -> Buffers {
     let mut buffers = Buffers::default();
     generate_fill_and_outline_buffers(
@@ -44,11 +46,31 @@ fn generate(geometry: &GeometryCollection, canonical: &CanonicalTileID, granular
         &mut buffers.fill_segments,
         &mut buffers.basic_line_indexes,
         &mut buffers.basic_line_segments,
+        &mut buffers.outline_ends,
         canonical,
         granularity,
     )
     .expect("generateFillAndOutineBuffers");
+    let mut lines = drawn_lines(&buffers.fill_vertices, &buffers.basic_line_indexes, &buffers.basic_line_segments);
+    lines.retain(|line| line[..2] != line[2..]);
+    lines.sort_unstable();
+    assert_eq!(lines, instanced_lines(&buffers));
     buffers
+}
+
+/// The segments of the outline's instances, one from each vertex to its
+/// outline end, sorted.
+fn instanced_lines(buffers: &Buffers) -> Vec<Line> {
+    assert_eq!(buffers.fill_vertices.len(), buffers.outline_ends.len());
+    let mut lines: Vec<Line> = buffers
+        .fill_vertices
+        .iter()
+        .zip(&buffers.outline_ends)
+        .filter(|(vertex, end)| vertex != end)
+        .map(|(vertex, end)| [vertex.a1[0], vertex.a1[1], end.a1[0], end.a1[1]])
+        .collect();
+    lines.sort_unstable();
+    lines
 }
 
 // The triangles and lines a draw of every segment fetches, in order.
@@ -193,6 +215,25 @@ fn globe_subdivided_polygon_beyond_the_index_limit_keeps_its_granularity() {
     let lines = drawn_lines(&buffers.fill_vertices, &buffers.basic_line_indexes, &buffers.basic_line_segments);
     assert_eq!(expected_lines.len(), lines.len());
     assert_eq!(expected_lines, lines);
+}
+
+// On the globe the subdivided rings share their vertices, so a hole that
+// touches the outer ring at a vertex starts two segments of the outline
+// there: the instanced outline draws the second from a copy of the vertex.
+#[test]
+fn globe_outline_segments_from_a_shared_vertex() {
+    let polygon = GeometryCollection::from(vec![
+        vec![p(0, 0), p(0, 2000), p(0, 4000), p(4000, 4000), p(4000, 0), p(0, 0)],
+        vec![p(0, 2000), p(1000, 1000), p(1000, 3000), p(0, 2000)],
+    ]);
+    let buffers = generate(&polygon, &CanonicalTileID::new(3, 4, 4), 8);
+    let segments_from_the_shared_vertex = buffers
+        .fill_vertices
+        .iter()
+        .zip(&buffers.outline_ends)
+        .filter(|(vertex, end)| vertex.a1 == [0, 2000] && vertex != end)
+        .count();
+    assert_eq!(2, segments_from_the_shared_vertex);
 }
 
 /// Twice the area the triangles cover, counting overlaps twice.

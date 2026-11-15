@@ -20,6 +20,8 @@ pub enum BuiltIn {
     FillOutlineShader,
     FillPatternShader,
     FillOutlinePatternShader,
+    FillOutlineInstancedShader,
+    FillOutlinePatternInstancedShader,
     FillOutlineTriangulatedShader,
     FillExtrusionShader,
     FillExtrusionInstancedShader,

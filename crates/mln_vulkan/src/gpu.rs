@@ -660,6 +660,8 @@ impl VulkanGpu {
 
         let properties = backend.get_device_properties();
         let limits = &properties.limits;
+        let line_widths = (backend.get_device_features().wide_lines == vk::TRUE)
+            .then(|| (limits.line_width_range[0], limits.line_width_range[1]));
         let caps = Caps {
             buffer_offset_alignment: limits
                 .min_uniform_buffer_offset_alignment
@@ -671,9 +673,8 @@ impl VulkanGpu {
             clear_stencil_with_pass: true,
             line_expressions: false,
             cpu_rasterizer: properties.device_type == vk::PhysicalDeviceType::CPU,
+            max_line_width: line_widths.map_or(1.0, |(_, max)| max),
         };
-        let line_widths = (backend.get_device_features().wide_lines == vk::TRUE)
-            .then(|| (limits.line_width_range[0], limits.line_width_range[1]));
         let discard = Rc::new(Discard { next_serial: Cell::new(1), garbage: Cell::default() });
         // At least two, so that the CPU writes the next batch's while the
         // GPU runs the last.

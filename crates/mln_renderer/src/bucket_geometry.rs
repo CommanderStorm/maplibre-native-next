@@ -127,6 +127,15 @@ impl<T: bytemuck::Pod> GeometryVec<T> {
         Some(bytes)
     }
 
+    /// Frees the data, which nothing will draw. `len` still counts it.
+    pub(crate) fn discard(&self) {
+        #[cfg(target_family = "wasm")]
+        if self.take_host().is_some() {
+            return;
+        }
+        drop(self.take(false));
+    }
+
     /// A released gfx vector of the data, moved out unless `keep`.
     fn vertex_vector(&self, keep: bool) -> VertexVector<T> {
         #[cfg(target_family = "wasm")]
