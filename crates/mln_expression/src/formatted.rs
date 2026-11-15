@@ -1,6 +1,5 @@
 use std::fmt;
 
-use feature::{Value as MbglValue, ValueObject};
 use mln_conversion::{Convertible, Error};
 use mln_style_types::types::VerticalAlign;
 use mln_util::Color;
@@ -14,11 +13,6 @@ pub(crate) const K_FORMATTED_SECTION_VERTICAL_ALIGN: &str = "vertical-align";
 
 /// A list of font names.
 pub(crate) type FontStack = Vec<String>;
-
-#[must_use]
-pub(crate) fn font_stack_to_string(font_stack: &FontStack) -> String {
-    font_stack.join(",")
-}
 
 #[derive(Clone, Debug, Default, PartialEq, mln_wire::Wire)]
 pub struct FormattedSection {
@@ -49,29 +43,9 @@ impl FormattedSection {
     }
 }
 
-#[derive(Clone, Debug, Default, mln_wire::Wire)]
+#[derive(Clone, Debug, Default, PartialEq, mln_wire::Wire)]
 pub struct Formatted {
     pub sections: Vec<FormattedSection>,
-}
-
-impl PartialEq for Formatted {
-    fn eq(&self, other: &Self) -> bool {
-        if other.sections.len() != self.sections.len() {
-            return false;
-        }
-        for (this_section, other_section) in self.sections.iter().zip(&other.sections) {
-            if this_section.text != other_section.text
-                || this_section.image != other_section.image
-                || this_section.font_scale != other_section.font_scale
-                || this_section.font_stack != other_section.font_stack
-                || this_section.text_color != other_section.text_color
-                || this_section.vertical_align != other_section.vertical_align
-            {
-                return false;
-            }
-        }
-        true
-    }
 }
 
 /// The sections' text, concatenated.
@@ -93,32 +67,6 @@ impl Formatted {
     #[must_use]
     pub fn new(sections: Vec<FormattedSection>) -> Self {
         Formatted { sections }
-    }
-
-    pub fn to_object(&self) -> MbglValue {
-        let mut result = ValueObject::new();
-        let mut section_values = Vec::with_capacity(self.sections.len());
-        for section in &self.sections {
-            let mut serialized_section = ValueObject::new();
-            serialized_section.insert("text".to_owned(), MbglValue::String(section.text.clone()));
-            serialized_section
-                .insert("scale".to_owned(), section.font_scale.map_or(MbglValue::Null, MbglValue::Double));
-            serialized_section.insert(
-                "fontStack".to_owned(),
-                section.font_stack.as_ref().map_or(MbglValue::Null, |f| MbglValue::String(font_stack_to_string(f))),
-            );
-            serialized_section
-                .insert("textColor".to_owned(), section.text_color.as_ref().map_or(MbglValue::Null, Color::to_object));
-            serialized_section
-                .insert("image".to_owned(), section.image.as_ref().map_or(MbglValue::Null, Image::to_value));
-            if let Some(vertical_align) = section.vertical_align {
-                serialized_section
-                    .insert("verticalAlign".to_owned(), MbglValue::String(vertical_align.as_str().to_owned()));
-            }
-            section_values.push(MbglValue::Object(serialized_section));
-        }
-        result.insert("sections".to_owned(), MbglValue::Array(section_values));
-        MbglValue::Object(result)
     }
 
     #[must_use]
