@@ -2488,6 +2488,7 @@ dependencies = [
  "mln-rs-vulkan",
  "mlt-core",
  "parking_lot",
+ "proc-macro2",
  "serde",
  "serde_json",
  "tempfile",
