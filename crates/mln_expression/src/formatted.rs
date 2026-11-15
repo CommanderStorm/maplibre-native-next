@@ -2,6 +2,7 @@ use std::fmt;
 
 use feature::{Value as MbglValue, ValueObject};
 use mln_conversion::{Convertible, Error};
+use mln_style_types::types::VerticalAlign;
 use mln_util::Color;
 
 use crate::image::Image;
@@ -9,6 +10,7 @@ use crate::image::Image;
 pub(crate) const K_FORMATTED_SECTION_FONT_SCALE: &str = "font-scale";
 pub(crate) const K_FORMATTED_SECTION_TEXT_FONT: &str = "text-font";
 pub const K_FORMATTED_SECTION_TEXT_COLOR: &str = "text-color";
+pub(crate) const K_FORMATTED_SECTION_VERTICAL_ALIGN: &str = "vertical-align";
 
 /// A list of font names.
 pub(crate) type FontStack = Vec<String>;
@@ -25,6 +27,9 @@ pub struct FormattedSection {
     pub font_scale: Option<f64>,
     pub font_stack: Option<FontStack>,
     pub text_color: Option<Color>,
+    /// Where the text or image sits in its line. `None` is
+    /// [`VerticalAlign::Bottom`].
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 impl FormattedSection {
@@ -35,7 +40,7 @@ impl FormattedSection {
         font_stack: Option<FontStack>,
         text_color: Option<Color>,
     ) -> Self {
-        FormattedSection { text, image: None, font_scale, font_stack, text_color }
+        FormattedSection { text, image: None, font_scale, font_stack, text_color, vertical_align: None }
     }
 
     #[must_use]
@@ -60,6 +65,7 @@ impl PartialEq for Formatted {
                 || this_section.font_scale != other_section.font_scale
                 || this_section.font_stack != other_section.font_stack
                 || this_section.text_color != other_section.text_color
+                || this_section.vertical_align != other_section.vertical_align
             {
                 return false;
             }
@@ -105,6 +111,10 @@ impl Formatted {
                 .insert("textColor".to_owned(), section.text_color.as_ref().map_or(MbglValue::Null, Color::to_object));
             serialized_section
                 .insert("image".to_owned(), section.image.as_ref().map_or(MbglValue::Null, Image::to_value));
+            if let Some(vertical_align) = section.vertical_align {
+                serialized_section
+                    .insert("verticalAlign".to_owned(), MbglValue::String(vertical_align.as_str().to_owned()));
+            }
             section_values.push(MbglValue::Object(serialized_section));
         }
         result.insert("sections".to_owned(), MbglValue::Array(section_values));
