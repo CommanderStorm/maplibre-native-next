@@ -11,7 +11,7 @@ use mln_map_types::{
 };
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
-use mln_storage::{AsyncRequest, Callback, FileSource, Kind, RequestOrder, Resource, ResourceOptions, Response};
+use mln_storage::{FileSource, Kind, RequestOrder, Resource, Responder, Response};
 use mln_style::layer::{Layer, downcast_arc};
 use mln_style::layer_properties::LayerProperties;
 use mln_style::layers::circle_layer::Impl as CircleLayerImpl;
@@ -67,6 +67,7 @@ fn tile_parameters<'a>(
         debug_options: MapDebugOptions::NO_DEBUG,
         transform_state,
         file_source,
+        scheduler: scheduler::get_current(),
         mode: map_mode,
         prefetch_zoom_delta: 0,
         tile_lod_min_radius: 3.0,
@@ -363,36 +364,20 @@ struct PendingTileSource {
     cancelled: Arc<Mutex<Vec<(i8, i32, i32)>>>,
 }
 
-struct PendingTileRequest {
-    tile: (i8, i32, i32),
-    cancelled: Arc<Mutex<Vec<(i8, i32, i32)>>>,
-}
-
-impl AsyncRequest for PendingTileRequest {}
-
-impl Drop for PendingTileRequest {
-    fn drop(&mut self) {
-        self.cancelled.lock().push(self.tile);
-    }
-}
-
 impl FileSource for PendingTileSource {
-    fn request(&self, resource: &Resource, _callback: Callback) -> Box<dyn AsyncRequest> {
+    fn load(&self, resource: &Resource, responder: Responder) {
         let data = resource.tile_data.as_ref().expect("only tiles are requested");
         let tile = (data.z, data.x, data.y);
         self.requested.lock().push(tile);
         self.orders.lock().push(resource.order.clone());
-        Box::new(PendingTileRequest { tile, cancelled: Arc::clone(&self.cancelled) })
+        let cancelled = Arc::clone(&self.cancelled);
+        responder.on_cancel(move || cancelled.lock().push(tile));
+        // The request stays open until it's cancelled.
+        std::mem::forget(responder);
     }
 
     fn can_request(&self, _resource: &Resource) -> bool {
         true
-    }
-
-    fn set_resource_options(&self, _options: ResourceOptions) {}
-
-    fn get_resource_options(&self) -> ResourceOptions {
-        ResourceOptions::default()
     }
 }
 
