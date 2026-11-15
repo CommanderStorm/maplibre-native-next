@@ -17,6 +17,9 @@ pub struct VertexVectorBaseData {
     buffer: RefCell<Option<(BufferPtr, Instant)>>,
     dirty: Cell<bool>,
     released: Cell<bool>,
+    /// Whether the CPU copy goes once it is in a buffer although updates
+    /// still come (`VertexVector::from_vec_staged`).
+    staged: Cell<bool>,
     raw_freed: Cell<bool>,
     last_modified: Cell<Instant>,
 }
@@ -27,6 +30,7 @@ impl Default for VertexVectorBaseData {
             buffer: RefCell::new(None),
             dirty: Cell::new(true),
             released: Cell::new(false),
+            staged: Cell::new(false),
             raw_freed: Cell::new(false),
             last_modified: Cell::new(Instant::now()),
         }
@@ -60,11 +64,12 @@ pub trait VertexVectorBase: Any {
     }
     /// Attaches `buffer`, which holds the vertices of modification time
     /// `holds`. A released vector frees its CPU copy, since it won't be
-    /// modified or uploaded again.
+    /// modified or uploaded again, and so does a staged one, whose updates
+    /// bring a new copy.
     fn set_buffer(&self, buffer: BufferPtr, holds: Instant) {
         let base = self.vertex_vector_base();
         *base.buffer.borrow_mut() = Some((buffer, holds));
-        if base.released.get() {
+        if base.released.get() || base.staged.get() {
             self.free_raw_data();
         }
     }
@@ -139,6 +144,16 @@ impl<V: bytemuck::Pod> VertexVector<V> {
         result
     }
 
+    /// A vector holding `vertices` whose CPU copy only stages them for an
+    /// upload: it is freed once they are in a buffer, as a released
+    /// vector's is, and each [`update`](Self::update) stages new ones.
+    #[must_use]
+    pub fn from_vec_staged(vertices: Vec<V>) -> Self {
+        let result = Self::from_vec(vertices);
+        result.base.staged.set(true);
+        result
+    }
+
     /// Port-only: a released vector of the vertices in a JS array, which the
     /// upload writes to the GPU from there. Released, it frees them once
     /// it has a buffer, so no buffer is ever updated from them.
@@ -168,13 +183,14 @@ impl<V: bytemuck::Pod> VertexVector<V> {
     /// Replaces the vertices with a copy of `vertices`, as many as it
     /// holds, and marks them modified, so that the next upload writes them
     /// over its buffer's. Returns false, leaving the vector be, for one
-    /// that holds another count, or that freed its CPU copy or never changes
-    /// (`release`).
+    /// that holds another count or never changes (`release`).
     pub fn update(&self, vertices: &[V]) -> bool {
-        if self.base.released.get() || self.base.raw_freed.get() || self.elements() != vertices.len() {
+        if self.base.released.get() || self.elements() != vertices.len() {
             return false;
         }
         self.v.replace(vertices.to_vec());
+        self.freed_count.set(0);
+        self.base.raw_freed.set(false);
         self.base.dirty.set(true);
         self.update_modified(false);
         true

@@ -683,7 +683,8 @@ fn set_fade_opacity_attribute(buffer: &Buffer, attribs: &mut VertexAttributeArra
 /// Sets attribute `id` of `attribs` to read `vertices`, which placement
 /// updates, as `type_`: into the vertices it reads where they are as many,
 /// so that the upload writes them over their buffer, or else into vertices
-/// of their own.
+/// of their own. The bucket keeps `vertices`, so the attribute's copy only
+/// stages them for the upload.
 fn set_placed_attribute<V: bytemuck::Pod>(
     attribs: &mut VertexAttributeArray,
     id: usize,
@@ -702,7 +703,7 @@ fn set_placed_attribute<V: bytemuck::Pod>(
         return;
     }
     if let Some(attr) = attribs.set(id, -1, AttributeDataType::Invalid, 0) {
-        let shared = Rc::new(VertexVector::from_vec(vertices.to_vec()));
+        let shared = Rc::new(VertexVector::from_vec_staged(vertices.to_vec()));
         attr.set_shared_raw_data(Some(shared), 0, 0, size_of::<V>() as u32, type_);
     }
 }
