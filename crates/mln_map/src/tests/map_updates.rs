@@ -169,7 +169,7 @@ fn a_style_load_clears_the_feature_state_that_it_publishes() {
     map.set_feature_state("points", None, "1", hover(true));
     map.set_feature_state("other", None, "1", hover(true));
 
-    map.style_mut().load_json(
+    map.load_style_json(
         r#"{"version":8,"sources":{"points":{"type":"geojson","data":{"type":"FeatureCollection","features":[]}}},"layers":[]}"#,
     );
     map.process_events();
@@ -177,7 +177,7 @@ fn a_style_load_clears_the_feature_state_that_it_publishes() {
     assert!(map.get_feature_state("other", None, "1").is_empty());
     let update = reader.latest().expect("an update");
     assert!(update.parameters.feature_states.is_empty());
-    assert_eq!(1, update.parameters.sources.len());
+    assert_eq!(1, update.parameters.style.get_sources().len());
 
     // State set once the style has loaded stays.
     map.set_feature_state("points", None, "1", hover(true));
@@ -212,19 +212,19 @@ fn a_url_style_never_publishes_its_sources_with_the_old_feature_state() {
     let (waker_peek, waker_carried) = (Arc::clone(&peek), Arc::clone(&carried));
     reader.set_waker(Some(Arc::new(move || {
         if let Some(update) = waker_peek.lock().as_ref().and_then(UpdateReader::latest)
-            && !update.parameters.sources.is_empty()
+            && !update.parameters.style.get_sources().is_empty()
         {
             waker_carried.lock().push(!update.parameters.feature_states.is_empty());
         }
     })));
 
-    map.style_mut().load_url("http://style");
+    map.load_style_url("http://style");
     map.process_events();
     run_loop.run_once();
     map.renderer_events().push(RendererEvent::Invalidate);
     map.process_events();
     peek.lock().take();
-    assert!(map.style().is_loaded());
+    assert!(map.style_document_loaded());
     let carried = carried.lock().clone();
     assert!(!carried.is_empty(), "no update carried the style's source");
     assert!(!carried.contains(&true), "an update carried the old state: {carried:?}");
@@ -286,11 +286,11 @@ fn each_reader_wakes_until_it_drops() {
 
 /// Whether `update`'s only source updates synchronously.
 fn publishes_synchronous(update: &Update) -> bool {
-    update.parameters.sources[0].is_update_synchronous()
+    update.parameters.style.get_sources().iter().next().expect("a source").is_update_synchronous()
 }
 
 fn set_override_synchronous_update(map: &mut Map, value: bool) {
-    let source = map.style_mut().get_source("points").expect("the source");
+    let source = map.source("points").expect("the source");
     source.downcast_ref::<GeoJSONSource>().expect("a GeoJSON source").set_override_synchronous_update(value);
     map.process_events();
 }
@@ -301,7 +301,7 @@ fn the_synchronous_update_override_publishes_an_update() {
     let mut map = map(&run_loop);
     map.jump_to(&CameraOptions::default());
     let reader = map.update_reader();
-    map.style_mut().load_json(
+    map.load_style_json(
         r#"{"version":8,"sources":{"points":{"type":"geojson","synchronousUpdate":true,
             "data":{"type":"FeatureCollection","features":[]}}},"layers":[]}"#,
     );

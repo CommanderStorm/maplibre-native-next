@@ -38,17 +38,35 @@ pub struct PropertyInfo {
     /// Whether a section of a formatted value can override the paint
     /// property's value.
     pub(crate) overridable: bool,
+    /// Whether the property is `cross-faded-data-driven` in the spec: its
+    /// values (patterns and dash arrays) are dependencies of the layout, so
+    /// any change to one lays the layer out again.
+    pub(crate) cross_faded: bool,
 }
 
 impl PropertyInfo {
     #[must_use]
     pub(crate) const fn paint(name: &'static str) -> Self {
-        PropertyInfo { name, scope: PropertyScope::Paint, data_driven: false, tokens: false, overridable: false }
+        PropertyInfo {
+            name,
+            scope: PropertyScope::Paint,
+            data_driven: false,
+            tokens: false,
+            overridable: false,
+            cross_faded: false,
+        }
     }
 
     #[must_use]
     pub(crate) const fn layout(name: &'static str) -> Self {
-        PropertyInfo { name, scope: PropertyScope::Layout, data_driven: false, tokens: false, overridable: false }
+        PropertyInfo {
+            name,
+            scope: PropertyScope::Layout,
+            data_driven: false,
+            tokens: false,
+            overridable: false,
+            cross_faded: false,
+        }
     }
 
     #[must_use]
@@ -64,6 +82,11 @@ impl PropertyInfo {
     #[must_use]
     pub(crate) const fn overridable(self) -> Self {
         PropertyInfo { overridable: true, ..self }
+    }
+
+    #[must_use]
+    pub(crate) const fn cross_faded(self) -> Self {
+        PropertyInfo { cross_faded: true, ..self }
     }
 }
 
@@ -260,6 +283,19 @@ impl<S: Clone> OwnerSlot<S> for Arc<S> {
     }
 }
 
+/// An owner that isn't shared, changed in place.
+pub(crate) struct InPlace<'a, S>(pub(crate) &'a mut S);
+
+impl<S> OwnerSlot<S> for InPlace<'_, S> {
+    fn get(&self) -> Option<&S> {
+        Some(self.0)
+    }
+
+    fn make_mut(&mut self) -> Option<&mut S> {
+        Some(self.0)
+    }
+}
+
 /// Sets the property `name` (or a paint property's `<name>-transition`) of
 /// the owner in `owner` from a style JSON value, whose expressions parse
 /// against `functions`. The owner is copied only if the value changes it and
@@ -406,15 +442,10 @@ fn store<V>(slot: &mut V, change: &mut Option<V>) {
 }
 
 /// Whether going from `a` to `b` changes a property that tiles are laid out
-/// with: a layout property, a paint property named in `layout_paint`, a
-/// data-driven paint property while either value differs by feature, or,
-/// with `section_overrides`, an overridable paint property's constant.
-pub(crate) fn layout_properties_differ<S: Properties>(
-    a: &S,
-    b: &S,
-    layout_paint: &[&str],
-    section_overrides: bool,
-) -> bool {
+/// with: a layout property, a cross-faded paint property, a data-driven
+/// paint property while either value differs by feature, or, with
+/// `section_overrides`, an overridable paint property's constant.
+pub(crate) fn layout_properties_differ<S: Properties>(a: &S, b: &S, section_overrides: bool) -> bool {
     /// Which differences of a property's values count.
     #[derive(Clone, Copy)]
     struct Checks {
@@ -454,7 +485,7 @@ pub(crate) fn layout_properties_differ<S: Properties>(
 
     S::TABLE.properties.iter().enumerate().any(|(slot, info)| {
         let checks = Checks {
-            any: info.scope == PropertyScope::Layout || layout_paint.contains(&info.name),
+            any: info.scope == PropertyScope::Layout || info.cross_faded,
             data_driven: info.data_driven,
             constant: section_overrides && info.overridable,
         };

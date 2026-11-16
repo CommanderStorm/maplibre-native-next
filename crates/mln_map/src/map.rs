@@ -1,7 +1,7 @@
-// C++ `Map::Impl` observes the transform, the style and the renderer, and
-// reacts inside their callbacks. Here they push events into queues that the
-// map drains (`process_events`), so the map owns its style and transform and
-// lends them out as `&mut`.
+// The map owns its style versions, its transform, its style loader and its
+// sources' handles. An edit reacts in the call that makes it; the loader,
+// the sources and the renderer report through queues that the map drains in
+// `process_events`.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -17,15 +17,15 @@ use mln_renderer::{
     UpdateParameters, UpdateReader, UpdateSlot,
 };
 use mln_storage::{FileSource, Loader, ResourceOptions};
-use mln_style::observer::{Observer as StyleObserver, SourceObserver};
+use mln_style::conversion::{Convertible, convert_source};
 use mln_style::source::Source;
-use mln_style::sprite::Sprite;
-use mln_style::{Style, StyleLoadError, StyleRegistry};
+use mln_style::{Edit, Parts, Style, StyleRegistry};
 use mln_style_types::{ProjectionDefinition, ProjectionType};
 use mln_util::error::Error;
 use mln_util::event_queue::{EventQueue, Waker};
 use mln_util::geo::{EdgeInsets, LatLng, LatLngBounds, ScreenCoordinate, WrapMode};
 use mln_util::geometry::for_each_point;
+use mln_util::logging::{Event, Log};
 use mln_util::mat4::Mat4;
 use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
@@ -37,71 +37,9 @@ use crate::map_event::{MapEvent, RenderFrameStatus};
 use crate::map_options::{MapOptions, UnusedStyleImagePolicy};
 use crate::map_snapshot::{CameraBounds, FreeCamera, MapSnapshot, TileSettings};
 use crate::rendering_stats_view::{RenderingStatsView, RenderingStatsViewOptions};
+use crate::style_loader::{LoadEvent, StyleLoader};
+use crate::style_sources::{SourceEvent, StyleSources};
 use crate::transform::{CameraCommandId, CommandEnd, Transform, TransformEvent};
-
-/// A call of the style's observer.
-enum StyleEvent {
-    SourceChanged(String),
-    /// A source reloads its description, and isn't loaded meanwhile.
-    SourceDescriptionChanged,
-    Update,
-    StyleLoading,
-    StyleLoaded,
-    StyleError(StyleLoadError),
-    ResourceError(Error),
-    SpriteLoaded(Option<Sprite>),
-    SpriteError(Option<Sprite>, Error),
-    SpriteRequested(Option<Sprite>),
-    ProjectionChanged,
-    /// A response to the style's URL is waiting (see
-    /// `Observer::on_style_response`).
-    StyleResponse,
-}
-
-/// The style's observer: queues the calls for the map.
-struct StyleEvents(EventQueue<StyleEvent>);
-
-impl SourceObserver for StyleEvents {
-    fn on_source_changed(&self, source: &dyn Source) {
-        self.0.push(StyleEvent::SourceChanged(source.get_id()));
-    }
-    fn on_source_description_changed(&self, _source: &dyn Source) {
-        self.0.push(StyleEvent::SourceDescriptionChanged);
-    }
-}
-
-impl StyleObserver for StyleEvents {
-    fn on_style_loading(&self) {
-        self.0.push(StyleEvent::StyleLoading);
-    }
-    fn on_style_loaded(&self) {
-        self.0.push(StyleEvent::StyleLoaded);
-    }
-    fn on_update(&self) {
-        self.0.push(StyleEvent::Update);
-    }
-    fn on_style_error(&self, error: StyleLoadError) {
-        self.0.push(StyleEvent::StyleError(error));
-    }
-    fn on_resource_error(&self, error: Error) {
-        self.0.push(StyleEvent::ResourceError(error));
-    }
-    fn on_sprite_loaded(&self, sprite: Option<&Sprite>) {
-        self.0.push(StyleEvent::SpriteLoaded(sprite.cloned()));
-    }
-    fn on_sprite_error(&self, sprite: Option<&Sprite>, error: Error) {
-        self.0.push(StyleEvent::SpriteError(sprite.cloned(), error));
-    }
-    fn on_sprite_requested(&self, sprite: Option<&Sprite>) {
-        self.0.push(StyleEvent::SpriteRequested(sprite.cloned()));
-    }
-    fn on_style_response(&self) {
-        self.0.push(StyleEvent::StyleResponse);
-    }
-    fn on_projection_changed(&self) {
-        self.0.push(StyleEvent::ProjectionChanged);
-    }
-}
 
 /// Where a still image that [`Map::render_still`] asked for stands.
 #[derive(Debug, PartialEq)]
@@ -119,7 +57,9 @@ enum StillImage {
 /// The map publishes its state for a renderer in an update slot, which a
 /// renderer reads through [`update_reader`](Self::update_reader) and
 /// reports back to through [`renderer_events`](Self::renderer_events).
-/// The style and the renderer report to the map through queues, which the
+/// The style is an `Arc<Style>` version: [`edit_style`](Self::edit_style)
+/// makes the next one and publishes it at once. The style's loader, its
+/// sources and the renderer report to the map through queues, which the
 /// map handles only in [`process_events`](Self::process_events) (which
 /// [`drain_events`](Self::drain_events) calls): an owner calls it once per
 /// phase, before the commands that should see what was reported, such as a
@@ -142,7 +82,12 @@ pub struct Map {
     rendering_stats_view: Option<RenderingStatsView>,
     /// The stats of the last frame the renderer finished.
     last_frame_stats: Option<Arc<RenderingStats>>,
-    style: Style,
+    /// The current version of the style.
+    style: Arc<Style>,
+    /// Loads the style's document and sprites.
+    loader: StyleLoader,
+    /// The handles of the style's sources.
+    sources: StyleSources,
     /// The state of the sources' features, which each update carries.
     feature_state: FeatureStateStore,
 
@@ -159,7 +104,7 @@ pub struct Map {
     /// Grows with each change to the map's state.
     generation: u64,
 
-    style_events: EventQueue<StyleEvent>,
+    source_events: EventQueue<SourceEvent>,
     renderer_events: RendererEvents,
     /// What the map reports to its owner.
     events: EventQueue<MapEvent>,
@@ -219,11 +164,12 @@ impl Map {
         run_loop: &RunLoop,
     ) -> Result<Map, Error> {
         let events = EventQueue::new();
-        let style_events = EventQueue::new();
         let renderer_events = RendererEvents::new();
         let pixel_ratio = map_options.pixel_ratio;
-        let mut style = Style::with_file_source(registry, Some(Arc::clone(&file_source)), pixel_ratio, run_loop);
-        style.impl_.set_observer(Some(Rc::new(StyleEvents(style_events.clone()))));
+        let source_events = EventQueue::new();
+        let style = Arc::new(Style::new(registry));
+        let loader = StyleLoader::new(Some(Arc::clone(&file_source)), run_loop, pixel_ratio);
+        let sources = StyleSources::new(Some(Arc::clone(&file_source)), run_loop, source_events.clone());
         let mut transform = Transform::new(map_options.constrain_mode, map_options.viewport_mode);
         transform.set_north_orientation(map_options.north_orientation);
         let mut map = Map {
@@ -239,6 +185,8 @@ impl Map {
             rendering_stats_view: None,
             last_frame_stats: None,
             style,
+            loader,
+            sources,
             feature_state: FeatureStateStore::default(),
             camera_mutated: false,
             tile: TileSettings {
@@ -255,7 +203,7 @@ impl Map {
             still_image: StillImage::None,
             still_image_request_id: 0,
             generation: 1,
-            style_events,
+            source_events,
             renderer_events,
             events,
             command_ends: Vec::new(),
@@ -327,7 +275,8 @@ impl Map {
     /// [`process_events`](Self::process_events) on the map's thread, as by
     /// sending an `AsyncTask`.
     pub fn set_waker(&mut self, waker: Option<Waker>) {
-        self.style_events.set_waker(waker.clone());
+        self.loader.set_waker(waker.clone());
+        self.source_events.set_waker(waker.clone());
         self.renderer_events.set_waker(waker.clone());
         self.events.set_waker(waker);
     }
@@ -337,7 +286,7 @@ impl Map {
     /// counts once it is queued, though its waker may not have run yet.
     #[must_use]
     pub fn has_reports(&self) -> bool {
-        !self.style_events.is_empty() || !self.renderer_events.is_empty()
+        self.loader.has_replies() || !self.source_events.is_empty() || !self.renderer_events.is_empty()
     }
 
     /// Sets a waker as [`set_waker`](Self::set_waker) does, that runs only
@@ -346,7 +295,8 @@ impl Map {
     /// calls report don't run it, for an owner that drains them after each
     /// call.
     pub fn set_reports_waker(&mut self, waker: Option<Waker>) {
-        self.style_events.set_waker(waker.clone());
+        self.loader.set_waker(waker.clone());
+        self.source_events.set_waker(waker.clone());
         self.renderer_events.set_waker(waker);
         self.events.set_waker(None);
     }
@@ -357,21 +307,18 @@ impl Map {
     /// here, and its events wait for [`drain_events`](Self::drain_events).
     pub fn process_events(&mut self) {
         loop {
-            let style_events = self.style_events.take();
+            let replies = self.loader.take_replies();
+            let source_events = self.source_events.take();
             let renderer_events = self.renderer_events.take();
-            if style_events.is_empty() && renderer_events.is_empty() {
+            if replies.is_empty() && source_events.is_empty() && renderer_events.is_empty() {
                 break;
             }
-            // A style that loads takes every source's feature state with it.
-            // The updates that its parse asked for are in the same batch, and
-            // go out with the new style's sources, so the state goes first.
-            let state_cleared =
-                style_events.iter().any(|event| matches!(event, StyleEvent::StyleLoaded)) && self.feature_state.clear();
-            for event in style_events {
-                self.handle_style_event(event);
+            for reply in replies {
+                let events = self.loader.on_reply(self.style.registry(), reply);
+                self.handle_load_events(events);
             }
-            if state_cleared {
-                self.on_update();
+            for event in source_events {
+                self.handle_source_event(event);
             }
             for event in renderer_events {
                 self.handle_renderer_event(event);
@@ -417,39 +364,66 @@ impl Map {
         self.command_ends.drain(..)
     }
 
-    fn handle_style_event(&mut self, event: StyleEvent) {
+    fn handle_source_event(&mut self, event: SourceEvent) {
         match event {
-            StyleEvent::SourceChanged(source_id) => self.emit(MapEvent::SourceChanged { source_id }),
+            SourceEvent::Changed(source_id) => {
+                self.sources.sync(&mut self.style);
+                self.emit(MapEvent::SourceChanged { source_id });
+                self.on_update();
+            }
+            SourceEvent::Loaded => {
+                self.sources.sync(&mut self.style);
+                self.on_update();
+            }
             // The style is no longer loaded, which the map's state shows.
-            StyleEvent::SourceDescriptionChanged => self.changed(),
-            StyleEvent::Update => self.on_update(),
-            StyleEvent::StyleLoading => {
-                self.changed();
-                self.loading = true;
-                self.renderer_fully_loaded = false;
-                self.emit(MapEvent::LoadingStarted);
+            SourceEvent::DescriptionChanged => self.changed(),
+            SourceEvent::Error(source_id, error) => {
+                self.loader.set_error(error.clone());
+                Log::error(Event::Style, format!("Failed to load source {source_id}: {error}"));
+                self.on_resource_error(error);
             }
-            StyleEvent::StyleLoaded => {
-                self.changed();
-                if !self.camera_mutated {
-                    let camera = self.style.get_default_camera();
-                    self.jump_to(&camera);
+        }
+    }
+
+    /// Does what the loader's events ask, in their order.
+    fn handle_load_events(&mut self, events: Vec<LoadEvent>) {
+        for event in events {
+            match event {
+                LoadEvent::Loading => {
+                    self.changed();
+                    self.loading = true;
+                    self.renderer_fully_loaded = false;
+                    self.emit(MapEvent::LoadingStarted);
                 }
-                self.emit(MapEvent::StyleLoaded);
-            }
-            StyleEvent::StyleError(error) => self.emit(MapEvent::LoadingFailed(error)),
-            StyleEvent::ResourceError(error) => self.on_resource_error(error),
-            StyleEvent::SpriteLoaded(sprite) => self.emit(MapEvent::SpriteLoaded(sprite)),
-            StyleEvent::SpriteError(sprite, error) => self.emit(MapEvent::SpriteError(sprite, error)),
-            StyleEvent::SpriteRequested(sprite) => self.emit(MapEvent::SpriteRequested(sprite)),
-            StyleEvent::ProjectionChanged => self.share_projection_with_transform(),
-            // C++ parses inside the file source callback (the lambda in
-            // Style::Impl::loadURL). A style that parses here loads a batch
-            // later, and the updates in between carry its sources, so its
-            // feature state goes now.
-            StyleEvent::StyleResponse => {
-                if self.style.impl_.process_style_responses() {
+                LoadEvent::Parsed(parsed) => {
+                    self.style = Arc::new(parsed.style);
+                    self.sources.replace_all(parsed.sources);
+                    // A style that loads takes every source's feature state
+                    // with it.
                     self.feature_state.clear();
+                    self.share_projection_with_transform();
+                    self.on_update();
+                }
+                LoadEvent::Loaded => {
+                    self.changed();
+                    if !self.camera_mutated {
+                        let camera = self.style.get_default_camera();
+                        self.jump_to(&camera);
+                    }
+                    self.emit(MapEvent::StyleLoaded);
+                }
+                LoadEvent::Failed(error) => self.emit(MapEvent::LoadingFailed(error)),
+                LoadEvent::ResourceError(error) => self.on_resource_error(error),
+                LoadEvent::SpriteRequested(sprite) => self.emit(MapEvent::SpriteRequested(sprite)),
+                LoadEvent::SpriteImages(sprite, images) => {
+                    // The update this publishes is for *-pattern properties.
+                    let _ = self.apply_loaded(Edit::AddImages(images));
+                    self.emit(MapEvent::SpriteLoaded(sprite));
+                }
+                LoadEvent::SpriteFailed(sprite, error) => {
+                    // Unblocks the tiles that wait for the sprite.
+                    self.on_update();
+                    self.emit(MapEvent::SpriteError(sprite, error));
                 }
             }
         }
@@ -496,7 +470,7 @@ impl Map {
                 if self.unused_style_image_policy == UnusedStyleImagePolicy::Remove {
                     for id in ids {
                         if self.style.get_image(&id).is_some_and(|image| !image.keep_unused) {
-                            self.style.remove_image(&id);
+                            let _ = self.apply_loaded(Edit::RemoveImage(id));
                         }
                     }
                 }
@@ -535,8 +509,9 @@ impl Map {
             self.changed();
         }
 
-        if let Some(view) = self.rendering_stats_view.as_mut() {
-            view.update(&mut self.style, &self.run_loop, &stats);
+        if let Some(mut view) = self.rendering_stats_view.take() {
+            view.update(self, &stats);
+            self.rendering_stats_view = Some(view);
         }
 
         if self.mode == MapMode::Continuous {
@@ -579,6 +554,9 @@ impl Map {
         // Each update request comes from a change, so the generation grows
         // even in still mode, where no update goes out.
         self.changed();
+        // The style's records catch up with the sources, so that whatever
+        // reads the style next sees the sources as they are.
+        self.sources.sync(&mut self.style);
 
         // Don't load/render anything in still mode until explicitly requested.
         if self.mode != MapMode::Continuous && self.still_image != StillImage::Pending {
@@ -593,24 +571,15 @@ impl Map {
         let projection = self.projection_at(self.transform.get_zoom());
         self.transform.set_projection_definition(&projection);
 
-        let style_impl = &self.style.impl_;
         let params = UpdateParameters {
-            style_loaded: style_impl.is_loaded(),
+            style_loaded: self.style_loaded(),
             mode: self.mode,
             pixel_ratio: self.pixel_ratio,
             debug_options: self.debug_options,
             time_point,
             transform_state: self.transform.get_state().clone(),
-            glyph_url: style_impl.get_glyph_url().to_owned(),
-            font_faces: style_impl.get_font_faces(),
-            sprite_loaded: style_impl.are_sprites_loaded(),
-            transition_options: style_impl.get_transition_options(),
-            light: style_impl.get_light_impl(),
-            sky: style_impl.get_sky_impl(),
-            images: style_impl.get_image_impls(),
-            sources: style_impl.get_source_impls(),
-            layers: style_impl.get_layer_impls(),
-            global_state: Some(style_impl.get_global_state_shared()),
+            style: Arc::clone(&self.style),
+            sprite_loaded: self.loader.sprites_loaded(),
             feature_states: self.feature_state.shared(),
             file_source: self.file_source.clone(),
             prefetch_zoom_delta: self.tile.prefetch_zoom_delta,
@@ -627,7 +596,7 @@ impl Map {
             subdivision_granularity: if self.mode == MapMode::Tile {
                 SubdivisionGranularitySetting::none()
             } else {
-                style_impl.get_projection().impl_.get_subdivision_granularity()
+                self.style.get_projection().get_subdivision_granularity()
             },
         };
 
@@ -652,14 +621,14 @@ impl Map {
         if self.mode == MapMode::Tile {
             return ProjectionDefinition::new(ProjectionType::Mercator);
         }
-        self.style.impl_.get_projection().impl_.evaluate(zoom as f32)
+        self.style.get_projection().evaluate(zoom as f32)
     }
 
     /// Gives the transform the style's current projection, which constrains
     /// the target of an animation it starts. The style reports each change
     /// to its projection, and the map calls this then.
     fn share_projection_with_transform(&mut self) {
-        let projection = (self.mode != MapMode::Tile).then(|| Arc::clone(&self.style.impl_.get_projection().impl_));
+        let projection = (self.mode != MapMode::Tile).then(|| Arc::clone(self.style.get_projection()));
         self.transform.set_projection_for_zoom(Some(Rc::new(move |zoom: f64| match &projection {
             Some(projection) => projection.evaluate(zoom as f32),
             None => ProjectionDefinition::new(ProjectionType::Mercator),
@@ -681,8 +650,8 @@ impl Map {
         if self.still_image == StillImage::Pending {
             return Err(Error::invalid_state("Map is currently rendering an image"));
         }
-        if let Some(error) = self.style.impl_.get_last_error() {
-            return Err(error);
+        if let Some(error) = self.loader.last_error() {
+            return Err(error.clone());
         }
         self.still_image = StillImage::Pending;
         self.still_image_request_id += 1;
@@ -786,15 +755,195 @@ impl Map {
     // MARK: - Style
 
     /// The map's style.
-    pub fn style(&self) -> &Style {
+    pub fn style(&self) -> &Arc<Style> {
         &self.style
     }
 
-    /// The map's style, to change. The map handles what the changes report
-    /// at its next [`process_events`](Self::process_events).
-    pub fn style_mut(&mut self) -> &mut Style {
-        self.changed();
-        &mut self.style
+    /// Edits the style: `edit` changes the next version of it, and the map
+    /// publishes that version for the renderer if anything changed. A
+    /// version that `edit` left as it was stays the same `Arc`, so it
+    /// publishes nothing. Returns what `edit` returns, and keeps what it
+    /// changed before it failed.
+    pub fn edit_style<R, E>(&mut self, edit: impl FnOnce(&mut Style) -> Result<R, E>) -> Result<R, E> {
+        self.sources.sync(&mut self.style);
+        self.edit_synced_style(edit)
+    }
+
+    /// As [`edit_style`](Self::edit_style), without first catching the
+    /// style's source records up with the handles.
+    fn edit_synced_style<R, E>(&mut self, edit: impl FnOnce(&mut Style) -> Result<R, E>) -> Result<R, E> {
+        let before = Arc::clone(&self.style);
+        let result = edit(Arc::make_mut(&mut self.style));
+        if self.react_to_change(before) {
+            // A revalidated document no longer replaces the edited style.
+            self.loader.edited();
+        }
+        result
+    }
+
+    /// As [`edit_style`](Self::edit_style), but fails with
+    /// [`ErrorKind::InvalidState`](mln_util::ErrorKind) ("style is not
+    /// loaded") until a style document parsed, and from the start of each
+    /// [`load_style_url`](Self::load_style_url) until its document parses:
+    /// the parse replaces the whole style, so an edit made before it would
+    /// be lost.
+    pub fn edit_loaded_style<R>(&mut self, edit: impl FnOnce(&mut Style) -> Result<R, Error>) -> Result<R, Error> {
+        if !self.loader.document_loaded() {
+            return Err(Error::invalid_state("style is not loaded"));
+        }
+        self.edit_style(edit)
+    }
+
+    /// Whether a style document parsed, and no
+    /// [`load_style_url`](Self::load_style_url) began since.
+    #[must_use]
+    pub fn style_document_loaded(&self) -> bool {
+        self.loader.document_loaded()
+    }
+
+    /// Makes an edit that the map itself causes, such as a sprite's images,
+    /// which doesn't count as an edit of the loaded document.
+    pub(crate) fn apply_loaded(&mut self, edit: Edit) -> Result<(), Error> {
+        let before = Arc::clone(&self.style);
+        let result = Arc::make_mut(&mut self.style).apply(edit);
+        self.react_to_change(before);
+        result
+    }
+
+    /// Reacts to the change from `before` to the current version: keeps
+    /// `before` when nothing changed, and otherwise shares a new projection
+    /// with the transform and publishes an update. Returns whether anything
+    /// changed.
+    fn react_to_change(&mut self, before: Arc<Style>) -> bool {
+        let parts = Parts::between(&before, &self.style);
+        if parts.is_empty() {
+            self.style = before;
+            return false;
+        }
+        if parts.contains(Parts::PROJECTION) {
+            self.share_projection_with_transform();
+        }
+        self.on_update();
+        true
+    }
+
+    // MARK: - Sources
+
+    /// Adds `source` to the style, last, and starts loading its description.
+    /// Fails with [`ErrorKind::AlreadyExists`](mln_util::ErrorKind) if the
+    /// style has a source with its id.
+    pub fn add_source(&mut self, source: Box<dyn Source>) -> Result<(), Error> {
+        let (id, record) = self.sources.add(source)?;
+        let source = Some(record);
+        // The new handle's record goes in as the edit itself.
+        self.edit_synced_style(|style| style.apply(Edit::SetSourceImpl { id, source }))
+    }
+
+    /// Adds the [source](https://maplibre.org/maplibre-style-spec/sources/)
+    /// that `json` describes, with the ID `id`.
+    ///
+    /// Fails with [`ErrorKind::InvalidState`](mln_util::ErrorKind) while the
+    /// style isn't loaded, with `AlreadyExists` if the style has a source
+    /// named `id`, and with `InvalidArgument` if `json` isn't a valid source.
+    pub fn add_source_json(&mut self, id: &str, json: &str) -> Result<(), Error> {
+        if !self.loader.document_loaded() {
+            return Err(Error::invalid_state("style is not loaded"));
+        }
+        if self.sources.get(id).is_some() {
+            return Err(Error::already_exists(format!("source \"{id}\" already exists")));
+        }
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|error| Error::invalid_argument(format!("style source \"{id}\" is not valid JSON: {error}")))?;
+        let mut error = mln_style::conversion::Error::default();
+        let functions = Arc::clone(self.style.registry().functions());
+        let Some(source) = convert_source(&Convertible::from(&value), &mut error, id, &functions) else {
+            return Err(Error::invalid_argument(format!("style source \"{id}\": {}", error.message)));
+        };
+        self.add_source(source)
+    }
+
+    /// Removes the source `id` from the style and gives it back, unless a
+    /// layer uses it, which logs a warning.
+    pub fn remove_source(&mut self, id: &str) -> Option<Box<dyn Source>> {
+        if self.style.get_layers().any(|layer| layer.get_source_id() == id) {
+            Log::warning(Event::General, format!("Source '{id}' is in use, cannot remove"));
+            return None;
+        }
+        let source = self.sources.remove(id)?;
+        let _ = self.edit_style(|style| style.apply(Edit::SetSourceImpl { id: id.to_owned(), source: None }));
+        Some(source)
+    }
+
+    /// The handle of the style's source `id`.
+    #[must_use]
+    pub fn source(&self, id: &str) -> Option<&dyn Source> {
+        self.sources.get(id)
+    }
+
+    /// The handles of the style's sources, in the order they were added.
+    pub fn sources(&self) -> impl Iterator<Item = &dyn Source> {
+        self.sources.iter()
+    }
+
+    /// Loads the style document `json`, which replaces the style, and
+    /// cancels a URL load. A document that doesn't parse leaves the style
+    /// as it was and reports [`MapEvent::LoadingFailed`].
+    pub fn load_style_json(&mut self, json: &str) {
+        let events = self.loader.load_json(self.style.registry(), json);
+        self.handle_load_events(events);
+    }
+
+    /// Fetches the style document at `url`, which replaces the style when it
+    /// arrives and parses. The style stays meanwhile, but isn't loaded.
+    pub fn load_style_url(&mut self, url: &str) {
+        let events = self.loader.load_url(url);
+        self.handle_load_events(events);
+    }
+
+    /// The URL of the style document, or `None` for a style loaded from
+    /// JSON or none at all.
+    #[must_use]
+    pub fn style_url(&self) -> Option<&str> {
+        self.loader.url()
+    }
+
+    /// Sets the font faces that every font stack falls back to after the
+    /// style's own, for the style documents that load after this call.
+    ///
+    /// `json` is an array of font files, each an object with a `url` and an
+    /// optional `unicode-range`, as in a font face of a style's `font-faces`.
+    /// It fails with [`ErrorKind::InvalidArgument`](mln_util::ErrorKind) if
+    /// `json` isn't such an array. Without a font-face shaper, the map ignores
+    /// them, as it ignores a style's `font-faces`.
+    pub fn set_fallback_font_faces(&mut self, json: &str) -> Result<(), Error> {
+        let faces = mln_style::parser::parse_fallback_font_faces(json)?;
+        self.set_fallback_font_face_list(faces);
+        Ok(())
+    }
+
+    /// [`set_fallback_font_faces`](Self::set_fallback_font_faces) with faces
+    /// an app has made, such as `FontFace::fallback(url, ranges).with_data(bytes)`
+    /// for a font file it holds in memory.
+    pub fn set_fallback_font_face_list(&mut self, faces: mln_text::glyph::FontFaces) {
+        self.loader.set_fallback_font_faces(Some(Arc::new(faces)));
+    }
+
+    /// The last error of a sprite or a source of the style since its load
+    /// began, which fails still images.
+    #[must_use]
+    pub fn last_style_error(&self) -> Option<&Error> {
+        self.loader.last_error()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn style_loader(&self) -> &StyleLoader {
+        &self.loader
+    }
+
+    /// Whether the style document parsed, and its sprites and sources
+    /// loaded.
+    pub(crate) fn style_loaded(&self) -> bool {
+        self.loader.document_loaded() && self.loader.sprites_loaded() && self.sources.all_loaded()
     }
 
     // MARK: - Transitions
@@ -1112,7 +1261,8 @@ impl Map {
             return Ok(());
         }
         self.pixel_ratio = pixel_ratio;
-        self.style.impl_.set_pixel_ratio(pixel_ratio);
+        let events = self.loader.set_pixel_ratio(pixel_ratio);
+        self.handle_load_events(events);
         self.on_update();
         Ok(())
     }
@@ -1288,10 +1438,10 @@ impl Map {
                 return;
             }
             let view = RenderingStatsView::new(RenderingStatsViewOptions::default());
-            view.create(&mut self.style, &self.run_loop);
+            view.create(self);
             self.rendering_stats_view = Some(view);
         } else if let Some(view) = self.rendering_stats_view.take() {
-            view.destroy(&mut self.style);
+            view.destroy(self);
         }
     }
 
@@ -1348,15 +1498,15 @@ impl Map {
     }
 
     fn is_fully_loaded(&self) -> bool {
-        self.style.impl_.is_loaded() && self.renderer_fully_loaded
+        self.style_loaded() && self.renderer_fully_loaded
     }
 
     /// Logs the style's sources and their state.
     pub fn dump_debug_logs(&self) {
-        use mln_util::logging::{Event, Log};
         let rule = "-".repeat(80);
         Log::info(Event::General, &rule);
-        self.style.impl_.dump_debug_logs();
+        Log::info(Event::General, format!("styleURL: {}", self.loader.url().unwrap_or_default()));
+        self.sources.dump_debug_logs();
         Log::info(Event::General, &rule);
     }
 }
@@ -1417,8 +1567,8 @@ fn camera_for_lat_lngs_on_screen(
             transform.get_state().get_max_zoom(),
         );
     } else {
-        mln_util::logging::Log::error(
-            mln_util::logging::Event::General,
+        Log::error(
+            Event::General,
             "Unable to calculate appropriate zoom level for bounds. Vertical or horizontal padding is greater than \
              map's height or width.",
         );
@@ -1561,10 +1711,7 @@ fn camera_for_lat_lngs_on_globe(
         }
     }
     if !smallest.is_finite() || smallest == 0.0 {
-        mln_util::logging::Log::warning(
-            mln_util::logging::Event::General,
-            "Unable to fit the bounds on the globe; keeping the flat fit.",
-        );
+        Log::warning(Event::General, "Unable to fit the bounds on the globe; keeping the flat fit.");
         return Ok(fit);
     }
     Ok(CameraOptions {

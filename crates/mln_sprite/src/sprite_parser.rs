@@ -8,14 +8,16 @@
 use std::sync::Arc;
 
 use geometry::Point;
-use mln_image::decode_image;
+use mln_actor::scheduler::Respond;
+use mln_image::decoder;
+use mln_storage::Data;
 use mln_style_types::image::{Image, ImageContent, ImageStretches, Impl, TextFit};
 use mln_util::error::Error;
 use mln_util::image::PremultipliedImage;
 use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 use mln_util::string::to_string_double;
-use serde_json::Value as JSValue;
+use serde_json::{Map, Value as JSValue};
 
 /// Extracts an individual image from a spritesheet at the given location.
 /// Logs and returns `None` for invalid metrics or metadata.
@@ -95,189 +97,122 @@ pub(crate) fn create_style_image(
     }
 }
 
-/// The member `property` of `value`, if `value` is an object that has it.
-fn member<'a>(value: &'a JSValue, property: &str) -> Option<&'a JSValue> {
-    value.as_object().and_then(|object| object.get(property))
+fn warn(name: &str, message: std::fmt::Arguments<'_>) {
+    Log::warning(Event::Sprite, format!("Invalid sprite image '{name}': {message}"));
 }
 
-fn get_u_int16(value: &JSValue, property: &str, name: &str, def: u16) -> u16 {
-    if let Some(v) = member(value, property) {
-        // rapidjson `IsUint() && GetUint() <= 65535`.
-        match v.as_u64() {
-            Some(u) if u16::try_from(u).is_ok() => return u as u16,
-            _ => Log::warning(
-                Event::Sprite,
-                format!("Invalid sprite image '{name}': value of '{property}' must be an integer between 0 and 65535"),
-            ),
-        }
+/// The member `property` of the sprite entry `name`, as `read` takes it. A
+/// member that `read` rejects is logged as one that `must` hold something
+/// else, and treated as absent.
+fn member<'a, T>(
+    entry: &'a Map<String, JSValue>,
+    name: &str,
+    property: &str,
+    must: &str,
+    read: impl FnOnce(&'a JSValue) -> Option<T>,
+) -> Option<T> {
+    let value = read(entry.get(property)?);
+    if value.is_none() {
+        warn(name, format_args!("value of '{property}' must be {must}"));
     }
-
-    def
+    value
 }
 
-fn get_double(value: &JSValue, property: &str, name: &str, def: f64) -> f64 {
-    if let Some(v) = member(value, property) {
-        match v.as_f64() {
-            Some(d) => return d,
-            None => Log::warning(
-                Event::Sprite,
-                format!("Invalid sprite image '{name}': value of '{property}' must be a number"),
-            ),
-        }
-    }
-
-    def
+fn integer(entry: &Map<String, JSValue>, name: &str, property: &str) -> u16 {
+    member(entry, name, property, "an integer between 0 and 65535", |value| {
+        value.as_u64().and_then(|value| u16::try_from(value).ok())
+    })
+    .unwrap_or(0)
 }
 
-fn get_boolean(value: &JSValue, property: &str, name: &str, def: bool) -> bool {
-    if let Some(v) = member(value, property) {
-        match v.as_bool() {
-            Some(b) => return b,
-            None => Log::warning(
-                Event::Sprite,
-                format!("Invalid sprite image '{name}': value of '{property}' must be a boolean"),
-            ),
-        }
-    }
-
-    def
-}
-
-fn get_stretches(value: &JSValue, property: &str, name: &str) -> ImageStretches {
-    let mut stretches = ImageStretches::new();
-
-    if let Some(v) = member(value, property) {
-        if let Some(array) = v.as_array() {
-            for stretch in array {
-                match stretch.as_array() {
-                    Some(pair) if pair.len() == 2 && pair[0].is_number() && pair[1].is_number() => {
-                        // GetFloat() is static_cast<float>(GetDouble()).
-                        stretches
-                            .push((pair[0].as_f64().unwrap_or(0.0) as f32, pair[1].as_f64().unwrap_or(0.0) as f32));
-                    }
-                    _ => Log::warning(
-                        Event::Sprite,
-                        format!(
-                            "Invalid sprite image '{name}': members of '{property}' must be an array of two numbers"
-                        ),
-                    ),
-                }
+fn stretches(entry: &Map<String, JSValue>, name: &str, property: &str) -> ImageStretches {
+    let Some(pairs) = member(entry, name, property, "an array", JSValue::as_array) else {
+        return ImageStretches::new();
+    };
+    pairs
+        .iter()
+        .filter_map(|pair| {
+            let stretch = match pair.as_array().map(Vec::as_slice) {
+                Some([start, end]) => start.as_f64().zip(end.as_f64()),
+                _ => None,
+            };
+            if stretch.is_none() {
+                warn(name, format_args!("members of '{property}' must be an array of two numbers"));
             }
-        } else {
-            Log::warning(
-                Event::Sprite,
-                format!("Invalid sprite image '{name}': value of '{property}' must be an array"),
-            );
-        }
-    }
-
-    stretches
+            stretch.map(|(start, end)| (start as f32, end as f32))
+        })
+        .collect()
 }
 
-fn get_content(value: &JSValue, property: &str, name: &str) -> Option<ImageContent> {
-    if let Some(content) = member(value, property) {
-        match content.as_array() {
-            Some(c) if c.len() == 4 && c.iter().all(JSValue::is_number) => {
-                let f = |i: usize| c[i].as_f64().unwrap_or(0.0) as f32;
-                return Some(ImageContent { left: f(0), top: f(1), right: f(2), bottom: f(3) });
-            }
-            _ => Log::warning(
-                Event::Sprite,
-                format!("Invalid sprite image '{name}': value of '{property}' must be an array of four numbers"),
-            ),
-        }
-    }
-
-    None
+fn content(entry: &Map<String, JSValue>, name: &str, property: &str) -> Option<ImageContent> {
+    member(entry, name, property, "an array of four numbers", |value| {
+        let [left, top, right, bottom] = value.as_array()?.as_slice() else { return None };
+        let side = |value: &JSValue| value.as_f64().map(|value| value as f32);
+        Some(ImageContent { left: side(left)?, top: side(top)?, right: side(right)?, bottom: side(bottom)? })
+    })
 }
 
-fn parse_text_fit(value: &str) -> Option<TextFit> {
-    match value {
+fn text_fit(entry: &Map<String, JSValue>, name: &str, property: &str) -> Option<TextFit> {
+    let value = member(entry, name, property, "a string", JSValue::as_str)?;
+    let text_fit = match value {
         "stretchOrShrink" => Some(TextFit::StretchOrShrink),
         "stretchOnly" => Some(TextFit::StretchOnly),
         "proportional" => Some(TextFit::Proportional),
         _ => None,
+    };
+    if text_fit.is_none() {
+        warn(name, format_args!("value of '{property}' is an invalid value '{value}'"));
     }
+    text_fit
 }
 
-fn get_text_fit(value: &JSValue, property: &str, name: &str) -> Option<TextFit> {
-    if let Some(v) = member(value, property) {
-        if let Some(value_string) = v.as_str() {
-            let text_fit = parse_text_fit(value_string);
-            if text_fit.is_none() {
-                Log::warning(
-                    Event::Sprite,
-                    format!(
-                        "Invalid sprite image '{name}': value of '{property}' is an invalid value '{value_string}'"
-                    ),
-                );
-            }
-            return text_fit;
-        }
-        Log::warning(Event::Sprite, format!("Invalid sprite image '{name}': value of '{property}' must be a string"));
-    }
-
-    None
+/// Decodes `image` and cuts it into the images that `json`, a sprite index,
+/// lists, as [`parse_sprite`] does. Answers through `respond`, at once or,
+/// where the platform decodes images asynchronously (the browser), later.
+#[expect(clippy::needless_pass_by_value, reason = "a job owns its inputs, as one sent to another thread does")]
+pub fn load_sprite(id: String, image: Data, json: Data, respond: Respond<Result<Vec<Arc<Impl>>, Error>>) {
+    decoder::decode(&image, move |raster| respond(raster.and_then(|raster| parse_sprite(&id, &raster, &json))));
 }
 
-/// Parses an image and an associated JSON file and returns the sprite
-/// objects. Fails where C++ throws `std::runtime_error` or the image
-/// decoder's exception.
-pub fn parse_sprite(id: &str, encoded_image: &[u8], json: &[u8]) -> Result<Vec<Arc<Impl>>, Error> {
-    let raster = decode_image(encoded_image)?;
-    parse_sprite_images(id, &raster, json)
-}
-
-/// Port-only: `parseSprite` after its `decodeImage`, for an image decoded
-/// elsewhere (the `SpriteLoader` decodes through `mln_image`'s
-/// `decoder`, which may answer later).
-pub(crate) fn parse_sprite_images(id: &str, raster: &PremultipliedImage, json: &[u8]) -> Result<Vec<Arc<Impl>>, Error> {
+/// Cuts `image`, a decoded sprite sheet, into the images that `json`, a
+/// sprite index, lists. An image named `name` is `name` in the sprite
+/// `default` and `id:name` in another. Fails when `json` isn't JSON or isn't
+/// an object. An entry that isn't an object is skipped, a member of the
+/// wrong type is logged and treated as absent, and an image whose metrics
+/// don't fit the sheet is logged and skipped.
+pub fn parse_sprite(id: &str, image: &PremultipliedImage, json: &[u8]) -> Result<Vec<Arc<Impl>>, Error> {
     // `doc.Parse<0>(json.c_str())`: the string ends at the first NUL.
     let json = match json.iter().position(|&b| b == 0) {
         Some(nul) => &json[..nul],
         None => json,
     };
     let doc: JSValue = serde_json::from_slice(json).map_err(|e| Error::native(format!("Failed to parse JSON: {e}")))?;
-
-    let Some(properties) = doc.as_object() else {
+    let JSValue::Object(entries) = doc else {
         return Err(Error::native("Sprite JSON root must be an object"));
     };
 
-    let mut images = Vec::with_capacity(properties.len());
-    for (name, value) in properties {
+    let mut images = Vec::with_capacity(entries.len());
+    for (name, value) in &entries {
+        let Some(entry) = value.as_object() else { continue };
         let complete_name = if id == "default" { name.clone() } else { format!("{id}:{name}") };
-
-        if value.is_object() {
-            let x = get_u_int16(value, "x", name, 0);
-            let y = get_u_int16(value, "y", name, 0);
-            let width = get_u_int16(value, "width", name, 0);
-            let height = get_u_int16(value, "height", name, 0);
-            let pixel_ratio = get_double(value, "pixelRatio", name, 1.0);
-            let sdf = get_boolean(value, "sdf", name, false);
-            let stretch_x = get_stretches(value, "stretchX", name);
-            let stretch_y = get_stretches(value, "stretchY", name);
-            let content = get_content(value, "content", name);
-            let text_fit_width = get_text_fit(value, "textFitWidth", name);
-            let text_fit_height = get_text_fit(value, "textFitHeight", name);
-
-            let image = create_style_image(
-                &complete_name,
-                raster,
-                i32::from(x),
-                i32::from(y),
-                i32::from(width),
-                i32::from(height),
-                pixel_ratio,
-                sdf,
-                stretch_x,
-                stretch_y,
-                content,
-                text_fit_width,
-                text_fit_height,
-            );
-            if let Some(image) = image {
-                images.push(image.base_impl);
-            }
+        // The members are read, and their warnings logged, in this order.
+        let image = create_style_image(
+            &complete_name,
+            image,
+            i32::from(integer(entry, name, "x")),
+            i32::from(integer(entry, name, "y")),
+            i32::from(integer(entry, name, "width")),
+            i32::from(integer(entry, name, "height")),
+            member(entry, name, "pixelRatio", "a number", JSValue::as_f64).unwrap_or(1.0),
+            member(entry, name, "sdf", "a boolean", JSValue::as_bool).unwrap_or(false),
+            stretches(entry, name, "stretchX"),
+            stretches(entry, name, "stretchY"),
+            content(entry, name, "content"),
+            text_fit(entry, name, "textFitWidth"),
+            text_fit(entry, name, "textFitHeight"),
+        );
+        if let Some(image) = image {
+            images.push(image.base_impl);
         }
     }
 

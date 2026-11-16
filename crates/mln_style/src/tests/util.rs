@@ -172,3 +172,27 @@ pub(crate) fn style_of<T: crate::layer_type::StyleLayerType>(
 ) -> &crate::layer_type::LayerStyle<T> {
     crate::layer_type::LayerStyle::recover_ref(&**layer.style()).unwrap()
 }
+
+impl crate::Style {
+    /// Replaces the style with the one `json` describes, as a map's loader
+    /// does; a document that doesn't parse leaves the style as it was.
+    pub(crate) fn load_json(&mut self, json: &str) {
+        if let Ok(parsed) = Self::from_json(&Arc::clone(self.registry()), json, None) {
+            *self = parsed.style;
+        }
+    }
+}
+
+impl crate::Style {
+    /// Records the source that `json` describes, as the map does when it
+    /// adds one.
+    pub(crate) fn add_source_json(&mut self, id: &str, json: &str) {
+        let value: serde_json::Value = serde_json::from_str(json).expect("JSON");
+        let mut error = mln_conversion::Error::default();
+        let functions = Arc::clone(self.registry().functions());
+        let source =
+            crate::conversion::convert_source(&mln_conversion::Convertible::from(&value), &mut error, id, &functions)
+                .expect("a source");
+        let _ = self.apply(crate::edit::Edit::SetSourceImpl { id: id.to_owned(), source: Some(source.base_impl()) });
+    }
+}

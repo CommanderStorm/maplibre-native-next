@@ -8,8 +8,7 @@ use mln_actor::RunLoop;
 use mln_renderer::RendererEvent;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{Kind, Response};
-use mln_style::PropertyValue;
-use mln_style_types::ProjectionDefinition;
+use mln_style::Edit;
 use mln_util::geo::LatLng;
 use mln_util::image::PremultipliedImage;
 use mln_util::size::Size;
@@ -46,15 +45,12 @@ fn camera_commands_report_their_changes_in_order() {
 }
 
 #[test]
-fn a_style_change_applies_at_the_next_call() {
+fn a_style_load_applies_in_the_call_that_loads_it() {
     let run_loop = RunLoop::new();
     let mut map = map(MapOptions::default(), &run_loop);
-    map.style_mut().load_json(STYLE);
-    // The style reports its load to the map, which applies the style's
-    // camera when it handles the report.
-    assert_eq!(CameraOptions::from(map.snapshot().view.camera).zoom, Some(0.0));
     let updates = map.update_generation();
-    map.process_events();
+    map.load_style_json(STYLE);
+    // The map applies the style's camera as the style loads.
     assert_eq!(CameraOptions::from(map.snapshot().view.camera).zoom, Some(3.0));
     assert!(map.update_generation() > updates);
 
@@ -68,7 +64,7 @@ fn a_style_change_applies_at_the_next_call() {
 fn a_camera_command_after_a_style_load_wins_over_the_style_camera() {
     let run_loop = RunLoop::new();
     let mut map = map(MapOptions::default(), &run_loop);
-    map.style_mut().load_json(STYLE);
+    map.load_style_json(STYLE);
     // The owner has the map handle the load before the command, so the
     // style's center stays and the command's zoom applies.
     map.process_events();
@@ -108,24 +104,24 @@ fn each_change_to_the_style_projection_reaches_the_transform() {
     assert!(lowest_jump(&mut map) >= 1.0);
 
     // A style load.
-    map.style_mut().load_url("http://style");
+    map.load_style_url("http://style");
     map.process_events();
     run_loop.run_once();
     map.process_events();
-    assert!(map.style().is_loaded());
+    assert!(map.style_document_loaded());
     assert!((lowest_jump(&mut map) + 0.5).abs() < 1e-9);
-    let globe_below_3 = map.style().get_projection().clone();
+    let globe_below_3 = (**map.style().get_projection()).clone();
 
     // A style's JSON that replaces it.
-    map.style_mut().load_json(STYLE);
+    map.load_style_json(STYLE);
     assert!(lowest_jump(&mut map) >= 1.0);
 
-    // The setter.
-    map.style_mut().set_projection(globe_below_3);
+    // An edit.
+    map.edit_style(|style| style.apply(Edit::SetProjection(globe_below_3))).unwrap();
     assert!((lowest_jump(&mut map) + 0.5).abs() < 1e-9);
 
-    // An edit.
-    map.style_mut().get_projection_mut().set_type(PropertyValue::Constant(ProjectionDefinition::from_name("mercator")));
+    // A JSON edit.
+    map.edit_style(|style| style.set_root_property_json("projection", r#"{"type":"mercator"}"#)).unwrap();
     assert!(lowest_jump(&mut map) >= 1.0);
 }
 
@@ -172,8 +168,8 @@ fn the_reports_waker_runs_for_reports_only() {
 fn missing_images_reach_the_owner() {
     let run_loop = RunLoop::new();
     let mut map = map(MapOptions::default(), &run_loop);
-    map.style_mut().load_json(STYLE);
-    map.style_mut().add_image(image("present"));
+    map.load_style_json(STYLE);
+    map.edit_style(|style| style.apply(Edit::AddImage(image("present")))).unwrap();
     map.drain_events();
 
     report(&map, RendererEvent::StyleImageMissing("present".to_owned()));
@@ -202,8 +198,8 @@ fn the_unused_image_policy_decides_what_stays() {
     let run_loop = RunLoop::new();
     for (policy, kept) in [(UnusedStyleImagePolicy::Remove, false), (UnusedStyleImagePolicy::Keep, true)] {
         let mut map = map(MapOptions { unused_style_image_policy: policy, ..Default::default() }, &run_loop);
-        map.style_mut().load_json(STYLE);
-        map.style_mut().add_image(image("marker"));
+        map.load_style_json(STYLE);
+        map.edit_style(|style| style.apply(Edit::AddImage(image("marker")))).unwrap();
         report(&map, RendererEvent::UnusedStyleImages(vec!["marker".to_owned()]));
         map.process_events();
         assert_eq!(map.style().get_image("marker").is_some(), kept, "{policy:?}");
@@ -214,11 +210,11 @@ fn the_unused_image_policy_decides_what_stays() {
 fn an_image_that_keeps_itself_outlasts_the_remove_policy() {
     let run_loop = RunLoop::new();
     let mut map = map(MapOptions::default(), &run_loop);
-    map.style_mut().load_json(STYLE);
+    map.load_style_json(STYLE);
     let mut kept = (*image("kept")).clone();
     kept.keep_unused = true;
-    map.style_mut().add_image(Arc::new(kept));
-    map.style_mut().add_image(image("dropped"));
+    map.edit_style(|style| style.apply(Edit::AddImage(Arc::new(kept)))).unwrap();
+    map.edit_style(|style| style.apply(Edit::AddImage(image("dropped")))).unwrap();
     report(&map, RendererEvent::UnusedStyleImages(vec!["kept".to_owned(), "dropped".to_owned()]));
     map.process_events();
     assert!(map.style().get_image("kept").is_some());
@@ -229,7 +225,7 @@ fn an_image_that_keeps_itself_outlasts_the_remove_policy() {
 fn a_still_image_completes_with_a_full_frame() {
     let run_loop = RunLoop::new();
     let mut map = map(MapOptions { map_mode: MapMode::Static, ..Default::default() }, &run_loop);
-    map.style_mut().load_json(STYLE);
+    map.load_style_json(STYLE);
     map.process_events();
     map.render_still().unwrap();
 
