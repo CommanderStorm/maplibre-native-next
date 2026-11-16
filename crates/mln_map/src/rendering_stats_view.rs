@@ -9,12 +9,14 @@ use mln_style::conversion::Convertible;
 use mln_style::sources::custom_geometry_source::{
     CustomGeometrySource, CustomGeometrySourceHandle, Options as CustomGeometrySourceOptions,
 };
-use mln_style::{Layer, Style};
+use mln_style::{Edit, Layer};
 use mln_tile_id::CanonicalTileID;
 use mln_util::Color;
 use mln_util::constants::EXTENT;
 use mln_util::range::Range;
 use mln_util::time::Instant;
+
+use crate::Map;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderingStatsViewOptions {
@@ -57,10 +59,10 @@ impl RenderingStatsView {
         RenderingStatsView { options, last_update: None, frame_count: 0, encoding_time: 0.0, rendering_time: 0.0 }
     }
 
-    /// `create(style)`: adds the source and the layer, if the style lacks
-    /// them.
-    pub(crate) fn create(&self, style: &mut Style, run_loop: &mln_actor::RunLoop) {
-        if style.get_source(RENDERING_STATS_SOURCE_ID).is_none() {
+    /// `create(style)`: adds the source and the layer, if the map's style
+    /// lacks them.
+    pub(crate) fn create(&self, map: &mut Map) {
+        if map.source(RENDERING_STATS_SOURCE_ID).is_none() {
             let handle: Arc<OnceLock<CustomGeometrySourceHandle>> = Arc::new(OnceLock::new());
             let fetch_handle = Arc::clone(&handle);
             let options = CustomGeometrySourceOptions {
@@ -74,12 +76,13 @@ impl RenderingStatsView {
                 ..Default::default()
             };
             // The default tile options are valid, so this always succeeds.
-            if let Ok(source) = CustomGeometrySource::new(RENDERING_STATS_SOURCE_ID, options, run_loop.pool()) {
+            if let Ok(source) = CustomGeometrySource::new(RENDERING_STATS_SOURCE_ID, options, map.run_loop().pool()) {
                 let _ = handle.set(source.handle());
-                let _ = style.add_source(Box::new(source));
+                let _ = map.add_source(Box::new(source));
             }
         }
 
+        let style = map.style();
         if style.get_layer(RENDERING_STATS_LAYER_ID).is_none()
             // A registry without the symbol layer type has no layer to show.
             && let Ok(mut layer) =
@@ -106,23 +109,23 @@ impl RenderingStatsView {
                 debug_assert!(error.is_none(), "{name}: {error:?}");
             }
 
-            let _ = style.add_layer(layer, None);
+            let _ = map.apply_loaded(Edit::AddLayer { layer, before: None });
         }
     }
 
     /// `destroy(style)`: removes the layer and the source.
     #[expect(clippy::unused_self, reason = "the view removes what it added, as its `create` does")]
-    pub(crate) fn destroy(&self, style: &mut Style) {
-        style.remove_layer(RENDERING_STATS_LAYER_ID);
-        style.remove_source(RENDERING_STATS_SOURCE_ID);
+    pub(crate) fn destroy(&self, map: &mut Map) {
+        let _ = map.apply_loaded(Edit::RemoveLayer(RENDERING_STATS_LAYER_ID.to_owned()));
+        map.remove_source(RENDERING_STATS_SOURCE_ID);
     }
 
     /// `update(style, stats)`: counts a frame, and shows the stats of the
     /// frame and the mean times since the last update once the update
     /// interval has passed. Adds the layer back if the style lost it.
-    pub(crate) fn update(&mut self, style: &mut Style, run_loop: &mln_actor::RunLoop, stats: &RenderingStats) {
-        if style.get_layer(RENDERING_STATS_LAYER_ID).is_none() {
-            self.create(style, run_loop);
+    pub(crate) fn update(&mut self, map: &mut Map, stats: &RenderingStats) {
+        if map.style().get_layer(RENDERING_STATS_LAYER_ID).is_none() {
+            self.create(map);
         }
 
         self.frame_count += 1;
@@ -135,10 +138,12 @@ impl RenderingStatsView {
         }
 
         let text = self.text(stats);
-        if let Some(mut layer) = style.get_layer_mut(RENDERING_STATS_LAYER_ID) {
-            let error = layer.set_property("text-field", &Convertible::from(&Value::String(text)), None);
-            debug_assert!(error.is_none(), "text-field: {error:?}");
-        }
+        let result = map.apply_loaded(Edit::SetLayerProperty {
+            layer: RENDERING_STATS_LAYER_ID.to_owned(),
+            name: "text-field".to_owned(),
+            value: serde_json::Value::String(text),
+        });
+        debug_assert!(result.is_ok(), "text-field: {result:?}");
 
         self.frame_count = 0;
         self.encoding_time = 0.0;

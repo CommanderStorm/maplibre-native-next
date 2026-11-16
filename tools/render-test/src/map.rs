@@ -8,6 +8,7 @@ use mln_map::{BoundOptions, Map, MapOptions, ProjectionMode};
 use mln_renderer::Registry;
 use mln_renderer::tile::worker_codec::{RemoteWorkers, ThreadWorkerInstances};
 use mln_storage::{FileSource, FileSourceExt};
+use mln_style::Edit;
 use mln_util::image::PremultipliedImage;
 
 use crate::file_source::proxy_loader;
@@ -100,7 +101,7 @@ impl TestRunnerImpl for Impl {
                 .with_y_skew(metadata.y_skew),
         );
         self.map.set_debug(mln_map::MapDebugOptions(metadata.debug.0));
-        style_ops::load_json(self.map.style_mut(), &metadata.document_json);
+        self.map.load_style_json(&metadata.document_json);
         // C++ parses a style as it loads: the operations after it see it.
         self.map.process_events();
         Ok(())
@@ -196,39 +197,39 @@ impl TestRunnerImpl for Impl {
     }
 
     fn load_style_json(&mut self, json: &str) -> Result<(), MapError> {
-        style_ops::load_json(self.map.style_mut(), json);
+        self.map.load_style_json(json);
         self.map.process_events();
         Ok(())
     }
 
     fn load_style_url(&mut self, url: &str) -> Result<(), MapError> {
-        style_ops::load_url(self.map.style_mut(), url);
+        self.map.load_style_url(url);
         self.map.process_events();
         Ok(())
     }
 
     fn set_layer_property(&mut self, layer: &str, name: &str, value: &serde_json::Value) -> Result<(), MapError> {
-        style_ops::set_layer_property(self.map.style_mut(), layer, name, value)
+        self.map.edit_style(|style| style_ops::set_layer_property(style, layer, name, value))
     }
 
     fn set_layer_zoom_range(&mut self, layer: &str, min: f32, max: f32) -> Result<(), MapError> {
-        style_ops::set_layer_zoom_range(self.map.style_mut(), layer, min, max)
+        self.map.edit_style(|style| style_ops::set_layer_zoom_range(style, layer, min, max))
     }
 
     fn add_layer(&mut self, json: &str) -> Result<(), MapError> {
-        style_ops::add_layer(self.map.style_mut(), json)
+        self.map.edit_style(|style| style_ops::add_layer(style, json))
     }
 
     fn remove_layer(&mut self, id: &str) -> Result<bool, MapError> {
-        Ok(style_ops::remove_layer(self.map.style_mut(), id))
+        self.map.edit_style(|style| Ok(style_ops::remove_layer(style, id)))
     }
 
     fn set_layer_filter(&mut self, layer: &str, filter: &serde_json::Value) -> Result<(), MapError> {
-        style_ops::set_layer_filter(self.map.style_mut(), layer, filter)
+        self.map.edit_style(|style| style_ops::set_layer_filter(style, layer, filter))
     }
 
     fn set_global_state_property(&mut self, name: &str, value: &feature::Value) -> Result<(), MapError> {
-        style_ops::set_global_state_property(self.map.style_mut(), name, value)
+        style_ops::set_global_state_property(&mut self.map, name, value)
     }
 
     fn set_feature_state(
@@ -339,15 +340,15 @@ impl TestRunnerImpl for Impl {
 
     // query: the remaining runner operations.
     fn set_light(&mut self, json: &str) -> Result<(), MapError> {
-        style_ops::set_light(self.map.style_mut(), json)
+        self.map.edit_style(|style| style_ops::set_light(style, json))
     }
 
     fn add_source(&mut self, id: &str, json: &str) -> Result<(), MapError> {
-        style_ops::add_source(self.map.style_mut(), id, json)
+        style_ops::add_source(&mut self.map, id, json)
     }
 
     fn remove_source(&mut self, id: &str) -> Result<bool, MapError> {
-        Ok(style_ops::remove_source(self.map.style_mut(), id))
+        Ok(style_ops::remove_source(&mut self.map, id))
     }
 
     fn add_image(&mut self, name: &str, image_path: &str, pixel_ratio: f32, sdf: bool) -> Result<(), MapError> {
@@ -397,12 +398,12 @@ impl TestRunnerImpl for Impl {
             None,
         )
         .map_err(|e| MapError::Exception(e.to_string()))?;
-        self.map.style_mut().add_image(Arc::new(image));
+        self.map.edit_style(|style| style.apply(Edit::AddImage(Arc::new(image)))).unwrap();
         Ok(())
     }
 
     fn remove_image(&mut self, name: &str) -> Result<(), MapError> {
-        self.map.style_mut().remove_image(name);
+        self.map.edit_style(|style| style.apply(Edit::RemoveImage(name.to_owned()))).unwrap();
         Ok(())
     }
 

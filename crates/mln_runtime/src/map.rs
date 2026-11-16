@@ -10,6 +10,7 @@ use mln_map::{
 };
 use mln_renderer::text::font_face_engine::FontFaceEngine;
 use mln_renderer::{Registry, UpdateReader};
+use mln_style::Edit;
 use mln_style::layers::CustomLayerHost;
 use mln_text::GlyphCache;
 use mln_util::error::{Error, ErrorKind};
@@ -39,7 +40,7 @@ pub struct MapOptions {
     /// The events that the map reports.
     pub event_mask: EventMask,
     /// JSON text of the font faces that the map falls back to for glyphs
-    /// that the style's fonts lack, as `Style::set_fallback_font_faces`
+    /// that the style's fonts lack, as `Map::set_fallback_font_faces`
     /// takes it. Without it, the map falls back to the system's fonts
     /// unless `system_fonts` is off.
     pub fallback_font_faces: Option<String>,
@@ -952,23 +953,23 @@ impl Map {
     /// The JSON of the style that the map loaded, without the changes made
     /// since.
     pub fn loaded_style_json(&self) -> Result<Completion<String>, Error> {
-        self.query(|map| Ok(map.style().get_json()))
+        self.query(|map| Ok(map.style().get_json().to_owned()))
     }
 
     /// The URL of the map's style, or `None` for a style loaded from JSON.
     pub fn style_url(&self) -> Result<Completion<Option<String>>, Error> {
-        self.query(|map| Ok(Some(map.style().get_url()).filter(|url| !url.is_empty())))
+        self.query(|map| Ok(map.style_url().filter(|url| !url.is_empty()).map(str::to_owned)))
     }
 
     /// Adds a source to the style from its JSON. See
-    /// `Style::add_source_json` for the errors.
+    /// `mln_map::Map::add_source_json` for the errors.
     pub fn add_style_source_json(
         &self,
         source_id: impl Into<String>,
         json: impl Into<String>,
     ) -> Result<Completion<Applied>, Error> {
         let (source_id, json) = (source_id.into(), json.into());
-        self.command(move |map| map.style_mut().add_source_json(&source_id, &json))
+        self.command(move |map| map.add_source_json(&source_id, &json))
     }
 
     /// Removes a source from the style. Completes with
@@ -981,18 +982,18 @@ impl Map {
         let source_id = source_id.into();
         self.send(
             move |entry, _| {
-                let style = entry.core.style_mut();
-                if !style.is_loaded() {
+                let map = &mut entry.core;
+                if !map.style_document_loaded() {
                     return Err(style_not_loaded());
                 }
-                if style.get_source(&source_id).is_none() {
+                if map.source(&source_id).is_none() {
                     return Err(Error::not_found(format!("source \"{source_id}\" does not exist")));
                 }
-                if let Some(layer) = style.get_layers().into_iter().find(|layer| layer.get_source_id() == source_id) {
+                if let Some(layer) = map.style().get_layers().find(|layer| layer.get_source_id() == source_id) {
                     let message = format!("source \"{source_id}\" is used by layer \"{}\"", layer.get_id());
                     return Err(Error::invalid_state(message));
                 }
-                style.remove_source(&source_id);
+                map.remove_source(&source_id);
                 entry.core.remove_source_feature_state(&source_id);
                 Ok(())
             },
@@ -1008,7 +1009,7 @@ impl Map {
         before_layer_id: Option<String>,
     ) -> Result<Completion<Applied>, Error> {
         let json = json.into();
-        self.command(move |map| map.style_mut().add_layer_json(&json, before_layer_id.as_deref()))
+        self.command(move |map| map.edit_loaded_style(|style| style.add_layer_json(&json, before_layer_id.as_deref())))
     }
 
     /// Adds a custom layer named `layer_id` that `host` draws, below
@@ -1022,7 +1023,9 @@ impl Map {
         before_layer_id: Option<String>,
     ) -> Result<Completion<Applied>, Error> {
         let layer_id = layer_id.into();
-        self.command(move |map| map.style_mut().add_custom_layer(&layer_id, host, before_layer_id.as_deref()))
+        self.command(move |map| {
+            map.edit_loaded_style(|style| style.add_custom_layer(&layer_id, host, before_layer_id.as_deref()))
+        })
     }
 
     /// Removes a layer from the style. Completes with
@@ -1031,16 +1034,7 @@ impl Map {
     /// while the style isn't loaded.
     pub fn remove_style_layer(&self, layer_id: impl Into<String>) -> Result<Completion<Applied>, Error> {
         let layer_id = layer_id.into();
-        self.command(move |map| {
-            let style = map.style_mut();
-            if !style.is_loaded() {
-                return Err(style_not_loaded());
-            }
-            style
-                .remove_layer(&layer_id)
-                .map(drop)
-                .ok_or_else(|| Error::not_found(format!("layer \"{layer_id}\" does not exist")))
-        })
+        self.command(move |map| map.edit_loaded_style(|style| style.apply(Edit::RemoveLayer(layer_id))))
     }
 
     /// A layer of the style as JSON, or `None` when the style has no such
@@ -1059,7 +1053,7 @@ impl Map {
         json: impl Into<String>,
     ) -> Result<Completion<Applied>, Error> {
         let (layer_id, name, json) = (layer_id.into(), name.into(), json.into());
-        self.command(move |map| map.style_mut().set_layer_property_json(&layer_id, &name, &json))
+        self.command(move |map| map.edit_loaded_style(|style| style.set_layer_property_json(&layer_id, &name, &json)))
     }
 
     /// A property of a layer as JSON, or `None` when the layer doesn't set
@@ -1082,7 +1076,7 @@ impl Map {
         json: impl Into<String>,
     ) -> Result<Completion<Applied>, Error> {
         let (name, json) = (name.into(), json.into());
-        self.command(move |map| map.style_mut().set_root_property_json(&name, &json))
+        self.command(move |map| map.edit_loaded_style(|style| style.set_root_property_json(&name, &json)))
     }
 
     /// A root property of the style as JSON, or `None` when neither the
@@ -1099,7 +1093,7 @@ impl Map {
         json: impl Into<String>,
     ) -> Result<Completion<Applied>, Error> {
         let (name, json) = (name.into(), json.into());
-        self.command(move |map| map.style_mut().set_light_property_json(&name, &json))
+        self.command(move |map| map.edit_loaded_style(|style| style.set_light_property_json(&name, &json)))
     }
 
     /// A property of the style's light as JSON, or `None` when the light
@@ -1476,11 +1470,11 @@ pub(crate) fn create(
         Err(error) => return outbox.resolve(resolver, Err(error)),
     };
     if let Some(json) = &options.fallback_font_faces {
-        if let Err(error) = map.style_mut().set_fallback_font_faces(json) {
+        if let Err(error) = map.set_fallback_font_faces(json) {
             return outbox.resolve(resolver, Err(error));
         }
     } else if options.system_fonts {
-        map.style_mut().set_fallback_font_face_list(mln_system_fonts::fallback_font_face_list());
+        map.set_fallback_font_face_list(mln_system_fonts::fallback_font_face_list());
     }
     let _ = published.updates.set(map.update_reader());
     let flush_task = async_task(&core.run_loop, &core.queue, move |core, outbox| flush(core, id, outbox));
@@ -1586,10 +1580,9 @@ fn load_style(
             if let Some(previous) = entry.pending_style.replace(PendingStyle { resolver, from_json }) {
                 outbox.resolve(previous.resolver, Err(Error::cancelled("another style load started")));
             }
-            let style = entry.core.style_mut();
             match load {
-                StyleLoad::Url(url) => style.load_url(&url),
-                StyleLoad::Json(json) => style.load_json(&json),
+                StyleLoad::Url(url) => entry.core.load_style_url(&url),
+                StyleLoad::Json(json) => entry.core.load_style_json(&json),
             }
         },
         |_, (), _, _| {},

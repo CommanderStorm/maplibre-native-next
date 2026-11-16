@@ -1,6 +1,6 @@
 // Not a C++ gtest: checks that every M1 render-test style.json
 // (metrics/integration/render-tests, read in place from @maplibre) parses
-// into a `Style::Impl` whose background layer evaluates, at the test's zoom,
+// into a `Style` whose background layer evaluates, at the test's zoom,
 // through Transitioning -> PossiblyEvaluated to the values the C++ core
 // computes. The evaluation mirrors RenderOrchestrator::createRenderTree +
 // RenderBackgroundLayer (transition, then evaluate) in MapMode::Static, where
@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mln_conversion::Convertible;
 use mln_style_types::VisibilityType;
 use mln_util::logging::{Event, EventSeverity};
 use mln_util::time::Instant;
@@ -25,44 +24,22 @@ use crate::map::zoom_history::ZoomHistory;
 use crate::registry::StyleRegistry;
 use crate::renderer::property_evaluation_parameters::PropertyEvaluationParameters;
 use crate::renderer::transition_parameters::TransitionParameters;
-use crate::style::Impl;
+use crate::style::Style;
 use crate::transition_options::TransitionOptions;
 
 fn render_tests_dir() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/metrics/integration/render-tests")
 }
 
-fn load(test: &str) -> Impl {
+fn load(test: &str) -> Style {
     let path = render_tests_dir().join(test).join("style.json");
     let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    // C++ style tests use a StubFileSource; sprite requests fail here
-    // (background-opacity/color has a sprite), which C++ also counts as
-    // loaded.
-    let run_loop = mln_actor::RunLoop::new();
-    let file_source = mln_storage::stub_file_source::StubFileSource::new(
-        &run_loop,
-        mln_storage::stub_file_source::ResponseType::Synchronous,
-    );
-    let failed = |_: &mln_storage::Resource| {
-        let mut response = mln_storage::Response::new();
-        response.error = Some(Box::new(mln_storage::response::ResourceError::new(
-            mln_storage::response::Reason::Other,
-            "no sprites in this test",
-        )));
-        Some(response)
-    };
-    file_source.set_response(mln_storage::Kind::SpriteJSON, failed);
-    file_source.set_response(mln_storage::Kind::SpriteImage, failed);
-    let mut style = Impl::with_file_source(StyleRegistry::with_builtins(), Some(Arc::new(file_source)), 1.0, &run_loop);
-    style.load_json(&json);
-    assert!(style.loaded, "{test} did not load");
-    assert!(style.is_loaded(), "{test}: style not fully loaded");
-    style
+    Style::from_json(&StyleRegistry::with_builtins(), &json, None).unwrap_or_else(|e| panic!("{test}: {e}")).style
 }
 
-fn background_impl(style: &Impl, id: &str) -> Arc<LayerStyle<Background>> {
-    let impls = style.get_layer_impls();
-    let impl_ = impls.iter().find(|impl_| impl_.base().id == id).unwrap_or_else(|| panic!("no layer {id}"));
+fn background_impl(style: &Style, id: &str) -> Arc<LayerStyle<Background>> {
+    let layer = style.get_layer(id).unwrap_or_else(|| panic!("no layer {id}"));
+    let impl_ = layer.style();
     assert_eq!(impl_.info().name, "background");
     LayerStyle::recover(impl_).unwrap()
 }
@@ -86,7 +63,7 @@ fn transition_and_evaluate(
 
 /// A static-mode render of the style's background layer `id` at the style's
 /// default zoom.
-fn evaluate_static(style: &Impl, id: &str) -> BackgroundPaintProperties::PossiblyEvaluated {
+fn evaluate_static(style: &Style, id: &str) -> BackgroundPaintProperties::PossiblyEvaluated {
     let impl_ = background_impl(style, id);
     let zoom = style.get_default_camera().zoom.unwrap() as f32;
     let mut zoom_history = ZoomHistory::default();
@@ -122,7 +99,7 @@ fn background_color_default() {
     let style = load("background-color/default");
     let evaluated = evaluate_static(&style, "background");
     assert_background(&evaluated, Color::black(), 1.0);
-    assert_eq!(style.get_layer_impls()[0].base().visibility, VisibilityType::Visible);
+    assert_eq!(style.get_layer_list().first().unwrap().get_visibility(), VisibilityType::Visible);
 }
 
 #[test]
@@ -190,11 +167,13 @@ fn background_color_transition() {
     );
     assert_background(&evaluated, Color::parse("red").unwrap(), 1.0);
 
-    {
-        let white = serde_json::json!("white");
-        let mut layer = style.get_layer_mut("background").unwrap();
-        assert!(layer.set_property("background-color", &Convertible::from(&white), None).is_none());
-    }
+    let white = serde_json::json!("white");
+    let edit = crate::Edit::SetLayerProperty {
+        layer: "background".to_owned(),
+        name: "background-color".to_owned(),
+        value: white,
+    };
+    style.apply(edit).unwrap();
     let impl1 = background_impl(&style, "background");
     assert!(!Arc::ptr_eq(&impl0, &impl1));
 
@@ -241,8 +220,8 @@ fn background_opacity_overlay() {
     // is registered (generated layers), so both layers and the source parse.
     let log = FixtureLog::new();
     let style = load("background-opacity/overlay");
-    assert_eq!(2, style.get_layer_impls().len());
-    assert_eq!(1, style.get_source_impls().len());
+    assert_eq!(2, style.get_layer_list().len());
+    assert_eq!(1, style.get_sources().len());
     assert_eq!(
         0,
         log.count(EventSeverity::Warning, Event::ParseStyle, "Unsupported layer type! Null factory for type: raster")
@@ -254,7 +233,7 @@ fn background_opacity_overlay() {
 #[test]
 fn background_visibility_none() {
     let style = load("background-visibility/none");
-    assert_eq!(style.get_layer_impls()[0].base().visibility, VisibilityType::None);
+    assert_eq!(style.get_layer_list().first().unwrap().get_visibility(), VisibilityType::None);
     let evaluated = evaluate_static(&style, "background");
     assert_background(&evaluated, Color::black(), 1.0);
 }
@@ -262,7 +241,7 @@ fn background_visibility_none() {
 #[test]
 fn background_visibility_visible() {
     let style = load("background-visibility/visible");
-    assert_eq!(style.get_layer_impls()[0].base().visibility, VisibilityType::Visible);
+    assert_eq!(style.get_layer_list().first().unwrap().get_visibility(), VisibilityType::Visible);
     let evaluated = evaluate_static(&style, "background");
     assert_background(&evaluated, Color::black(), 1.0);
 }

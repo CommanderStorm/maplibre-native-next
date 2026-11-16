@@ -2821,12 +2821,15 @@ dependencies = [
  "mln-rs-map-types",
  "mln-rs-math",
  "mln-rs-renderer",
+ "mln-rs-sprite",
  "mln-rs-storage",
  "mln-rs-style",
  "mln-rs-style-types",
+ "mln-rs-text",
  "mln-rs-tile-id",
  "mln-rs-util",
  "parking_lot",
+ "serde_json",
 ]
 
 [[package]]
@@ -2999,7 +3002,6 @@ dependencies = [
  "mln-rs-storage",
  "mln-rs-style-types",
  "mln-rs-util",
- "mln-rs-vec-map",
  "parking_lot",
  "serde_json",
 ]
@@ -3072,7 +3074,6 @@ dependencies = [
  "mln-rs-image",
  "mln-rs-map-types",
  "mln-rs-math",
- "mln-rs-sprite",
  "mln-rs-storage",
  "mln-rs-style-types",
  "mln-rs-supercluster",

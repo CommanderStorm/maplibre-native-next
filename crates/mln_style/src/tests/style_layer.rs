@@ -6,13 +6,14 @@ use mln_util::Color;
 
 use super::util::{new_layer, parse_json, style_of};
 use crate::conversion::convert_filter;
+use crate::edit::Edit;
 use crate::expression::{Functions, Image};
 use crate::filter::Filter;
 use crate::layer::Layer;
 use crate::layers::{Background, Circle, Fill, Line, Raster};
 use crate::property_value::PropertyValue;
 use crate::registry::StyleRegistry;
-use crate::style_impl::Impl as StyleImpl;
+use crate::style::Style;
 
 fn color() -> Color {
     Color::new(1.0, 0.0, 0.0, 1.0)
@@ -184,9 +185,9 @@ fn raster_properties() {
 #[test]
 fn observer() {
     // TEST(Layer, Observer). C++ counts `StubLayerObserver::layerChanged`
-    // calls; in the port a change reaches `Style::Impl::onLayerChanged` when
-    // the layer's impl `Arc` is replaced (see layer.rs), so each "notifies"
-    // check is "the impl pointer changed".
+    // calls; in the port a layer changes when its impl `Arc` is replaced
+    // (see layer.rs), which is what a style version compares, so each
+    // "notifies" check is "the impl pointer changed".
     let mut layer = new_layer("line", "line", "source");
     let notified = |layer: &mut Layer, f: &mut dyn FnMut(&mut Layer)| {
         let before = Arc::clone(layer.style());
@@ -243,16 +244,15 @@ fn fixture(path: &str) -> String {
 #[test]
 fn duplicate_layer() {
     // Setup style
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = StyleImpl::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
+    let mut style = Style::new(StyleRegistry::with_builtins());
     style.load_json(&fixture("test/fixtures/resources/style-unused-sources.json"));
 
     // Add initial layer
-    style.add_layer(new_layer("line", "line", "unusedsource"), None).expect("first add");
+    style.apply(Edit::AddLayer { layer: new_layer("line", "line", "unusedsource"), before: None }).expect("first add");
 
     // Try to add duplicate
-    match style.add_layer(new_layer("line", "line", "unusedsource"), None) {
-        Ok(_) => panic!("Should not have been allowed to add a duplicate layer id"),
+    match style.apply(Edit::AddLayer { layer: new_layer("line", "line", "unusedsource"), before: None }) {
+        Ok(()) => panic!("Should not have been allowed to add a duplicate layer id"),
         // Expected
         Err(e) => assert_eq!(mln_util::Error::already_exists("Layer line already exists"), e),
     }
@@ -262,13 +262,12 @@ fn duplicate_layer() {
 #[test]
 fn incompatible_layer() {
     // Setup style
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = StyleImpl::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
+    let mut style = Style::new(StyleRegistry::with_builtins());
     style.load_json(&fixture("test/fixtures/resources/style-unused-sources.json"));
 
     // Try to add duplicate
-    match style.add_layer(new_layer("raster", "raster", "unusedsource"), None) {
-        Ok(_) => panic!("Should not have been allowed to add an incompatible layer to the source"),
+    match style.apply(Edit::AddLayer { layer: new_layer("raster", "raster", "unusedsource"), before: None }) {
+        Ok(()) => panic!("Should not have been allowed to add an incompatible layer to the source"),
         // Expected
         Err(e) => assert_eq!(
             mln_util::Error::invalid_argument("Layer 'raster' is not compatible with source 'unusedsource'"),

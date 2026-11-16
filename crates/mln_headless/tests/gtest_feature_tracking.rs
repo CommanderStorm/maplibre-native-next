@@ -8,14 +8,13 @@ use mln_map::{CameraOptions, FeatureInfo, Map, MapDebugOptions, MapMode, MapOpti
 use mln_renderer::Registry;
 use mln_storage::Kind;
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
-use mln_style::PropertyValue;
 use mln_style::conversion::Convertible;
 use mln_style::expression::dsl::{eq, get, literal_str};
 use mln_style::filter::Filter;
 use mln_style::layer::Layer;
 use mln_style::projection::Projection;
 use mln_style::sources::geojson_source::{GeoJSONOptions, GeoJSONSource};
-use mln_style::style_impl::LayerRefMut;
+use mln_style::{Edit, PropertyValue};
 use mln_style_types::{ProjectionDefinition, ProjectionType, VisibilityType};
 use mln_util::geo::LatLng;
 use mln_util::image::PremultipliedImage;
@@ -141,17 +140,15 @@ impl FeatureTrackingTest {
         )
         .expect("style::Image");
 
-        {
-            let style = map.style_mut();
-            style.load_json(&read_file(&format!("{FIXTURE_BASE}api/empty.json")));
-            style.add_source(Box::new(source)).expect("add source");
-            style.add_layer(background_layer, None).expect("add layer");
-            style.add_layer(fill_layer, None).expect("add layer");
-            style.add_layer(line_layer, None).expect("add layer");
-            style.add_layer(circle_layer, None).expect("add layer");
-            style.add_layer(symbol_layer, None).expect("add layer");
-            style.add_image(Arc::new(image));
-        }
+        map.load_style_json(&read_file(&format!("{FIXTURE_BASE}api/empty.json")));
+        map.add_source(Box::new(source)).expect("add source");
+        map.edit_style(|style| {
+            for layer in [background_layer, fill_layer, line_layer, circle_layer, symbol_layer] {
+                style.apply(Edit::AddLayer { layer, before: None })?;
+            }
+            style.apply(Edit::AddImage(Arc::new(image)))
+        })
+        .expect("add layers");
 
         map.set_debug(MapDebugOptions::TILE_BORDERS);
         map.jump_to(&camera);
@@ -170,9 +167,14 @@ impl FeatureTrackingTest {
         result
     }
 
-    fn with_layer(&mut self, id: &str, f: impl FnOnce(&mut LayerRefMut<'_>)) {
-        let style = self.map.style_mut();
-        f(&mut style.get_layer_mut(id).expect("layer"));
+    fn with_layer(&mut self, id: &str, f: impl FnOnce(&mut Layer)) {
+        self.map
+            .edit_style(|style| {
+                let mut layer = style.get_layer(id).expect("layer").clone();
+                f(&mut layer);
+                style.apply(Edit::SetLayer(layer))
+            })
+            .expect("layer");
     }
 
     fn with_symbol_layer(&mut self, f: impl FnOnce(&mut Layer)) {
@@ -336,10 +338,9 @@ fn ndc_bound_shared_bucket_at_another_translation() {
     let mut test = FeatureTrackingTest::new(camera(10.0));
     test.with_symbol_layer(show_variable_anchor_label);
     {
-        let style = test.map.style_mut();
-        let mut follower = style.get_layer(SYMBOL_LAYER_NAME).expect("layer").clone_ref("follower");
+        let mut follower = test.map.style().get_layer(SYMBOL_LAYER_NAME).expect("layer").clone_ref("follower");
         set(&mut follower, "text-translate", &json!([0.0, -50.0]));
-        style.add_layer(follower, None).expect("add layer");
+        test.map.edit_style(|style| style.apply(Edit::AddLayer { layer: follower, before: None })).expect("add layer");
     }
     test.run(None, 0.0);
     let expected = 2.0 * 50.0 / f64::from(test.frontend.size().height);
@@ -534,7 +535,7 @@ fn ndc_bound_fill_extrusion() {
     let mut layer = Layer::new(Registry::with_builtins().style(), "fill-extrusion", "extrusion", SOURCE_NAME).unwrap();
     set(&mut layer, "fill-extrusion-color", &json!("rgba(0,0,255,1)"));
     set(&mut layer, "fill-extrusion-height", &json!(1000.0));
-    test.map.style_mut().add_layer(layer, None).expect("add layer");
+    test.map.edit_style(|style| style.apply(Edit::AddLayer { layer, before: None })).expect("add layer");
     test.run(None, 0.0);
 
     assert_eq!(1, test.count(Some("poly0"), Some("extrusion"), Some(SOURCE_NAME)));
@@ -578,7 +579,7 @@ fn globe_test() -> FeatureTrackingTest {
 fn set_projection(test: &mut FeatureTrackingTest, definition: ProjectionDefinition) {
     let mut projection = Projection::new();
     projection.set_type(constant(definition));
-    test.map.style_mut().set_projection(projection);
+    test.map.edit_style(|style| style.apply(Edit::SetProjection(projection))).unwrap();
 }
 
 /// A filter that keeps the features whose `name` is `name`.
@@ -694,7 +695,9 @@ fn globe_ndc_bound_fill_extrusion() {
     let mut extrusion_layer =
         Layer::new(Registry::with_builtins().style(), "fill-extrusion", "extrusion", SOURCE_NAME).unwrap();
     set(&mut extrusion_layer, "fill-extrusion-height", &json!(500_000.0));
-    test.map.style_mut().add_layer(extrusion_layer, None).expect("add layer");
+    test.map
+        .edit_style(|style| style.apply(Edit::AddLayer { layer: extrusion_layer, before: None }))
+        .expect("add layer");
     test.run(None, 0.0);
 
     let flat = test.bound("nearPolygon", FILL_LAYER_NAME).expect("flat");
@@ -716,7 +719,9 @@ fn globe_fill_extrusion_above_horizon() {
     set(&mut extrusion_layer, "fill-extrusion-height", &json!(500_000.0));
     set(&mut extrusion_layer, "fill-extrusion-color", &json!("rgba(0,255,0,1)"));
     extrusion_layer.set_filter(&name_filter("5"));
-    test.map.style_mut().add_layer(extrusion_layer, None).expect("add layer");
+    test.map
+        .edit_style(|style| style.apply(Edit::AddLayer { layer: extrusion_layer, before: None }))
+        .expect("add layer");
     let image = test.run(None, 0.0).image;
     test.expect_captured_as_drawn("farPolygon", "extrusion", &image);
 }
@@ -752,11 +757,8 @@ fn globe_capture_close_up() {
     source.set_geojson(large.parse().expect("GeoJSON")).expect("set GeoJSON");
     let mut fill_layer = Layer::new(Registry::with_builtins().style(), "fill", "lowZoomFill", "lowZoom").unwrap();
     set(&mut fill_layer, "fill-color", &json!("rgba(0,255,0,1)"));
-    {
-        let style = test.map.style_mut();
-        style.add_source(Box::new(source)).expect("add source");
-        style.add_layer(fill_layer, None).expect("add layer");
-    }
+    test.map.add_source(Box::new(source)).expect("add source");
+    test.map.edit_style(|style| style.apply(Edit::AddLayer { layer: fill_layer, before: None })).expect("add layer");
     test.map.jump_to(&CameraOptions { pitch: Some(60.0), ..camera(11.0) });
     let image = test.run(None, 0.0).image;
     test.expect_captured_as_drawn("large", "lowZoomFill", &image);

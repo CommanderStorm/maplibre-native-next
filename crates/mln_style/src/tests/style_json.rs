@@ -12,10 +12,8 @@ const DEM_SOURCE: &str = r#"{"type":"raster-dem","tiles":["https://example.com/d
 const DOTS: &str = r#"{"id":"dots","type":"circle","source":"points"}"#;
 
 fn loaded_style() -> Style {
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = Style::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
+    let mut style = Style::new(StyleRegistry::with_builtins());
     style.load_json(r#"{"version":8,"sources":{},"layers":[]}"#);
-    assert!(style.is_loaded());
     style
 }
 
@@ -23,7 +21,7 @@ fn loaded_style() -> Style {
 /// `dots` on it.
 fn style_with_dots() -> Style {
     let mut style = loaded_style();
-    style.add_source_json("points", EMPTY_GEOJSON_SOURCE).unwrap();
+    style.add_source_json("points", EMPTY_GEOJSON_SOURCE);
     style.add_layer_json(DOTS, None).unwrap();
     style
 }
@@ -41,48 +39,6 @@ fn property(style: &Style, layer_id: &str, name: &str) -> Option<String> {
 
 fn set_property(style: &mut Style, layer_id: &str, name: &str, json: &str) {
     style.set_layer_property_json(layer_id, name, json).unwrap();
-}
-
-#[test]
-fn edits_fail_while_the_style_is_not_loaded() {
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = Style::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
-    assert!(!style.is_loaded());
-    let not_loaded = "style is not loaded";
-    assert_fails(style.add_source_json("points", EMPTY_GEOJSON_SOURCE), ErrorKind::InvalidState, not_loaded);
-    assert_fails(style.add_layer_json(DOTS, None), ErrorKind::InvalidState, not_loaded);
-    assert_fails(style.set_layer_property_json("dots", "circle-radius", "4"), ErrorKind::InvalidState, not_loaded);
-    assert_fails(style.set_root_property_json("light", r#"{"intensity":0.5}"#), ErrorKind::InvalidState, not_loaded);
-    assert_fails(style.set_light_property_json("intensity", "0.5"), ErrorKind::InvalidState, not_loaded);
-    assert!(style.get_sources().is_empty() && style.get_layers().is_empty());
-}
-
-#[test]
-fn a_source_id_is_taken_once() {
-    let mut style = loaded_style();
-    style.add_source_json("owned-source", EMPTY_GEOJSON_SOURCE).unwrap();
-    assert_eq!(style.get_source("owned-source").unwrap().get_id(), "owned-source");
-    assert_fails(
-        style.add_source_json("owned-source", EMPTY_GEOJSON_SOURCE),
-        ErrorKind::AlreadyExists,
-        r#"source "owned-source" already exists"#,
-    );
-}
-
-#[test]
-fn malformed_sources_are_invalid_arguments() {
-    let mut style = loaded_style();
-    assert_fails(
-        style.add_source_json("unknown-type", r#"{"type":"no-such-source-type"}"#),
-        ErrorKind::InvalidArgument,
-        r#"style source "unknown-type": "#,
-    );
-    assert_fails(
-        style.add_source_json("truncated", r#"{"type":"#),
-        ErrorKind::InvalidArgument,
-        r#"style source "truncated" is not valid JSON"#,
-    );
-    assert!(style.get_sources().is_empty());
 }
 
 #[test]
@@ -108,7 +64,7 @@ fn missing_style_ids_report_not_found() {
         ErrorKind::NotFound,
         r#"layer "hillshade" uses source "absent-source", which does not exist"#,
     );
-    assert!(style.get_layers().is_empty());
+    assert_eq!(style.get_layers().len(), 0);
     assert_eq!(style.layer_json("absent-layer"), None);
 }
 
@@ -117,7 +73,7 @@ fn layers_go_below_the_before_layer() {
     let mut style = style_with_dots();
     style.add_layer_json(r#"{"id":"paper","type":"background"}"#, Some("dots")).unwrap();
     style.add_layer_json(r#"{"id":"top","type":"background"}"#, None).unwrap();
-    let ids: Vec<String> = style.get_layers().iter().map(|layer| layer.get_id()).collect();
+    let ids: Vec<String> = style.get_layers().map(|layer| layer.get_id().to_owned()).collect();
     assert_eq!(ids, ["paper", "dots", "top"]);
 }
 
@@ -138,8 +94,8 @@ fn malformed_layers_are_invalid_arguments() {
 #[test]
 fn a_layer_requires_a_source_that_supports_its_type() {
     let mut style = loaded_style();
-    style.add_source_json("dem", DEM_SOURCE).unwrap();
-    style.add_source_json("points", EMPTY_GEOJSON_SOURCE).unwrap();
+    style.add_source_json("dem", DEM_SOURCE);
+    style.add_source_json("points", EMPTY_GEOJSON_SOURCE);
 
     let hillshade = r#"{"id":"hillshade","type":"hillshade","source":"dem"}"#;
     style.add_layer_json(hillshade, None).unwrap();
@@ -247,7 +203,7 @@ fn layer_json_serializes_the_current_layer() {
         assert!(json.contains(part), "{json} doesn't contain {part}");
     }
 
-    style.remove_layer("paper").unwrap();
+    style.apply(crate::Edit::RemoveLayer("paper".to_owned())).unwrap();
     style.add_layer_json(&json, None).unwrap();
     assert_eq!(style.layer_json("paper").unwrap(), json);
 }
@@ -317,9 +273,7 @@ fn the_style_light_round_trips_through_json() {
 
 #[test]
 fn global_state_reads_back_defaults_and_set_properties() {
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = Style::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
-    assert_fails(style.set_global_state_property_json("theme", "true"), ErrorKind::InvalidState, "style is not loaded");
+    let mut style = Style::new(StyleRegistry::with_builtins());
     style.load_json(r#"{"version":8,"sources":{},"layers":[],"state":{"theme":{"default":"light"}}}"#);
     assert_eq!(style.global_state_json(), r#"{"theme":"light"}"#);
 
@@ -351,7 +305,7 @@ fn the_light_and_the_transition_change_and_reset() {
 
     let mut no_placement = style.get_transition_options();
     no_placement.enable_placement_transitions = false;
-    style.set_transition_options(&no_placement);
+    style.apply(crate::Edit::SetTransition(no_placement)).unwrap();
     style.set_root_property_json("transition", r#"{"delay":50,"duration":300}"#).unwrap();
     assert_eq!(root_property(&style, "transition").as_deref(), Some(r#"{"duration":300,"delay":50}"#));
     assert!(!style.get_transition_options().enable_placement_transitions);
@@ -378,7 +332,7 @@ fn the_sky_and_the_projection_change_and_reset() {
     style.set_root_property_json("projection", r#"{"type":"globe"}"#).unwrap();
     assert_eq!(root_property(&style, "projection").as_deref(), Some(r#"{"type":"globe"}"#));
     assert_eq!(
-        style.get_projection().impl_.evaluate(0.0),
+        style.get_projection().evaluate(0.0),
         mln_style_types::ProjectionDefinition::new(mln_style_types::ProjectionType::VerticalPerspective)
     );
 
@@ -402,8 +356,7 @@ fn the_sky_and_the_projection_change_and_reset() {
 
 #[test]
 fn a_new_state_resets_every_global_state_property() {
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = Style::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
+    let mut style = Style::new(StyleRegistry::with_builtins());
     style.load_json(r#"{"version":8,"sources":{},"layers":[],"state":{"theme":{"default":"light"}}}"#);
     assert_eq!(root_property(&style, "state").as_deref(), Some(r#"{"theme":{"default":"light"}}"#));
     style.set_global_state_property_json("theme", r#""dark""#).unwrap();
@@ -427,8 +380,7 @@ fn a_new_state_resets_every_global_state_property() {
 
 #[test]
 fn other_root_properties_read_as_loaded_and_reject_changes() {
-    let run_loop = mln_actor::RunLoop::new();
-    let mut style = Style::new(StyleRegistry::with_builtins(), 1.0, &run_loop);
+    let mut style = Style::new(StyleRegistry::with_builtins());
     style.load_json(r#"{"version":8,"name":"plain","sources":{},"layers":[],"zoom":3}"#);
     assert_eq!(root_property(&style, "version").as_deref(), Some("8"));
     assert_eq!(root_property(&style, "name").as_deref(), Some(r#""plain""#));
