@@ -17,9 +17,10 @@
 //! - [`Parts::between`] says in O(1) which parts two versions differ in, and
 //!   [`diff::StyleDiff::between`] what a renderer has to redo for each layer,
 //!   source and image to go from one version to another.
-//! - Loading isn't here: the map's loader fetches documents and sprites, and
-//!   [`Style::from_json`] parses a document. A style holds its sources'
-//!   records ([`SourceList`]); the map holds their live handles.
+//! - Loading isn't here: the map's loader fetches documents, sprites and
+//!   source descriptions, and [`Style::from_json`] parses a document. A
+//!   style holds its sources as values ([`SourceList`]), and what their
+//!   loads find arrives as edits.
 //!
 //! Layers:
 //! - `layer::Layer` is a layer of any type. Its style data is an
@@ -68,9 +69,8 @@ pub mod serialization;
 pub mod sky;
 #[rustfmt::skip]
 mod sky_properties;
-pub mod source;
-pub mod source_impl;
 pub mod source_list;
+pub mod source_type;
 pub mod sources;
 pub mod sprite;
 mod style;
@@ -92,7 +92,8 @@ pub use registry::{StyleRegistry, decode_with};
 pub use renderer::property_evaluation_parameters::{CrossfadeParameters, PropertyEvaluationParameters};
 pub use renderer::transition_parameters::{GlobalStateChange, TransitionParameters};
 pub use source_list::SourceList;
-pub use style::{Parsed, Style, StyleLoadError};
+pub use source_type::{Source, SourceInstance, SourceTypeInfo};
+pub use style::{Style, StyleLoadError};
 pub use transition_options::TransitionOptions;
 
 #[cfg(test)]

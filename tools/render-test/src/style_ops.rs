@@ -91,9 +91,9 @@ pub(crate) fn add_source(map: &mut Map, source_name: &str, json: &str) -> Result
         Err(e) => return Err(MapError::Conversion(e.to_string())),
     };
     let mut error = mln_conversion::Error::default();
-    let functions = map.style().registry().functions();
+    let registry = map.style().registry();
     let Some(source) =
-        mln_style::conversion::convert_source(&Convertible::from(&value), &mut error, source_name, functions)
+        mln_style::conversion::convert_source(&Convertible::from(&value), &mut error, source_name, registry)
     else {
         return Err(MapError::Conversion(error.message));
     };
@@ -139,7 +139,7 @@ mod tests {
     }
 
     fn load_json(style: &mut Style, json: &str) {
-        *style = Style::from_json(style.registry(), json, None).expect("a style").style;
+        *style = Style::from_json(style.registry(), json, None).expect("a style");
     }
 
     #[test]

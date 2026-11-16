@@ -12,7 +12,7 @@ use mln_storage::{FileSource, Kind, Response};
 use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
 use mln_style::layer_type::LayerStyle;
 use mln_style::layers::{Circle, Fill, FillExtrusion, Line, Symbol};
-use mln_style::sources::tile_source::TileSource;
+use mln_style::sources::vector_source;
 use mln_style_types::image::Impl as ImageImpl;
 use mln_tile_id::OverscaledTileID;
 use mln_util::geo::LatLng;
@@ -24,10 +24,10 @@ use mln_util::tileset::PartialTileset;
 use proptest::prelude::*;
 use serde_json::json;
 
+use crate::Registry;
 use crate::layer_type::{ErasedEvaluatedLayer, EvaluatedLayer};
 use crate::tile::store::StoreEvent;
 use crate::tile_parameters::TileParameters;
-use crate::{Registry, render_source};
 
 /// What the render source reported for the tile.
 #[derive(Debug, PartialEq)]
@@ -70,9 +70,7 @@ fn load(tile: Vec<u8>, layers: &[Arc<dyn ErasedEvaluatedLayer>]) -> Outcome {
         Some(response)
     });
 
-    let source = TileSource::vector("source", None, tileset);
-    mln_style::source::Source::load_description(&source, &*file_source, &run_loop);
-    let base_impl = mln_style::source::Source::base_impl(&source);
+    let style_source = crate::tests::ready(vector_source("source", None, tileset));
     // A loaded sprite with the icon "v" answers the symbol layer's request,
     // and missing icons stay missing.
     let mut store = crate::tests::pool_store(&run_loop, &thread_pool);
@@ -82,11 +80,11 @@ fn load(tile: Vec<u8>, layers: &[Arc<dyn ErasedEvaluatedLayer>]) -> Outcome {
         ImageImpl::new("v".to_owned(), icon, 1.0, false, Vec::new(), Vec::new(), None, None, None).unwrap(),
     ));
     store.images_mut().set_loaded(true);
-    let mut render_source = render_source::create(&base_impl, &mut store);
+    let mut render_source = crate::tests::create_render_source(&style_source, &mut store);
     let file_source: Arc<dyn FileSource> = file_source;
     render_source.update(
         &mut store,
-        base_impl,
+        style_source,
         layers,
         true,
         true,
