@@ -19,7 +19,7 @@ mod group_by_layout;
 mod image_store;
 mod layer_group;
 mod layer_tweaker;
-pub mod layermanager;
+mod layer_type;
 mod layers;
 mod layout;
 mod line_atlas;
@@ -28,6 +28,7 @@ mod paint_property_binder;
 mod paint_property_statistics;
 mod pattern_atlas;
 pub mod query;
+mod registry;
 mod render_layer;
 mod render_light;
 mod render_orchestrator;
@@ -56,6 +57,7 @@ pub mod util;
 pub use frame_projection::{ClipDepthRange, FrameProjection};
 pub use gfx::context::Stats;
 pub(crate) use paint_property_binder::paint_property_binders;
+pub use registry::{Registry, RegistryBuilder, register_builtins};
 pub use renderer::{RenderTimings, Renderer};
 pub use renderer_event::{
     FeatureInfo, FontStack, FrameRenderedFeaturesMap, GlyphRange, LayerFeaturesMap, NDCBound, OverscaledTileID,
