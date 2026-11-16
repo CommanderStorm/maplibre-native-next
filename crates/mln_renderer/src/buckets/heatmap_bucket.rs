@@ -8,8 +8,8 @@ use std::sync::atomic::Ordering;
 use mln_gfx::shaders::segment::SegmentBase;
 use mln_map_types::MapMode;
 use mln_style::expression::Value;
-use mln_style::layer_properties::{LayerProperties, get_evaluated};
-use mln_style::layers::heatmap_layer_properties::{HeatmapLayerProperties, HeatmapPaintProperties};
+use mln_style::layers::Heatmap;
+use mln_style::layers::heatmap_layer_properties::HeatmapPaintProperties;
 use mln_style_types::image::ImagePositions;
 use mln_tile_id::CanonicalTileID;
 use mln_tile_id::geometry_tile_data::{GeometryCollection, GeometryCoordinate, GeometryTileFeature};
@@ -20,11 +20,10 @@ use parking_lot::RwLock;
 
 use crate::bucket::{Bucket, BucketBase};
 use crate::bucket_geometry::GeometryVec;
-use crate::bucket_parameters::BucketParameters;
 use crate::gfx::context::Context;
+use crate::layer_type::EvaluatedLayer;
 use crate::layout::pattern_layout::PatternLayerMap;
 use crate::paint_property_binder::PaintPropertyBinder;
-use crate::render_layer::RenderLayer;
 
 crate::paint_property_binders!(
     pub struct HeatmapBinders for HeatmapPaintProperties::PossiblyEvaluated {
@@ -59,16 +58,13 @@ pub(crate) struct HeatmapBucket {
 static EMPTY_FORMATTED_SECTION: Value = Value::Null;
 
 impl HeatmapBucket {
-    pub(crate) fn new(parameters: &BucketParameters, layers: &[Arc<dyn LayerProperties>]) -> Self {
+    #[must_use]
+    pub(crate) fn new(layers: &VecMap<String, Arc<EvaluatedLayer<Heatmap>>>, mode: MapMode, zoom: f32) -> Self {
         let mut paint_property_binders = VecMap::new();
-        for layer in layers {
-            // `emplace` keeps the first entry for an id.
-            paint_property_binders.entry(layer.base_impl.id.clone()).or_insert_with(|| {
-                RwLock::new(HeatmapBinders::new(
-                    get_evaluated::<HeatmapLayerProperties>(layer),
-                    f32::from(parameters.tile_id.overscaled_z),
-                ))
-            });
+        for (id, layer) in layers {
+            paint_property_binders
+                .entry(id.clone())
+                .or_insert_with(|| RwLock::new(HeatmapBinders::new(&layer.paint, zoom)));
         }
         HeatmapBucket {
             base: BucketBase::default(),
@@ -76,7 +72,7 @@ impl HeatmapBucket {
             triangles: GeometryVec::default(),
             segments: Vec::new(),
             paint_property_binders,
-            mode: parameters.mode,
+            mode,
         }
     }
 
@@ -186,7 +182,7 @@ impl Bucket for HeatmapBucket {
         !self.segments.is_empty()
     }
 
-    fn get_query_radius(&self, _layer: &dyn RenderLayer) -> f32 {
-        0.0
+    fn write_wire(&self, w: &mut mln_wire::Writer) {
+        mln_wire::Wire::write(self, w);
     }
 }

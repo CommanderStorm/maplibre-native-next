@@ -17,11 +17,9 @@ use mln_actor::{LocalObject, RunLoop, TaggedScheduler, scheduler};
 use mln_map::transform::Transform;
 use mln_map_types::{CameraOptions, ConstrainMode, MapDebugOptions, MapMode, TileLodMode, ViewportMode};
 use mln_storage::{FileSource, Resource, Responder, Response};
-use mln_style::layer::{Layer, downcast_arc};
-use mln_style::layer_properties::LayerProperties;
-use mln_style::layers::fill_layer::Impl as FillLayerImpl;
-use mln_style::layers::raster_layer::Impl as RasterLayerImpl;
-use mln_style::layers::{FillLayer, FillLayerProperties, RasterLayer, RasterLayerProperties};
+use mln_style::layer::Layer;
+use mln_style::layer_type::LayerStyle;
+use mln_style::layers::{Fill, Raster};
 use mln_style::source::Source;
 use mln_style::sources::tile_source::TileSource;
 use mln_util::constants::DEFAULT_MAXIMUM_CONCURRENT_REQUESTS;
@@ -31,6 +29,8 @@ use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_util::tileset::PartialTileset;
 
+use crate::Registry;
+use crate::layer_type::{ErasedEvaluatedLayer, EvaluatedLayer};
 use crate::render_source::{self as render_source, RenderSource};
 use crate::tile::source_tiles::SourceTiles;
 use crate::tile::store::{SourceInfo, TileStore};
@@ -150,8 +150,8 @@ struct Scene {
     transform: Transform,
     vector: TileSource,
     raster: TileSource,
-    fill_layers: Vec<Arc<dyn LayerProperties>>,
-    raster_layers: Vec<Arc<dyn LayerProperties>>,
+    fill_layers: Vec<Arc<dyn ErasedEvaluatedLayer>>,
+    raster_layers: Vec<Arc<dyn ErasedEvaluatedLayer>>,
     vector_render_source: Box<dyn RenderSource>,
     raster_render_source: Box<dyn RenderSource>,
     store: TileStore,
@@ -175,13 +175,13 @@ impl Scene {
         vector.load_description(&*file_source, &run_loop);
         raster.load_description(&*file_source, &run_loop);
 
-        let mut fill = FillLayer::new("water", "vector");
+        let mut fill = Layer::new(Registry::with_builtins().style(), "fill", "water", "vector").unwrap();
         fill.set_source_layer("water");
-        let fill_layers: Vec<Arc<dyn LayerProperties>> =
-            vec![Arc::new(FillLayerProperties::new(downcast_arc::<FillLayerImpl>(&fill.base_impl())))];
-        let raster_layer = RasterLayer::new("raster", "raster");
-        let raster_layers: Vec<Arc<dyn LayerProperties>> =
-            vec![Arc::new(RasterLayerProperties::new(downcast_arc::<RasterLayerImpl>(&raster_layer.base_impl())))];
+        let fill_layers: Vec<Arc<dyn ErasedEvaluatedLayer>> =
+            vec![Arc::new(EvaluatedLayer::<Fill>::new(LayerStyle::recover(fill.style()).unwrap()))];
+        let raster_layer = Layer::new(Registry::with_builtins().style(), "raster", "raster", "raster").unwrap();
+        let raster_layers: Vec<Arc<dyn ErasedEvaluatedLayer>> =
+            vec![Arc::new(EvaluatedLayer::<Raster>::new(LayerStyle::recover(raster_layer.style()).unwrap()))];
 
         let mut transform = Transform::new(ConstrainMode::HeightOnly, ViewportMode::Default);
         transform.resize(size).unwrap();
