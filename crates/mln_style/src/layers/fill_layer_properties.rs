@@ -19,6 +19,7 @@ crate::properties!(
     pub mod FillPaintProperties: paint {
         fill_antialias: constant bool = true,
         fill_color: data_driven Color = Color::black(),
+        fill_layer_opacity: constant f32 = 1.0_f32,
         fill_opacity: data_driven f32 = 1.0_f32,
         fill_outline_color: data_driven Color = Color::default(),
         fill_pattern: cross_faded_data_driven Image = Image::default(),
@@ -33,6 +34,7 @@ pub(crate) static PROPERTIES: PropertyTable = PropertyTable::new(
     &[
         PropertyInfo::paint("fill-antialias"),
         PropertyInfo::paint("fill-color").data_driven(),
+        PropertyInfo::paint("fill-layer-opacity"),
         PropertyInfo::paint("fill-opacity").data_driven(),
         PropertyInfo::paint("fill-outline-color").data_driven(),
         PropertyInfo::paint("fill-pattern").data_driven(),
@@ -40,7 +42,7 @@ pub(crate) static PROPERTIES: PropertyTable = PropertyTable::new(
         PropertyInfo::paint("fill-translate-anchor"),
         PropertyInfo::layout("fill-sort-key").data_driven(),
     ],
-    &[0, 1, 2, 3, 4, 7, 5, 6],
+    &[0, 1, 2, 3, 4, 5, 8, 6, 7],
 );
 
 /// Calls `visitor` with the field of the property in `slot`.
@@ -48,12 +50,13 @@ pub(crate) fn visit<V: PropertyVisitor<LayerStyle<Fill>>>(slot: usize, visitor: 
     Some(match slot {
         0 => visitor.paint(|s| &s.paint.fill_antialias, |s| &mut s.paint.fill_antialias),
         1 => visitor.paint(|s| &s.paint.fill_color, |s| &mut s.paint.fill_color),
-        2 => visitor.paint(|s| &s.paint.fill_opacity, |s| &mut s.paint.fill_opacity),
-        3 => visitor.paint(|s| &s.paint.fill_outline_color, |s| &mut s.paint.fill_outline_color),
-        4 => visitor.paint(|s| &s.paint.fill_pattern, |s| &mut s.paint.fill_pattern),
-        5 => visitor.paint(|s| &s.paint.fill_translate, |s| &mut s.paint.fill_translate),
-        6 => visitor.paint(|s| &s.paint.fill_translate_anchor, |s| &mut s.paint.fill_translate_anchor),
-        7 => visitor.layout(|s| &s.layout.fill_sort_key, |s| &mut s.layout.fill_sort_key),
+        2 => visitor.paint(|s| &s.paint.fill_layer_opacity, |s| &mut s.paint.fill_layer_opacity),
+        3 => visitor.paint(|s| &s.paint.fill_opacity, |s| &mut s.paint.fill_opacity),
+        4 => visitor.paint(|s| &s.paint.fill_outline_color, |s| &mut s.paint.fill_outline_color),
+        5 => visitor.paint(|s| &s.paint.fill_pattern, |s| &mut s.paint.fill_pattern),
+        6 => visitor.paint(|s| &s.paint.fill_translate, |s| &mut s.paint.fill_translate),
+        7 => visitor.paint(|s| &s.paint.fill_translate_anchor, |s| &mut s.paint.fill_translate_anchor),
+        8 => visitor.layout(|s| &s.layout.fill_sort_key, |s| &mut s.layout.fill_sort_key),
         _ => return None,
     })
 }
