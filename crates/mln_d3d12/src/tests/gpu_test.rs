@@ -1,0 +1,198 @@
+use mln_gfx::gpu::conformance::{
+    clip_mask_and_background, custom_layers, depth_only, foreign_ids, imported_textures, instanced_walls,
+    invalid_calls, readbacks, topologies, transparent_replace, vertex_layouts, wall_quads,
+};
+use mln_gfx::gpu::{Gpu as _, GpuError, ShaderKey};
+use mln_gfx::shader_group::GLOBE_DEFINE;
+use mln_glsl::PROGRAMS;
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN};
+
+use crate::{D3d12Gpu, Device};
+
+fn gpu() -> D3d12Gpu {
+    let device = Device::new(None).expect("a D3D12 device");
+    D3d12Gpu::new(&device).expect("D3d12Gpu")
+}
+
+#[test]
+fn clip_mask_and_background_through_gpu() {
+    clip_mask_and_background(&mut gpu()).expect("the frame");
+}
+
+#[test]
+fn invalid_calls_through_gpu() {
+    invalid_calls(&mut gpu()).expect("the valid calls");
+}
+
+#[test]
+fn foreign_ids_through_gpu() {
+    let device = Device::new(None).expect("a D3D12 device");
+    let mut first = D3d12Gpu::new(&device).expect("D3d12Gpu");
+    let mut second = D3d12Gpu::new(&device).expect("D3d12Gpu");
+    foreign_ids(&mut first, &mut second).expect("the valid calls");
+}
+
+#[test]
+fn transparent_replace_through_gpu() {
+    transparent_replace(&mut gpu()).expect("the frame");
+}
+
+#[test]
+fn topologies_through_gpu() {
+    topologies(&mut gpu()).expect("the frames");
+}
+
+#[test]
+fn vertex_layouts_through_gpu() {
+    vertex_layouts(&mut gpu()).expect("the frames");
+}
+
+#[test]
+fn readbacks_through_gpu() {
+    readbacks(&mut gpu()).expect("the readbacks");
+}
+
+#[test]
+fn instanced_walls_through_gpu() {
+    instanced_walls(&mut gpu()).expect("the frame");
+}
+
+#[test]
+fn wall_quads_through_gpu() {
+    wall_quads(&mut gpu()).expect("the frame");
+}
+
+#[test]
+fn depth_only_through_gpu() {
+    depth_only(&mut gpu()).expect("the frame");
+}
+
+#[test]
+fn custom_layers_through_gpu() {
+    custom_layers(
+        &mut gpu(),
+        |lent| assert!(lent.is::<crate::CustomLayerEncoder>()),
+        |lent| {
+            let lent = lent.downcast_mut::<crate::CustomLayerPass>().expect("a D3D12 pass");
+            assert_eq!(lent.color_format, DXGI_FORMAT_R8G8B8A8_UNORM);
+            assert_eq!(lent.depth_stencil_format, DXGI_FORMAT_UNKNOWN);
+        },
+    )
+    .expect("the frames");
+}
+
+#[test]
+fn imported_textures_through_gpu() {
+    imported_textures(&mut gpu(), |gpu, texture| {
+        let (resource, state) = gpu.native_texture(texture).ok_or(GpuError::UnknownId("texture"))?;
+        let resource = resource.clone();
+        gpu.import_texture(&resource, state)
+    })
+    .expect("the frames");
+}
+
+// Every program compiles for `Gpu`, which maps each binding to a root
+// parameter, with every property per vertex and every property as a
+// uniform, in both projections.
+#[test]
+fn every_program_compiles_for_gpu() {
+    let mut gpu = gpu();
+    for &(program, source) in PROGRAMS {
+        let uniforms: Vec<String> =
+            source.uniform_properties().into_iter().map(|name| format!("HAS_UNIFORM_u_{name}")).collect();
+        for globe in [false, true] {
+            let projection = globe.then(|| GLOBE_DEFINE.to_owned());
+            for defines in [Vec::new(), uniforms.clone()] {
+                let pixel_ratio = "DEVICE_PIXEL_RATIO=1.0".to_owned();
+                let key = ShaderKey::new(program, defines.into_iter().chain(projection.clone()).chain([pixel_ratio]));
+                if let Err(error) = gpu.create_shader(&key) {
+                    panic!("{key:?}: {error}");
+                }
+            }
+        }
+    }
+}
+
+// The memory of destroyed buffers goes back once the work before it has
+// finished, and new buffers take it again.
+#[test]
+fn destroyed_buffers_memory_is_reused() {
+    use mln_gfx::gpu::{BufferDesc, BufferUsage, ResourceId};
+
+    let mut gpu = gpu();
+    let round = |gpu: &mut D3d12Gpu| {
+        let buffers: Vec<_> = [BufferUsage::Vertex, BufferUsage::Uniform]
+            .into_iter()
+            .flat_map(|usage| (0..500).map(move |_| BufferDesc { label: "small", usage, size: 300 }))
+            .map(|desc| gpu.create_buffer(&desc).expect("a buffer"))
+            .collect();
+        for buffer in buffers {
+            gpu.destroy(ResourceId::Buffer(buffer));
+        }
+        gpu.flush(true).expect("the flush");
+        gpu.slab_pages()
+    };
+    let first = round(&mut gpu);
+    assert!(first > 0);
+    assert_eq!(round(&mut gpu), first, "the second round takes the first's slabs");
+}
+
+// A uniform buffer in reused memory holds zeros in every window, so a write
+// of zeros, which matches its contents, leaves zeros there.
+#[test]
+fn a_uniform_buffer_in_reused_memory_starts_zeroed() {
+    use mln_gfx::gpu::{
+        BufferDesc, BufferUsage, ColorAttachment, LoadOp, PassDesc, ResourceId, TextureDesc, TextureFormat,
+        TextureUsage,
+    };
+
+    let mut gpu = gpu();
+    let desc = BufferDesc { label: "uniform", usage: BufferUsage::Uniform, size: 256 };
+    let first = gpu.create_buffer(&desc).expect("a buffer");
+    gpu.write_buffer(first, 0, &[0xAB; 256]).expect("the write");
+    gpu.flush(true).expect("the flush");
+    // A pass in the next batch brings its window up to date, so the buffer
+    // goes once its work finishes.
+    let size = mln_util::size::Size::new(4, 4);
+    let usage = TextureUsage { render_target: true, ..TextureUsage::default() };
+    let target = gpu
+        .create_texture(&TextureDesc { label: "target", size, format: TextureFormat::Rgba8Unorm, usage })
+        .expect("a texture");
+    let color = Some(ColorAttachment { texture: target, load: LoadOp::Load });
+    gpu.begin_pass(&PassDesc { label: "pass", color, depth_stencil: None }).expect("the pass");
+    gpu.end_pass().expect("the pass's end");
+    gpu.flush(true).expect("the flush");
+    assert!(gpu.windows(first).iter().all(|window| window.iter().all(|&byte| byte == 0xAB)));
+    gpu.destroy(ResourceId::Buffer(first));
+    gpu.flush(true).expect("the flush");
+    let pages = gpu.slab_pages();
+    let second = gpu.create_buffer(&desc).expect("a buffer");
+    assert_eq!(gpu.slab_pages(), pages, "the second buffer takes the first's memory");
+    gpu.write_buffer(second, 0, &[0; 256]).expect("the write");
+    for window in gpu.windows(second) {
+        assert!(window.iter().all(|&byte| byte == 0));
+    }
+}
+
+// Readbacks waiting at once each copy into memory that a texture copy can
+// write to, from an offset of 512 bytes.
+#[test]
+fn small_readbacks_waiting_at_once_read_their_rows() {
+    use mln_gfx::gpu::{TextureDesc, TextureFormat, TextureRegion, TextureUsage};
+    use mln_util::size::Size;
+
+    let mut gpu = gpu();
+    let size = Size::new(4, 4);
+    let usage = TextureUsage { sampled: true, copy_src: true, ..TextureUsage::default() };
+    let texture = gpu
+        .create_texture(&TextureDesc { label: "rows", size, format: TextureFormat::Rgba8Unorm, usage })
+        .expect("a texture");
+    let texels: Vec<u8> = (0..64).collect();
+    gpu.write_texture(texture, TextureRegion::whole(size), &texels).expect("the write");
+    let row = |y| TextureRegion { x: 0, y, size: Size::new(4, 1) };
+    let readbacks: Vec<_> = (0..4).map(|y| gpu.read_texture(texture, row(y)).expect("a readback")).collect();
+    for (y, readback) in readbacks.into_iter().enumerate() {
+        let read = gpu.take_readback(readback, true).expect("the texels").expect("waited for");
+        assert_eq!(read, texels[y * 16..(y + 1) * 16], "row {y}");
+    }
+}
