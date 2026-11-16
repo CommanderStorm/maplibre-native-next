@@ -6,16 +6,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use mln_map_types::MapDebugOptions;
-use mln_style::source;
-use mln_style_types::SourceType;
+use mln_style::Source;
 use mln_util::constants;
 use mln_util::error::Error;
 
 use crate::layer_type::ErasedEvaluatedLayer;
 use crate::paint_parameters::TransformParameters;
+use crate::registry::Registry;
 use crate::render_tile::RenderTile;
 use crate::render_tree::RenderItem;
-use crate::sources::render_tile_source::RenderTileSource;
 use crate::tile::job::SourceKey;
 use crate::tile::store::TileStore;
 use crate::tile_parameters::TileParameters;
@@ -58,13 +57,13 @@ impl RenderTiles {
 
 /// The data members of `RenderSource`.
 pub(crate) struct RenderSourceBase {
-    pub(crate) base_impl: Arc<dyn source::Impl>,
+    pub(crate) style_source: Source,
     pub(crate) enabled: bool,
 }
 
 impl RenderSourceBase {
-    pub(crate) fn new(impl_: Arc<dyn source::Impl>) -> Self {
-        RenderSourceBase { base_impl: impl_, enabled: false }
+    pub(crate) fn new(style_source: Source) -> Self {
+        RenderSourceBase { style_source, enabled: false }
     }
 }
 
@@ -76,7 +75,7 @@ pub(crate) trait RenderSource {
     fn update(
         &mut self,
         store: &mut TileStore,
-        impl_: Arc<dyn source::Impl>,
+        style_source: Source,
         layers: &[Arc<dyn ErasedEvaluatedLayer>],
         needs_rendering: bool,
         needs_relayout: bool,
@@ -149,20 +148,13 @@ pub(crate) trait RenderSource {
     }
 }
 
-/// Creates the render source of a style source, whose tiles, if it has
-/// any, `store` keeps.
-pub(crate) fn create(impl_: &Arc<dyn source::Impl>, store: &mut TileStore) -> Box<dyn RenderSource> {
-    match impl_.type_ {
-        SourceType::Image => {
-            Box::new(crate::sources::render_image_source::RenderImageSource::new(source::downcast_arc::<
-                mln_style::sources::image_source::Impl,
-            >(impl_)))
-        }
-        SourceType::Vector
-        | SourceType::Raster
-        | SourceType::RasterDEM
-        | SourceType::GeoJSON
-        | SourceType::CustomVector
-        | SourceType::CustomMVTVector => Box::new(RenderTileSource::new(Arc::clone(impl_), store)),
-    }
+/// Creates the render source of a style source through its type in
+/// `registry`, whose tiles, if it has any, `store` keeps. `None` for a type
+/// that the registry lacks, which breaks the contract that a map and its
+/// renderer register the same types.
+pub(crate) fn create(registry: &Registry, source: &Source, store: &mut TileStore) -> Option<Box<dyn RenderSource>> {
+    let name = source.info().name;
+    let render_source = registry.source_type(name).map(|source_type| source_type.create_render_source(source, store));
+    debug_assert!(render_source.is_some(), "the renderer's registry has no source type '{name}'");
+    render_source
 }
