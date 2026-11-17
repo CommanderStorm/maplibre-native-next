@@ -2876,6 +2876,7 @@ dependencies = [
  "fastrand",
  "geojson",
  "mln-rs-conversion",
+ "mln-rs-expression",
  "mln-rs-feature",
  "mln-rs-geometry",
  "mln-rs-gfx",
