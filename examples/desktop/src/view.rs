@@ -10,9 +10,9 @@
 // The thread sleeps until it has work: a message from the window (host.rs)
 // or the runtime, a wake from the render session, or a deadline. Each frame
 // takes the messages that came since the last, and the session's frame waits
-// for the surface's next texture. Frames come at most once per refresh of the
-// display the window opened on, or as fast as the surface takes them in
-// benchmark mode.
+// for the surface's next texture. Frames start at the display's refreshes,
+// or at its refresh interval where the platform reports no refreshes
+// (pacing.rs). In benchmark mode they come as fast as the surface takes them.
 //
 // Mouse, touch, wheel, trackpad and the arrow, `+` and `-` keys go to a
 // `GestureRecognizer` (mln_gestures), which moves the map's camera and
@@ -37,6 +37,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use mln_frame_pacer::FramePacer;
 use mln_gestures::{Button, GestureRecognizer, Input, Key, Modifiers, PinchPhase, PointerKind, WheelDelta};
 use mln_map::{
     AnimationOptions, BoundOptions, CameraDelta, CameraOptions, CameraUpdate, CameraUpdateMode, GesturePhase,
@@ -60,6 +61,7 @@ use crate::Args;
 use crate::backend::{self, Kind, WindowSession, WindowSurfaces};
 use crate::host::{Inbox, Message, UserEvent};
 use crate::overlay::Paint;
+use crate::pacing::{Pacing, Ready, Refreshes};
 use crate::settings::Settings;
 use crate::styles::{self, Style};
 use crate::ui::{Action, Controls, Shown};
@@ -204,12 +206,25 @@ pub(crate) fn run(launch: Launch) {
         None => std::env::var("MLN_STYLE_URL").unwrap_or_else(|_| DEFAULT_STYLE.to_owned()),
     };
 
+    // Benchmark frames don't wait for the display.
+    let refreshes = if args.benchmark {
+        None
+    } else {
+        let woken = Arc::clone(&inbox);
+        match FramePacer::new(None, move |_, _| woken.wake_for_refresh()) {
+            Ok(pacer) => Some(DisplayRefreshes { pacer, inbox: Arc::clone(&inbox) }),
+            Err(e) => {
+                Log::info(Event::Render, format!("Pacing frames on a timer: {}", e.message));
+                None
+            }
+        }
+    };
+
     let mut view = View {
         inbox,
         proxy,
         start,
-        frame_interval,
-        next_frame_at: Instant::now(),
+        pacing: Pacing::new(refreshes, frame_interval, Instant::now()),
         runtime,
         map,
         surfaces,
@@ -294,12 +309,28 @@ fn log_failure<T: Send + 'static>(sent: Result<Completion<T>, Error>) {
     }
 }
 
+/// The display's refreshes that a frame pacer reports, which wake the
+/// render thread through its inbox.
+struct DisplayRefreshes {
+    pacer: Arc<FramePacer>,
+    inbox: Arc<Inbox>,
+}
+
+impl Refreshes for DisplayRefreshes {
+    fn request(&self) {
+        self.pacer.request(());
+    }
+
+    fn take(&self) -> bool {
+        self.inbox.take_refresh()
+    }
+}
+
 struct View {
     inbox: Arc<Inbox>,
     proxy: EventLoopProxy<UserEvent>,
     start: Instant,
-    frame_interval: Duration,
-    next_frame_at: Instant,
+    pacing: Pacing<DisplayRefreshes>,
 
     runtime: Runtime,
     map: Map,
@@ -415,11 +446,12 @@ impl View {
                 self.inbox.wait(self.next_deadline());
                 continue;
             }
-            if !self.benchmark && now < self.next_frame_at {
-                self.inbox.wait(Some(self.next_frame_at));
+            if !self.benchmark
+                && let Ready::Wait(until) = self.pacing.ready(now)
+            {
+                self.inbox.wait(Some(until));
                 continue;
             }
-            self.next_frame_at = now + self.frame_interval;
             self.frame();
         }
         if self.readback_path.is_some() {
