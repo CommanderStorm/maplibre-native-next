@@ -6,68 +6,89 @@ rust-version.workspace = true
 description.workspace = true
 license.workspace = true
 repository.workspace = true
-# style.json, which the scene embeds.
-include = ["/src", "/style.json"]
 # The benchmarks (README.md); never released.
 publish = false
-
-[lib]
-name = "mln_bench"
-doctest = false
 
 [[bin]]
 name = "mln-bench"
 path = "src/main.rs"
-test = false
 
+[features]
+# More code in the harness, which no scenario runs, so that the code of the
+# rest lies at other addresses (build.rs, `mln-bench compare`).
+layout-probe = []
+
+# `mln-bench compare` builds this package inside the base's workspace too, so
+# it names its dependencies itself instead of through the workspace's table:
+# the libraries by path, and other crates by requirements loose enough that
+# any base's Cargo.lock satisfies them as it stands.
 [dependencies]
-feature.workspace = true
-mln_gfx.workspace = true
-# The OpenGL backend's renderer name (scene.rs).
-mln_gl.workspace = true
-mln_headless.workspace = true
-mln_image.workspace = true
-mln_map.workspace = true
-mln_renderer.workspace = true
-# The device the headless frontend renders on.
-mln_runtime = { workspace = true, features = ["default"] }
-# Its `sqlite` feature (the ambient cache, as on native) comes through
-# render_test: naming it here would stop `mln-bench compare` building this
-# harness over commits from before mln_storage had the feature.
-mln_storage.workspace = true
-mln_style.workspace = true
-mln_style_types.workspace = true
-mln_text.workspace = true
-mln_util.workspace = true
-# The wait for a render session's frames (runtime_scene.rs).
-parking_lot.workspace = true
-# Encodes the basemap's tiles as MLT with their triangles (scene.rs).
-mlt-core.workspace = true
-pixelmatch.workspace = true
-# Reads the cases' code, to tell which changed between two harnesses
-# (compare.rs).
-proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
-render_test.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-# The cache database of Runtime/Startup (cases.rs).
-tempfile.workspace = true
-wgpu.workspace = true
+feature = { package = "mln-rs-feature", path = "../../vendor/feature" }
+# The fixture snapshot and the camera paths, which the desktop example's
+# benchmark mode shares.
+mln_bench_workload = { package = "mln-rs-bench-workload", path = "workload" }
+mln_conversion = { package = "mln-rs-conversion", path = "../../crates/mln_conversion" }
+mln_expression = { package = "mln-rs-expression", path = "../../crates/mln_expression" }
+mln_gfx = { package = "mln-rs-gfx", path = "../../crates/mln_gfx" }
+# The OpenGL backend's renderer name (support/map.rs).
+mln_gl = { package = "mln-rs-gl", path = "../../crates/mln_gl" }
+mln_headless = { package = "mln-rs-headless", path = "../../crates/mln_headless" }
+# The PNG files of the scenarios' last images (`mln-bench run --images`).
+mln_image = { package = "mln-rs-image", path = "../../crates/mln_image" }
+mln_map = { package = "mln-rs-map", path = "../../crates/mln_map" }
+# The renderer's internal stages, through its `bench` entry points, and the
+# font-face shaper that the packages that render turn on.
+mln_renderer = { package = "mln-rs-renderer", path = "../../crates/mln_renderer", default-features = false, features = [
+  "bench",
+  "font-face-shaper",
+] }
+# The devices of every backend, which MLN_RENDER_BACKEND picks among, and
+# the runtime's internal stages, through its `bench` entry points.
+mln_runtime = { package = "mln-rs-runtime", path = "../../crates/mln_runtime", features = [
+  "bench",
+  "default",
+] }
+# The file source that reads the fixtures (support/fixtures.rs).
+mln_storage = { package = "mln-rs-storage", path = "../../crates/mln_storage" }
+# The sprite whose images the layouts of symbols use.
+mln_sprite = { package = "mln-rs-sprite", path = "../../crates/mln_sprite" }
+# The style, and its edits.
+mln_style = { package = "mln-rs-style", path = "../../crates/mln_style" }
+mln_style_types = { package = "mln-rs-style-types", path = "../../crates/mln_style_types" }
+# Glyphs and text shaping.
+mln_text = { package = "mln-rs-text", path = "../../crates/mln_text" }
+# The tiles that the decode and layout scenarios read.
+mln_tile = { package = "mln-rs-tile", path = "../../crates/mln_tile" }
+mln_tile_id = { package = "mln-rs-tile-id", path = "../../crates/mln_tile_id" }
+mln_util = { package = "mln-rs-util", path = "../../crates/mln_util" }
+# The latency file source's held answers (support/latency.rs).
+parking_lot = "0.12"
+# Single tiles of the fixtures' archives (support/fixtures.rs).
+pmtiles = { version = "0.28", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The fixtures' checksums (fixtures.rs).
+sha2 = "0.11"
+# The file each scenario's process writes its report to, and the directory
+# the fixtures are installed through.
+tempfile = "3"
+# The WebGPU adapter's description, and the wait for its queue.
+wgpu = { version = "30", default-features = false }
 
-# The Vulkan backend, which MLN_RENDER_BACKEND=vulkan picks in the headless
-# frontend (scene.rs describes it).
 [target.'cfg(not(any(target_vendor = "apple", target_family = "wasm")))'.dependencies]
-mln_vulkan.workspace = true
+mln_vulkan = { package = "mln-rs-vulkan", path = "../../crates/mln_vulkan" }
 
+# The instruction counters and the process's CPU time (meter.rs), and the
+# machine's description (environment.rs).
 [target.'cfg(unix)'.dependencies]
-libc.workspace = true
+libc = "0.2"
 
-# The D3D12 backend, which MLN_RENDER_BACKEND=d3d12 picks in the headless
-# frontend (scene.rs describes it), and the CPU time of the process
-# (meter.rs).
 [target.'cfg(windows)'.dependencies]
-mln_d3d12.workspace = true
-windows-sys.workspace = true
+mln_d3d12 = { package = "mln-rs-d3d12", path = "../../crates/mln_d3d12" }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+] }
 
 [lints]
 workspace = true

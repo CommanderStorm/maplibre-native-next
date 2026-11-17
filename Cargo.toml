@@ -9,6 +9,8 @@ members = [
   "crates/*",
   "examples/*",
   "tools/bench",
+  "tools/bench/workload",
+  "tools/bench-snapshot",
   "tools/c-abi-gen",
   "tools/expression-test",
   "tools/render-test",
@@ -50,6 +52,7 @@ kdbush = { package = "mln-rs-kdbush", path = "vendor/kdbush", version = "=0.0.13
 mln_conversion = { package = "mln-rs-conversion", path = "crates/mln_conversion", version = "=0.0.13" }
 mln_d3d12 = { package = "mln-rs-d3d12", path = "crates/mln_d3d12", version = "=0.0.13" }
 mln_expression = { package = "mln-rs-expression", path = "crates/mln_expression", version = "=0.0.13" }
+mln_bench_workload = { package = "mln-rs-bench-workload", path = "tools/bench/workload" }
 mln_frame_pacer = { package = "mln-rs-frame-pacer", path = "crates/mln_frame_pacer", version = "=0.0.13" }
 mln_gestures = { package = "mln-rs-gestures", path = "crates/mln_gestures", version = "=0.0.13" }
 mln_gfx = { package = "mln-rs-gfx", path = "crates/mln_gfx", version = "=0.0.13" }
@@ -87,7 +90,6 @@ mln_web_host = { package = "mln-rs-web-host", path = "crates/mln_web_host", vers
 mln_webgpu = { package = "mln-rs-webgpu", path = "crates/mln_webgpu", version = "=0.0.13" }
 pixelmatch = { package = "mln-rs-pixelmatch", path = "vendor/pixelmatch", version = "=0.0.13" }
 polylabel = { package = "mln-rs-polylabel", path = "vendor/polylabel", version = "=0.0.13" }
-render_test = { package = "mln-rs-render-test", path = "tools/render-test", version = "=0.0.13" }
 style_codegen = { package = "mln-rs-style-codegen", path = "tools/style-codegen", version = "=0.0.13" }
 supercluster = { package = "mln-rs-supercluster", path = "vendor/supercluster", version = "=0.0.13" }
 
@@ -129,17 +131,15 @@ image-webp = { version = "0.2.4" }
 # crates/mln_gl's headless backend: an EGL context. `dynamic` loads libEGL at
 # run time, so builds need no system development packages.
 khronos-egl = { version = "6.0.0", features = ["dynamic"] }
-# tools/bench: the process's CPU time, which std lacks: clock_gettime on Unix,
-# GetProcessTimes on Windows.
+# System calls that std doesn't wrap (each package says which).
 libc = { version = "0.2.191" }
-# tools/bench's GetProcessTimes, and crates/mln_gl's WGL contexts, their pixel
-# formats and the hidden windows they are current on.
+# crates/mln_gl's WGL contexts, their pixel formats and the hidden windows
+# they are current on.
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Graphics_OpenGL",
   "Win32_System_LibraryLoader",
-  "Win32_System_Threading",
   "Win32_UI_WindowsAndMessaging",
 ] }
 # crates/mln_gl's window backend: loads libwayland-egl at run time.
@@ -221,6 +221,8 @@ serde_json = { version = "1.0.154", features = [
 # members in a Vec, in document order: what the style parser reads a style
 # into.
 serde_json_borrow = { version = "0.9.0" }
+# The checksums of the benchmark fixtures (tools/bench, tools/bench-snapshot).
+sha2 = { version = "0.11.1" }
 skrifa = { version = "0.49.0" }
 # An expression's arguments, on the stack while it evaluates: a filter's
 # expression runs on every feature of every layer it filters. parking_lot
@@ -457,6 +459,8 @@ unreachable_pub = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_qualifications = "warn"
+# The benchmarks' builds give hash maps a fixed seed (tools/bench/profile.toml).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(mln_bench_fixed_hash)"] }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

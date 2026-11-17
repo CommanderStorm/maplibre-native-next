@@ -1,202 +1,419 @@
-# mln-rs-bench
+# mln-bench
 
-The benchmarks of mln-rs, and a comparison of two commits that says which
-changes are real.
+The benchmarks of mln-rs, for evaluating a code change: does it make the work
+mln-rs does for a map larger or smaller, and by how much. One binary,
+`mln-bench`, holds every scenario.
+
+- A **micro** scenario runs one pipeline stage as a function over data, with no
+  map, GPU or threads: `micro/<stage>/<case>`.
+- A **macro** scenario runs a map through something a user waits for or feels,
+  such as loading or drawing frames: `macro/<operation>/<workload>`.
+
+Each scenario does the same work on every run and every machine: fixed frame
+counts, cameras chosen by frame index, data generated from a fixed seed, and no
+waiting on the wall clock. Each runs in a process of its own, so no scenario
+inherits another's heap, threads or caches.
+
+A third kind runs outside `mln-bench`: the desktop example's **presented**
+benchmark
+(`mise run desktop --profile release -- --benchmark[=globe|antimeridian]`) draws
+the camera path of a `macro/frame` scenario in a window, over the same fixtures,
+and prints the times between the frames the window presents. It shows what a
+user sees of a frame, the backend's surface and the display's compositor
+included, which a headless frame leaves out. Nothing runs it but a person at a
+machine with a display: run it on both sides of a change by hand, and compare
+the summaries. `--laps <n>` sets how long it runs (10 laps of 120 frames; 0
+draws until the window closes, for a profiler). The fixtures and the paths come
+from `workload/`, a crate both programs share.
+
+## Running
 
 ```sh
-mise run bench                      # every case, once
-mise run bench --filter Frame       # the cases whose name contains "Frame"
-mise run bench:compare main         # this checkout, uncommitted changes included, against a Git ref
+mise run bench                         # every scenario
+mise run bench -- --filter micro/      # those whose names contain micro/
+mise run bench:list                    # the scenarios and their questions
+mise run bench:compare main            # this checkout against main
+mise run bench:fixtures                # install the map data, once
 ```
 
-## Data
+`mise run bench` builds with the `benchmark` profile (`profile.toml`) and runs
+`mln-bench run`, after `mise run bench:fixtures`; `--json` prints the runs as
+JSON, and `--images <dir>` writes the last image each macro scenario drew to a
+PNG file there.
 
-- The shared render suite's real-world styles (Chicago, San Francisco, Norway)
-  at their tests' cameras, 512 x 512, its CJK labels (`text-font/chinese`), and
-  the planet of `Frame/Globe`: its OSM land and water at zooms 0 and 1 and its
-  Natural Earth places (`data/places.geojson`), all read from its cache
-  database.
-- maplibre-native-ffi's basemap: VersaTiles' Shortbread tiles over central San
-  Francisco (a 5 x 5 block at zoom 14) with Noto Sans glyphs and a generated
-  sprite, 1024 x 768. `fixtures.json` and `style.json` are
-  maplibre-native-ffi's, and the cases below that share its names use its
-  cameras, so their numbers compare with the C++ core's.
-  `mise run bench:fixtures` (`fixtures.py`) downloads the pinned files into
-  `target/bench-fixtures` once; nothing else uses the network.
-- The basemap's tiles as MLT, every polygon with the triangles mlt-core stores
-  for MapLibre Native, which the harness encodes into the fixtures directory
-  before the first case that reads them.
+Macro scenarios draw on the device the tests draw on: WebGPU, unless
+`MLN_RENDER_BACKEND` names another backend (`metal`, `vulkan`, `d3d12`, `gl`).
+The device may be a GPU or a CPU rasterizer, such as lavapipe or llvmpipe on a
+server without a GPU, or on a Linux machine whose Vulkan loader is given only
+lavapipe's driver (`VK_DRIVER_FILES`). Each run records which, and a comparison
+compares a configuration only with itself.
 
-## Cases
+## Scenarios
 
-| case                                                | what one iteration is                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Still/<scene>`                                     | a still frame of a loaded map, read back; the zoom alternates by 0.001, so each is a new frame over the same tiles                                                                                                                                                                                                                                                                                       |
-| `Still/CollidingIcons/<n>`                          | as `Still`, of n icons at one point, each with its own sort key; placement hides all but one, or none in the `-overlap` case                                                                                                                                                                                                                                                                             |
-| `Load/Style/<scene>`                                | from loading the style on a new map to its first complete still; the GPU device is set up before. `basemap-mlt` is the basemap over its MLT tiles, and `basemap-globe` the basemap with its projection set to globe, which at the tiles' zoom draws Mercator over geometry subdivided for the globe                                                                                                      |
-| `Frame/Throughput`                                  | a camera jump around a 200-pixel circle until the GPU has finished the frame that shows it, over tiles an untimed lap loaded                                                                                                                                                                                                                                                                             |
-| `Frame/Paced`                                       | a two-second flight from the block's north-west corner at zoom 14 to its south-east corner at zoom 15.5, past the tiles' zoom, on a 60 Hz display's clock, with only the first view loaded                                                                                                                                                                                                               |
-| `Frame/Oscillate`                                   | three seconds of the bearing swinging between -90° and 90°, each swing half a second, as a rotate drag back and forth turns the map, on a 60 Hz display's clock, with only the first view loaded and every tile answered 100 ms late, as over a network                                                                                                                                                  |
-| `Frame/OscillatePanZoom`                            | as `Frame/Oscillate`, with the center swinging 0.65 of a tile east and west while the zoom goes from 14.9 out to 14 at each end, as a pinch back and forth does                                                                                                                                                                                                                                          |
-| `Frame/Idle`                                        | 100 ms of a settled map whose scene draws whenever the map asks                                                                                                                                                                                                                                                                                                                                          |
-| `Frame/FeatureState`                                | a frame of `Frame/Throughput` over the basemap with its buildings and a street overlay colored by feature state, every building and street of the loaded tiles given a state                                                                                                                                                                                                                             |
-| `Frame/FeatureStateHover`                           | a frame of `Frame/Throughput` over the basemap with its buildings colored by feature state, one building's state changing in every frame as hover highlighting does                                                                                                                                                                                                                                      |
-| `Frame/MapFeatureStateHover`                        | a frame of 100,000 GeoJSON points, each with a feature state set through the map, one point's state changing through the map in every frame                                                                                                                                                                                                                                                              |
-| `Frame/HideLayers`                                  | every layer of the loaded basemap hidden until the map settles, then shown again until it settles complete                                                                                                                                                                                                                                                                                               |
-| `Frame/Extrusions`, `Frame/Extrusions/DataDriven`   | a frame of the basemap's buildings extruded over its background, at a pitch, the zoom alternating as in `Still`; the buildings' height and color are constant, or come from their ids                                                                                                                                                                                                                    |
-| `Frame/Globe`                                       | a camera step of the planet turning on the globe, 1.5° of longitude at zoom 1.5 under latitude 30°, until the GPU has finished the frame that shows it, over tiles an untimed turn loaded; the planet is the render suite's land, water and places under the atmosphere of GL JS's globe example                                                                                                         |
-| `Frame/CrossAntimeridian`                           | a camera step across the antimeridian on a flat map, from 0.75° of longitude on one side to 0.75° on the other at zoom 1.5, until the GPU has finished the frame that shows it, over tiles untimed steps loaded; the map is `Frame/Globe`'s planet with its land drawn by 96 fill layers, about as many layers as a basemap's style has. Every tile of the view is in another world copy after each step |
-| `Frame/SettleWithoutSymbols`                        | from a camera nudge on the basemap with its symbol layers left out, which has nothing to place, until the map stops asking for frames                                                                                                                                                                                                                                                                    |
-| `Frame/AddImages`                                   | from adding 50 icons to a settled basemap, five on each refresh, until it stops asking for frames; a symbol layer over 20 points draws five of them, which its tile asked for before they were added, and nothing draws the rest                                                                                                                                                                         |
-| `Load/Concurrent`                                   | 16 renderers on threads of their own, each from loading a real-world style on a new map to its first complete still through `HeadlessFrontend::render`, as the render tests' workers draw; the GPU devices are set up before                                                                                                                                                                             |
-| `Load/GlyphCache/Private`, `Load/GlyphCache/Shared` | `Load/Concurrent` over the render suite's `text-font/chinese` style (500 labels, about 2,500 CJK characters over 80 glyph ranges), each renderer with a glyph cache of its own, or all sharing one `GlyphCache`                                                                                                                                                                                          |
-| `Style/Replace600`                                  | replacing a style of 600 circle layers over 100 GeoJSON points, each filtered by point id as maplibre-compose's style benchmarks build one, with its other variant on a runtime's map, until it settles complete, as maplibre-compose's style-publication and style-overlay cases do: the loaded style's layers, sources and JSON read back, then a circle layer added above the first of the 600        |
-| `Style/Load`                                        | loading the basemap's style, or a renamed copy, on a runtime's map that no session draws, until the load completes, as maplibre-native-ffi's case of the name does                                                                                                                                                                                                                                       |
-| `Expression/Evaluate`                               | 12 parsed expressions (zoom curves, feature lookups, arithmetic, strings, colors and filters) evaluated by their types at zoom 8 over 10,000 synthetic features, without a map                                                                                                                                                                                                                           |
-| `Expression/Parse`                                  | every layer of the basemap's style parsed ten times with its filter and property values, without a map                                                                                                                                                                                                                                                                                                   |
-| `Runtime/Lifecycle`                                 | starting a runtime with the default options until its first command, the event handler, completes, then releasing it until the release completes, as maplibre-native-ffi's case of the name does through the C API                                                                                                                                                                                       |
-| `Runtime/Startup`                                   | as `Runtime/Lifecycle`, over a cache database file that holds nothing, setting the ambient cache's size limit and listing the offline regions before the release, as maplibre-compose's runtime-startup case does                                                                                                                                                                                        |
-| `Map/FourOnOneRuntime`                              | four maps of the basemap created on one runtime one after another, each until its offscreen session draws its first complete frame, as maplibre-native-ffi's case of the name does                                                                                                                                                                                                                       |
-| `Command/RoundTrip`                                 | a camera jump sent to a runtime's settled basemap until its completion arrives, its offscreen session drawing nothing meanwhile, as maplibre-native-ffi's case of the name does                                                                                                                                                                                                                          |
-| `Command/Burst`                                     | 1000 camera jumps sent to that map without waiting, then a camera query, until its answer arrives, as maplibre-native-ffi's case of the name does                                                                                                                                                                                                                                                        |
-| `Memory/LeaveZoomRange`                             | a jump from zoom 15.5 to 14.5, out of the range of every basemap layer that draws a source, until a frame shows the view complete, on a map that keeps no tile that left the view; untimed, the map settles there and back at 15.5                                                                                                                                                                       |
-| `Style/AddLayer600`                                 | a circle layer added over the first style of `Style/Replace600`, on a continuous map drawn on a 60 Hz display's clock, until it settles complete, then removed until it settles, as maplibre-compose's overlay-update case does                                                                                                                                                                          |
-| `Style/AddRemoveLayers`                             | 100 filtered line layers added to a runtime's settled basemap until a complete frame shows them, then removed until a complete frame shows them gone, as maplibre-native-ffi's case of the name does                                                                                                                                                                                                     |
-| `GeoJson/Replace1000`                               | replacing a GeoJSON source's 1000 points under one circle layer with the other variant on a runtime's map, until the command completes and the map settles with every tile showing the new points, on the display's clock, as maplibre-compose's source-completion case does                                                                                                                             |
-| `Load/JumpWarm`, `Load/JumpCold`                    | a jump between two views that share no tile until a frame shows the new view complete, on the display's clock; cold drops the loaded tiles and glyphs first                                                                                                                                                                                                                                              |
+Each scenario answers one question; its doc comment says what it runs and why
+its sizes are the ones it uses.
 
-In `Frame/Paced`, refreshes are absolute deadlines, and at each refresh with no
-frame in flight the camera moves to where the flight will be at the next
-refresh, so every run draws the same cameras however slow it is. A frame is
-shown at the first refresh after the GPU finishes it, and the next frame starts
-there. The `Frame/Oscillate` cases pace their frames the same way. Their swings
-bring some tiles into view only for moments, shorter than the 100 ms a tile
-takes to come; the file source answers each tile fresh for an hour, as a tile
-server does, so the map fetches a tile again only after it dropped it.
+| scenario                             | question                                                                                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `micro/style/parse/small`            | What does parsing a style document of 110 layers cost?                                                       |
+| `micro/style/parse/large`            | What does parsing a style document of 440 layers cost?                                                       |
+| `micro/style/edit/small`             | What do an application's edits to a style of 110 layers cost, each compared with the version before?         |
+| `micro/style/edit/large`             | What do an application's edits to a style of 440 layers cost, each compared with the version before?         |
+| `micro/expression/parse/liberty`     | What does parsing a style's filters and property expressions cost?                                           |
+| `micro/expression/evaluate/liberty`  | What does evaluating a style's filters and property expressions over a tile's features cost?                 |
+| `micro/decode/mvt/sparse`            | What does decoding a sparse MVT tile cost, its features selected by a style's filters?                       |
+| `micro/decode/mvt/dense`             | What does decoding a dense MVT tile cost, its features selected by a style's filters?                        |
+| `micro/decode/mlt/sparse`            | What does decoding a sparse MLT tile cost, its features selected by a style's filters?                       |
+| `micro/decode/mlt/dense`             | What does decoding a dense MLT tile cost, its features selected by a style's filters?                        |
+| `micro/geojson/parse/small`          | What does parsing GeoJSON text of 1.5 MB cost?                                                               |
+| `micro/geojson/parse/large`          | What does parsing GeoJSON text of 13 MB cost?                                                                |
+| `micro/geojson/cut/small`            | What does cutting the world's tiles of zooms 0 to 4 from 33 countries' borders cost?                         |
+| `micro/geojson/cut/large`            | What does cutting the world's tiles of zooms 0 to 4 from 258 countries' borders cost?                        |
+| `micro/text/glyph-ranges/small`      | What does parsing 7 glyph ranges, those of a tile's labels in Latin script, cost?                            |
+| `micro/text/glyph-ranges/large`      | What does parsing 99 glyph ranges, those of a tile's labels in Japanese script, cost?                        |
+| `micro/text/glyph-sdf/sparse`        | What does drawing a sparse tile's Japanese glyphs from a font, as distance fields, cost?                     |
+| `micro/text/glyph-sdf/dense`         | What does drawing a dense tile's Japanese glyphs from a font, as distance fields, cost?                      |
+| `micro/text/shape/sparse`            | What does shaping a sparse tile's labels into lines of glyphs cost?                                          |
+| `micro/text/shape/dense`             | What does shaping a dense tile's labels into lines of glyphs cost?                                           |
+| `micro/layout/fill/sparse`           | What does laying out a sparse tile's fill layers cost?                                                       |
+| `micro/layout/fill/dense`            | What does laying out a dense tile's fill layers cost?                                                        |
+| `micro/layout/line/sparse`           | What does laying out a sparse tile's line layers cost?                                                       |
+| `micro/layout/line/dense`            | What does laying out a dense tile's line layers cost?                                                        |
+| `micro/layout/fill-extrusion/sparse` | What does laying out a sparse tile's extruded buildings cost?                                                |
+| `micro/layout/fill-extrusion/dense`  | What does laying out a dense tile's extruded buildings cost?                                                 |
+| `micro/layout/symbol/sparse`         | What does laying out a sparse tile's labels and icons cost?                                                  |
+| `micro/layout/symbol/dense`          | What does laying out a dense tile's labels and icons cost?                                                   |
+| `micro/symbols/index/sparse`         | What does indexing a sparse tile's symbols across zooms cost, as the view zooms in on them?                  |
+| `micro/symbols/index/dense`          | What does indexing a dense tile's symbols across zooms cost, as the view zooms in on them?                   |
+| `micro/symbols/place/sparse`         | What does placing a sparse tile's labels and icons cost, each where it collides with none shown?             |
+| `micro/symbols/place/dense`          | What does placing a dense tile's labels and icons cost, each where it collides with none shown?              |
+| `micro/feature-state/apply/sparse`   | What does applying feature state to a sparse tile's roads and buildings cost?                                |
+| `micro/feature-state/apply/dense`    | What does applying feature state to a dense tile's roads and buildings cost?                                 |
+| `micro/worker-codec/tile/sparse`     | What does a sparse tile's job and its laid-out reply cost to cross between the map and a worker instance?    |
+| `micro/worker-codec/tile/dense`      | What does a dense tile's job and its laid-out reply cost to cross between the map and a worker instance?     |
+| `micro/queue/commands/small`         | What does a command cost through a thread's queue and a turn of it, sent one per turn?                       |
+| `micro/queue/commands/large`         | What does a command cost through a thread's queue and a turn of it, sent 256 per turn?                       |
+| `micro/queue/timers/small`           | What do the deadlines of 64 requests in flight cost a thread's queue?                                        |
+| `micro/queue/timers/large`           | What do the deadlines of 4,096 requests in flight cost a thread's queue?                                     |
+| `macro/load/street`                  | What does showing a city's streets from nothing take, until the first complete frame?                        |
+| `macro/load/globe`                   | What does showing the whole world on the globe from nothing take, until the first complete frame?            |
+| `macro/load/cjk`                     | What does showing a city labelled in Japanese script from nothing take, until the first complete frame?      |
+| `macro/load/runtime`                 | What does showing a city's streets take through the runtime, from its start until a still image?             |
+| `macro/frame/street`                 | What does a frame of a city's streets cost while the camera pans, turns and tilts over loaded tiles?         |
+| `macro/frame/globe`                  | What does a frame of the globe cost while it turns and tilts over loaded tiles?                              |
+| `macro/frame/antimeridian`           | What does a frame of the world on a flat map cost while the view crosses the antimeridian over loaded tiles? |
+| `macro/navigate/street`              | What does a flight into a city's streets and back out cost, with tiles arriving while it flies?              |
+| `macro/update/geojson`               | What does replacing a GeoJSON source's data cost, until the map shows the new data?                          |
+| `macro/update/layers`                | What does adding a batch of layers to a city's map, then removing them, cost until the map shows each?       |
+| `macro/update/paint`                 | What does setting a layer's paint property cost, until the map shows the new value?                          |
+| `macro/update/feature-state`         | What does a frame cost that moves a hover state from one feature to another?                                 |
+| `macro/update/images`                | What does adding the images that visible symbols use cost, until the map shows them?                         |
+| `macro/tile-server/street`           | What does a tile server's renderer spend on each new tile of a city, from zoom 7 to 14?                      |
+
+Micro scenarios read what a map over the fixtures reads: Liberty's style, its
+expressions, a sparse and a dense street tile as MVT and MLT, Tokyo's labels,
+the glyph ranges and fonts they need, and Natural Earth's countries as GeoJSON.
+A stage whose cost grows with its input runs at two sizes, named by a last
+segment (`small` and `large`, or `sparse` and `dense` for a tile), so that a
+change in how its cost grows shows as a changed ratio between the two.
+
+Macro scenarios drive a map over the fixtures one step at a time on the
+scenario's own thread (see [Driving a map](#driving-a-map)), the core that the
+runtime runs on its thread, with its background work on that thread too.
+`macro/load/runtime` instead loads a map through `mln_runtime`, as an
+application or the C API does: its thread, its pool's workers and an offscreen
+render session, which interleave differently from run to run.
+
+## Fixtures
+
+Scenarios read map data from a snapshot that never changes and never touches the
+network: [`fixtures.json`](fixtures.json) names each file with its size and
+SHA-256, where the snapshot is published, and the data's sources, licenses and
+attribution. It holds:
+
+- `tiles/street.pmtiles`: OpenFreeMap's vector tiles (OpenMapTiles schema) of
+  central San Francisco, zooms 0 to 14; `tiles/street-mlt.pmtiles`, the same
+  tiles as MLT.
+- `tiles/world.pmtiles`: the whole world, zooms 0 to 4, for the globe.
+- `tiles/cjk.pmtiles`: central Tokyo, zooms 0 to 14, its names in Japanese
+  script.
+- `styles/liberty.json`: OpenFreeMap's Liberty style, its URLs turned into
+  `asset://` URLs of the snapshot (and any layer it can't draw from the snapshot
+  removed, as the manifest's `style_changes` says), with its sprite and the
+  glyph ranges the tiles' labels need.
+- `fonts/`: Noto Sans JP, whose outlines the glyph scenarios draw, and Noto
+  Sans.
+- `geojson/ne_10m_admin_0_countries.geojson`: Natural Earth's countries.
+
+### Attribution and licenses
+
+- Tiles: © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+  contributors, under the Open Database License 1.0, in the
+  [OpenMapTiles](https://openmaptiles.org/) schema (CC BY 4.0), from
+  [OpenFreeMap](https://openfreemap.org/)'s planet build. The MLT tiles are the
+  same data, re-encoded.
+- Style: OpenFreeMap's Liberty, MIT, from OSM Liberty and OSM Bright (code BSD
+  3-Clause, design CC BY 4.0); its sprite's icons are Maki (CC0 1.0) and public
+  domain. `styles/LICENSE.md` in the snapshot has the terms.
+- Fonts and glyphs: Noto Sans and Noto Sans JP, SIL Open Font License 1.1, with
+  their license files under `fonts/`.
+- Countries: [Natural Earth](https://www.naturalearthdata.com/), public domain.
+
+Each tile set comes with its area in the manifest: a camera centered in it sees
+only tiles of the set when its view is at most two tiles across, and a map
+requests no tile outside the archive's bounds, so no frame waits for a tile the
+set lacks.
+
+`mise run bench:fixtures` installs the snapshot from its base URL in a cache
+that every checkout of the user shares, `mln-rs/bench-fixtures/<manifest hash>`
+in `~/Library/Caches` (macOS), `$XDG_CACHE_HOME` or `~/.cache` (Linux) or
+`%LOCALAPPDATA%` (Windows); `MLN_BENCH_FIXTURES` names another directory. It
+downloads into a temporary directory beside that one, checks every file, and
+renames it into place, so a session sees the snapshot complete or not at all,
+and nothing changes it afterwards. `--from <dir>` installs from a directory laid
+out as the base URL is.
+
+A scenario opens it with `support::fixtures::Fixtures::open(bench)`, which
+records the manifest's hash in the run's environment, so runs on different
+fixtures aren't compared. A scenario fails, naming the command, when the
+snapshot isn't installed. Data an application would supply, such as features to
+add, is generated in code from a fixed seed instead.
+
+### A new snapshot
+
+`mise run bench:snapshot <id>` (`tools/bench-snapshot`) fetches the pinned
+OpenFreeMap planet build, the style, its sprite and glyphs, the font files and
+the GeoJSON, at most 8 requests at once; writes the archives, the street tiles
+as MLT and the style; checks that the tiles hold the style's layers and read
+back from the archives; stages the snapshot in
+`target/bench-fixtures-upload/<id>/`, laid out as it is published; and points
+`fixtures.json` at it. Before publishing it, install it with
+`mise run bench:fixtures --from target/bench-fixtures-upload/<id>` and run the
+scenarios that read it. A published snapshot never changes: a new one gets a new
+id.
 
 ## Metrics
 
-All are lower-is-better. A comparison gives a verdict on a case's **lead**
-metrics only; `--verbose` also shows the others.
+Lower is better for every metric. Each is a **count** of work, a **time**, or a
+count **per unit** of work.
 
-- **`time_ms`**, **`cpu_ms`**: an iteration's wall time, and the CPU time of
-  every thread of the process, so work moved to the tile workers or a busy wait
-  still counts. The median of the case's iterations.
-- **`minstr`**, `mcycles`: the millions of instructions and of cycles every
-  thread of the process retires in an iteration, the median of the case's
-  iterations; on macOS, and on Linux in user space where perf events are open to
-  the process (`perf_event_paranoid` at most 2, and not blocked by a container);
-  elsewhere they're left out. Other load on the machine hardly changes the
-  instructions, so they show a change of the work done where `time_ms` and
-  `cpu_ms` are noise; the cycles also count stalls, and vary with load and the
-  cores the threads ran on.
-- **`allocs`**, `alloc_kib`: heap allocations per iteration, of the whole
-  process (the GPU driver's own allocations aren't Rust's and aren't counted).
-- **`peak_heap_mib`**: the most heap live at once during the case.
-- **`frame_p95_ms`**, **`frame_p99_ms`**: frame times, from asking for a frame
-  until the GPU has finished it.
-- In `Frame/Paced`: **`missed_pct`**, frames that finished after the next
-  refresh; **`partial_pct`**, frames that drew a view with tiles still loading;
-  **`longest_stall_ms`**, the longest time between two shown frames;
-  **`complete_after_ms`**, how long after the flight's end the final view shows
-  complete.
-- In `Frame/Oscillate` and `Frame/OscillatePanZoom`: **`tile_requests`**, the
-  tile requests of the swinging, **`partial_pct`** as in `Frame/Paced`, and
-  `frame_max_ms`, the longest frame.
-- In `Frame/Idle`: **`frames_per_s`**, frames drawn while nothing changes.
-- In `Frame/SettleWithoutSymbols`: **`frames`**, frames drawn until the map
-  stops asking for them.
-- In `Frame/HideLayers`: **`hidden_heap_mib`** and **`hidden_gpu_mib`**, the
-  heap and the GPU's vertex and index buffers live while the layers are hidden.
-- In `Frame/Extrusions`: **`gpu_mib`**, the GPU's vertex and index buffers live
-  once the view is complete.
-- In `Style/Replace600`: **`style_ready_cpu_ms`**, the CPU time until the style
-  is loaded and read back, before the map draws, and `frames`, the frames drawn
-  per replacement.
-- In `Style/AddLayer600`: **`frames`**, frames drawn per change until the map
-  settles complete; in `Style/AddRemoveLayers`, `frames` per iteration.
-- In `GeoJson/Replace1000`: **`update_frame_ms`**, the longest frame of a
-  replacement, which is the frame that swaps the old data for the new, and
-  **`ready_ms`**, the time from the result of the first frame after the command
-  until a query of the rendered features shows the new points; the query runs
-  between frames.
-- In `Command/Burst`: `submit_ns`, the time that sending one jump takes.
-- In `Memory/LeaveZoomRange`: **`heap_mib`** and `in_range_heap_mib`, the heap
-  live once the map settled out of range and back in range, above what it was
-  before the case.
-- In `Map/FourOnOneRuntime`: **`heap_mib`**, the heap live once the four maps
-  settled, above what it was before the runtime started.
+Every scenario reports these, over the parts of its run it measures (its setup
+is left out):
+
+| metric          | kind  | what                                                                    |
+| --------------- | ----- | ----------------------------------------------------------------------- |
+| `instructions`  | count | retired by every thread of the process (macOS and Linux only)           |
+| `allocations`   | count | heap allocations of every thread                                        |
+| `allocated`     | count | the bytes those allocations asked for                                   |
+| `peak_heap`     | count | the most heap bytes live at once, above those live when measuring began |
+| `retained_heap` | count | the heap bytes live at the end, above those live when measuring began   |
+| `wall`, `cpu`   | time  | wall-clock time, and the CPU time of every thread of the process        |
+
+A scenario adds its own counts and times, such as `frames`, `frames_incomplete`
+(frames drawn with tiles missing), `tile_requests`, `gpu_buffers` (the bytes of
+the GPU's vertex and index buffers), `gpu_objects` (the textures and buffers the
+renderer made) or `background_work` (the times a frame started work off the
+frame, such as laying out a tile). A scenario that repeats a unit of work, such
+as a frame or a tile, also reports `instructions`, `allocations` and `allocated`
+per unit, such as `instructions_per_frame`.
+
+A user feels the costliest frames, not the average one: the frame that crosses
+the antimeridian, or the one where a tile arrives. So a scenario whose measured
+parts are each one unit of a user's experience (a frame, a tile, an edit) also
+reports how the units spread, with no need to know which are costly:
+`instructions`, `allocations`, `allocated` and `wall` of the median unit, the
+90th percentile and the costliest, such as `allocations_per_frame_max`.
+
+How closely a count repeats depends on what it counts. Allocations and bytes
+repeat exactly in most scenarios. Instructions move by a few hundredths of a
+percent between runs of one binary, but also with where the binary's code lies,
+which an edit anywhere can change: by a tenth of a percent in most scenarios,
+and by a few percent, up to ten, in some. That is real, the binary runs those
+instructions, but it doesn't come from what the edit does. Counts that depend on
+how several threads interleave, such as every count of `macro/load/runtime`,
+move by more. Times depend on the machine and its load.
 
 ## Comparing
 
-`mise run bench:compare <ref>` checks the ref out in a worktree under
-`target/bench-compare`, which the next comparison reuses, lays this checkout's
-`tools/bench` over it so both sides run the same cases, and builds it there.
-Then it runs one `mln-bench run` process per side per round, in ABBA order so
-that drift hits both sides alike: `--rounds` (6) processes per side. A process's
-value of a metric is one sample, since iterations in one process share its
-caches and heap.
+`mln-bench compare <ref>` checks the ref out in a Git worktree under
+`target/bench-compare/tree` and lays this checkout's harness over it: all of
+`tools/bench`, and the libraries' `bench` modules (see
+[Reaching a library's internal stages](#reaching-a-librarys-internal-stages)).
+So both sides run this checkout's scenarios on their own libraries. Both build
+with this checkout's toolchain and `profile.toml`, and no path of either
+checkout ends up in a binary, so the same source builds the same binary on both
+sides. Each run reports its harness id, a hash of the harness's files and the
+compiler, and the comparison refuses runs whose ids differ.
 
-A case may use API that older commits lack. When this checkout's harness doesn't
-build over the ref, the ref runs its own harness instead, the report says so,
-and the cases only this checkout has show as "only in the candidate". A case
-whose code differs between the two harnesses compares different work, so it gets
-no verdicts, and the report lists it. A case's code is the `Case::new` call that
-registers it and the functions and constants it uses, of its own module or of
-one it names through its path, compared as tokens. The scenes, the runtime and
-the meter, which every case shares, aren't compared.
+When this checkout's harness doesn't build against the ref, the comparison
+stops. It never runs the ref's own harness instead. This happens when a change
+adds a scenario or entry point that needs library code the ref lacks, or changes
+the internals an entry point calls. Commit what the harness needs first, then
+compare the change you want to measure with that commit
+(`mise run bench:compare HEAD~1`).
 
-A lead metric gets a verdict when a two-sided Mann-Whitney U test,
-Holm-corrected over the case's lead metrics, gives p < 0.05 and the medians
-differ by at least `--threshold` percent (5). There are no verdicts when the two
-sides ran on different GPUs. Then it compares the last frames of the first round
-with pixelmatch, as the render tests do, and writes the differences to
-`target/bench-compare/frames/diff`, so a side that got faster by drawing less
-shows up.
+### Counts
 
-Compare on an idle machine with a GPU; the report shows the load average before
-and after, and a software rasterizer (lavapipe) is flagged. On a busy machine,
-trust `minstr` and `allocs` over the times. To see how much your machine's
-numbers vary, compare a commit with itself, which should give no verdicts.
+Each side runs once per scenario by default. The ref's runs are kept in
+`target/bench-compare/samples`, by commit, and the ref runs again only until it
+has three: the first comparison with a commit costs two extra runs per scenario,
+later ones none. The ref is also built a second time with the harness's
+`layout-probe` feature, which adds code that never runs and so moves the rest,
+and each scenario runs once on that build.
 
-`--fail-on <metric>` makes the comparison fail, after its report, when that
-metric gets a worse verdict in any case. CI's `bench` workflow, run by hand on a
-branch, compares it with a base (main by default) this way on lavapipe, where
-the times are noisy but the allocations count the same as on any machine: it
-fails on a worse `allocs` or `peak_heap_mib`, and the report is in the job's
-summary. It takes about half an hour, so pull requests don't run it.
+A count's noise is the larger range of either side's runs; for instructions,
+also the most that the layout probe of any ref compared so far moved them, since
+one build of moved code shows too little of how far they move. The report shows
+every count's change and noise, and marks a change over twice the noise, however
+small: a count that repeats exactly is marked for any change. Whether a change
+matters is the reader's call. A scenario with a marked count runs twice more on
+this checkout, and its counts come from all three runs, so that a change that
+doesn't repeat isn't marked.
 
-## Nightly
+### Times
 
-Every night, CI's `bench-nightly` workflow compares main with main as it was a
-day earlier, over every case, on lavapipe. When a case gets a worse verdict,
-`nightly.py` opens the issue "Nightly benchmarks: main got worse" with the
-report, or comments on it when it's open already, and a night without one closes
-it. The workflow runs only in louwers/mln-rs, and its `workflow_dispatch` takes
-another base.
+Without `--rounds`, times show what one run of each side took, with no noise to
+hold them against. `--rounds <n>` runs each side n times, interleaved ABBA so
+that changes in the machine's load hit both alike. Each scenario's `wall` time
+is then marked when a two-sided Mann-Whitney U test, Holm-adjusted over every
+scenario compared, gives p < 0.05; its other times move with it. The fewest
+rounds that can mark a time grow with the scenarios compared: 4 for one
+scenario, 7 for all of them. Compare times only within one configuration.
 
-## On an Android device
+Rounds need a quiet machine, and several sessions often measure on one. Every
+`mln-bench` that measures holds one lock of the user's: runs that take only
+counts share it and overlap freely, and rounds take it alone, waiting for the
+measurements under way. The lock doesn't cover other sessions' builds and tests,
+so rounds don't start while the machine's load average is over `--max-load` (a
+quarter of its cores by default), and the report shows the load before and after
+them.
 
-`mise run bench:android <ndk>` (`android.py`) compares the WebGPU and Vulkan
-backends on the device adb reaches. It builds `mln-bench` for
-`aarch64-linux-android` with the NDK's clang
-(`rustup target add aarch64-linux-android` first), pushes it with the basemap
-fixture and the cache database to `/data/local/tmp/mln-bench`, and runs it there
-from the shell, headless: one process per backend per round (`--rounds`, 5) in
-ABBA order, since a phone slows down as it warms up. `MLN_BENCH_CACHE_DB` tells
-the binary where the cache database is. Without a `--filter`, it runs the still
-cases, `Frame/Throughput`, `Frame/Paced` and `Load/Style/basemap`.
+### Environments
 
-It prints each metric's median with its lowest and highest value over the
-rounds, and leaves the reports and the last round's frames in
-`target/bench-android`. `--pause <seconds>` lets the device cool before each
-process; the battery's temperature is logged as each starts. `--keep` leaves the
-pushed files on the device.
+Each run records its environment: the OS, the CPU, how it counted instructions,
+the GPU it drew on and its backend, whether that GPU is a CPU rasterizer, and
+the fixtures it read. A scenario whose sides ran in different environments isn't
+compared.
 
-## Not measured yet
+## Reading a report
 
-- GPU time apart from the frame (timestamp queries), and the frame's CPU time by
-  stage: the port doesn't keep `RenderingStats` yet.
-- Instructions and cycles on Windows.
-- A synthetic clock for animations: in continuous mode the map reads the real
-  clock, so fades and transitions in `Frame/Paced` follow wall time.
+```text
+micro/expression/evaluate/liberty (counts: 3 base runs, 3 of this checkout)
+  metric                         base     this  change  noise  moved
+  instructions                 1.01 G   1.03 G   +2.2%  0.31%   more
+  allocations                   687 k    699 k   +1.8%  0.00%   more
+  retained_heap                23 KiB   23 KiB  +0.00%  0.00%
+  wall                        39.4 ms  40.6 ms   +3.0%
+  instructions_per_evaluation    1271     1299   +2.2%  0.31%   more
+```
+
+`base` is the ref's median, `this` this checkout's, `change` the difference as a
+share of the base. `noise` is a count's noise as a share of the base, or with
+rounds the tested time's adjusted p-value. `moved` marks a change beyond the
+noise, `more` or `less` of the metric; lower is better for every metric. The
+last line counts the marked changes; comparing a commit with itself gives none.
+
+## Adding a scenario
+
+A scenario answers one lasting question about one stage or operation, not one
+pull request's claim; an exact expectation, such as that an idle map draws no
+frames, belongs in a test.
+
+A macro scenario measures what a user pays for: a style an application ships,
+over real data, and all the work the operation causes, such as tiles loading,
+layout, symbol placement and fades. The scenarios draw Liberty today; a style
+whose costs differ, such as one of raster imagery or hillshading, comes as a
+scenario of its own, its style and data added to the fixtures. An application's
+own sources and layers go on top of the style, as `macro/update` adds them. A
+scenario that narrows the style, or leaves out work the operation causes so as
+to isolate one stage, measures a stage, not what a user feels: ask that question
+in a micro scenario instead.
+
+Add it to the module of its stage (`src/scenarios/micro/`) or operation
+(`src/scenarios/macro/`), and its module's `SCENARIOS` to `scenarios::all`:
+
+```rust
+pub(crate) const SCENARIOS: &[Scenario] = &[Scenario {
+    name: "micro/expression/evaluate/liberty",
+    kind: Kind::Micro,
+    question: "What does evaluating a style's filters and property expressions over a tile's features cost?",
+    run: evaluate,
+}];
+
+fn evaluate(bench: &mut Bench) {
+    let (expressions, features) = setup(); // not measured
+    bench.measure(|| evaluate_all(&expressions, &features));
+    bench.per("evaluation", (features.len() * expressions.len()) as u64);
+}
+```
+
+`Bench::measure` runs the part that counts; call it once, or once per frame to
+leave work between frames out. Measuring a part costs thousands of instructions
+of its own, so a scenario of many small steps measures them as one part. `count`
+and `bytes` declare the scenario's own metrics, and `per` the unit of work it
+repeats, or `per_part` that each measured part is one unit, which adds how the
+units spread. A macro scenario sets `bench.gpu` to the device it drew on, and
+writes its last image to `bench.image` when that is set, outside its measured
+parts. What more than one scenario uses goes in `src/support/`: the headless map
+(`support::map`), the fixtures (`support::fixtures`) and seeded data
+(`support::random`); what more than one micro scenario uses, such as the tiles
+they read, in `src/scenarios/micro/`.
+
+### Reaching a library's internal stages
+
+A micro scenario calls a stage as a function over data. Where the stage is
+internal to its library, the library has a `bench` feature, off by default, and
+behind it a module `bench` (`src/bench.rs`) that is hidden from the
+documentation: `mln_renderer::bench::TileLayout` runs a tile's layout job, for
+instance. The harness turns the feature on in its `Cargo.toml`, so builds
+without the harness leave the module out.
+
+The `bench` modules are part of the harness: they count in its id, and a
+comparison lays this checkout's over the ref's. An entry point takes and returns
+the library's public types, wrapping internal ones, and calls the library's own
+code for the stage rather than a copy of it, so that it measures what the
+library runs and keeps building against other commits.
+
+### Driving a map
+
+`support::map::HeadlessMap` is a map on a headless frontend that runs only when
+the scenario drives it, so that it does the same work on every run:
+
+- Each frame is a tick of a 60 Hz frame clock that only frames advance, so
+  symbol placement, fades and transitions don't depend on how long a frame took.
+- The map's background work (file reads, tile layout, glyphs, the sprite,
+  GeoJSON slicing) runs on a pool without threads, as in the browser:
+  `HeadlessMap::load`, `settle` and `render_still` run all of it before each
+  frame, so each frame has everything the frames before it asked for, and a map
+  loads in the same steps, in the same order, on every run. A macro scenario's
+  times are therefore the sum of its work, not what the runtime's four workers
+  would take in parallel.
+- `support::map::Frontend` holds the GPU device and target, made apart from the
+  map, so that a scenario can leave them out of what it measures. A frame's part
+  includes waiting for the GPU to finish it.
+- `support::latency::Latency` holds a file source's answers back for a number of
+  frames: a scenario that calls its `tick` before each frame, then runs the
+  background work, sees each answer arrive the same number of frames after its
+  request on every run.
+
+### Repeating counts
+
+A count repeats only if the process that counts it does the same work in every
+run. The runner and the build see to it:
+
+- Where the system places a process's code, stack and heap at random, the
+  instructions that copies, comparisons and searches take change with the
+  addresses, from one process to the next. A scenario's process
+  (`mln-bench exec`) therefore runs again at fixed addresses where the system
+  lets it, macOS and Linux (`src/aslr.rs`).
+- The libraries' hash maps take a fixed seed in the benchmark build
+  (`profile.toml`), where they otherwise seed each process from the clock.
+- The harness compiles as one codegen unit, so that how the compiler splits and
+  inlines the scenarios' code doesn't change with the size of libraries they
+  don't call. Where the code lies still moves instructions, which a comparison
+  measures with its layout probe instead.
+- The first process of a newly built binary to run some code does more work than
+  later ones: on macOS the system checks each page of the binary's code the
+  first time a process reads it, and caches the GPU code it compiles for each
+  binary. `run` and `compare` therefore run each scenario once on each binary
+  before they measure, and drop what that run reports.
