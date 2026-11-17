@@ -1,7 +1,8 @@
-//! One scenario per pipeline stage: a function over data, with no map, GPU
-//! or threads.
+//! One scenario per pipeline stage, alone: a function over data, with no
+//! map, GPU or threads, or for drawing, one layer type over loaded data.
 
 pub(crate) mod decode;
+pub(crate) mod draw;
 pub(crate) mod expression;
 pub(crate) mod feature_state;
 pub(crate) mod geojson;
@@ -48,7 +49,8 @@ pub(crate) fn tile_bytes(fixtures: &Fixtures, tiles: Tiles, (z, x, y): (u8, u32,
 pub(crate) fn tile_data(tiles: Tiles, bytes: &Arc<Vec<u8>>) -> TileData {
     match tiles {
         Tiles::StreetMlt => TileData::Mlt(MltTile::new(Arc::clone(bytes), false)),
-        Tiles::Street | Tiles::World | Tiles::Cjk => TileData::Mvt(MvtTile::new(Arc::clone(bytes))),
+        Tiles::Street | Tiles::World | Tiles::Cjk | Tiles::Flight => TileData::Mvt(MvtTile::new(Arc::clone(bytes))),
+        Tiles::Terrain => panic!("the terrain tiles are images, not vector tiles"),
     }
 }
 

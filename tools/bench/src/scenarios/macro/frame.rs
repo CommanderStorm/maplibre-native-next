@@ -28,6 +28,18 @@ pub(crate) const SCENARIOS: &[Scenario] = &[
         question: "What does a frame of the world on a flat map cost while the view crosses the antimeridian over loaded tiles?",
         run: antimeridian,
     },
+    Scenario {
+        name: "macro/frame/earthquakes",
+        kind: Kind::Macro,
+        question: "What does a frame of a map of earthquakes cost, a heatmap that gives way to circles, while the camera circles and zooms in and out?",
+        run: earthquakes,
+    },
+    Scenario {
+        name: "macro/frame/terrain",
+        kind: Kind::Macro,
+        question: "What does a frame of a city's hills cost, tinted by elevation and hillshaded, while the camera circles, turns and tilts over loaded tiles?",
+        run: terrain,
+    },
 ];
 
 /// The question: what does a frame of western San Francisco at zoom 13.5
@@ -51,6 +63,24 @@ fn globe(bench: &mut Bench) {
 /// world copies? One measured unit is one frame.
 fn antimeridian(bench: &mut Bench) {
     path(bench, Path::Antimeridian);
+}
+
+/// The question: what does a frame of a month's earthquakes over the world
+/// cost, a heatmap and a circle for each over Liberty, while the camera
+/// circles central Japan zooming in and out ([`Path::Earthquakes`])? One
+/// measured unit is one frame. Tiles keep leaving the view and coming back
+/// along this path, and the map lays a tile out again when it comes back, so
+/// most frames start background work, which counts in them.
+fn earthquakes(bench: &mut Bench) {
+    path(bench, Path::Earthquakes);
+}
+
+/// The question: what does a frame of San Francisco's hills cost, Liberty
+/// with color relief and hillshading from the terrain tiles, while the
+/// camera circles Twin Peaks ([`Path::Terrain`])? One measured unit is one
+/// frame.
+fn terrain(bench: &mut Bench) {
+    path(bench, Path::Terrain);
 }
 
 fn path(bench: &mut Bench, path: Path) {
@@ -79,6 +109,7 @@ fn frames(bench: &mut Bench, mut map: HeadlessMap, camera: impl Fn(usize) -> Cam
     let drawn = map.frames();
     let objects = map.gpu_objects_created();
     let work = map.background_work();
+    let pipeline = map.pipeline_statistics();
     for frame in 0..FRAMES {
         map.jump(&camera(frame));
         bench.measure(|| {
@@ -87,6 +118,7 @@ fn frames(bench: &mut Bench, mut map: HeadlessMap, camera: impl Fn(usize) -> Cam
         });
     }
     bench.count("background_work", map.background_work() - work);
+    map.count_pipeline(bench, pipeline);
     assert_eq!(map.frames() - drawn, FRAMES as u64, "one frame per camera");
     bench.per_part("frame");
     bench.bytes("gpu_buffers", map.gpu_buffer_bytes());
