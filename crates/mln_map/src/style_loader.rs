@@ -2,11 +2,12 @@
 //! document names and the descriptions of the style's sources, and parses
 //! the sprites and the descriptions that need it on the thread pool.
 //!
-//! Requests and jobs answer into one inbox of [`Reply`]s, on the map's loop.
-//! The map drains it in `process_events` and hands each reply to
-//! [`StyleLoader::on_reply`], which returns what the map does as
-//! [`LoadEvent`]s. A reply to a load that a later one replaced carries the
-//! older load's number and is dropped.
+//! Requests and jobs answer into one inbox of [`Reply`]s, from whichever
+//! thread sends the response or finishes the job. The map drains it in
+//! `process_events` and hands each reply to [`StyleLoader::on_reply`], which
+//! returns what the map does as [`LoadEvent`]s. Each reply carries the number
+//! of its load or request, so one that arrives after a later load or request
+//! replaced its own is dropped.
 //!
 //! The loader watches each version of the style ([`StyleLoader::watch_sources`])
 //! and loads the description of each source whose instance or
@@ -16,7 +17,6 @@
 
 use std::sync::Arc;
 
-use mln_actor::{RunLoop, TaggedScheduler};
 use mln_sprite::load_sprite;
 use mln_storage::{Data, FileSource, FileSourceExt, Request, Resource, Response};
 use mln_style::source_type::{Described, ErasedDescription, Load};
@@ -26,8 +26,8 @@ use mln_text::glyph::FontFaces;
 use mln_util::error::Error;
 use mln_util::event_queue::{EventQueue, Waker};
 use mln_util::hash::HashMap;
-use mln_util::identity::SimpleIdentity;
 use mln_util::logging::{Event, Log};
+use mln_util::pool::{Pool, Respond, TaskGroup};
 
 /// What a request or a job of the loader answers.
 pub(crate) enum Reply {
@@ -37,8 +37,9 @@ pub(crate) enum Reply {
     Sprite { id: String, load: u64, part: SpritePart, response: Response },
     /// A sprite parsed, or why it didn't.
     SpriteParsed { id: String, load: u64, result: Result<Vec<Arc<image::Impl>>, Error> },
-    /// A response to a source's description request.
-    Source { load: SourceLoadId, response: Response },
+    /// A response to a source's description request, the `fetch`th
+    /// request of the loader.
+    Source { load: SourceLoadId, fetch: u64, response: Response },
     /// What a source's fetched description data describes, for the
     /// `describing`th response to the load.
     SourceDescribed { load: SourceLoadId, describing: u64, result: Described<ErasedDescription> },
@@ -92,6 +93,8 @@ struct SourceLoad {
     /// Held to keep the request running, as a file source that revalidates
     /// answers again; dropping it cancels it.
     request: Option<Request>,
+    /// The number of the request, which its responses carry.
+    fetch: u64,
     /// Counts the responses whose data went to be described, so that a
     /// description of older data doesn't replace a newer one's.
     describing: u64,
@@ -126,14 +129,14 @@ struct SpriteLoad {
 /// loaded for a still image. A source whose load failed isn't loaded.
 pub(crate) struct StyleLoader {
     file_source: Option<Arc<dyn FileSource>>,
-    run_loop: RunLoop,
-    thread_pool: TaggedScheduler,
+    jobs: TaskGroup,
     replies: EventQueue<Reply>,
     /// The URL of the style document, or `None` for a style loaded from
     /// JSON.
     url: Option<String>,
     request: Option<Request>,
-    /// Counts the loads, style documents and sprites alike.
+    /// Counts the loads, style documents and sprites alike, and the source
+    /// description requests.
     loads: u64,
     /// The load that the document request answers.
     style_load: u64,
@@ -157,13 +160,13 @@ pub(crate) struct StyleLoader {
 }
 
 impl StyleLoader {
-    /// A loader that requests from `file_source`, answers on `run_loop` and
-    /// parses sprites on its pool, for `pixel_ratio`.
-    pub(crate) fn new(file_source: Option<Arc<dyn FileSource>>, run_loop: &RunLoop, pixel_ratio: f32) -> Self {
+    /// A loader that requests from `file_source` and parses sprites and
+    /// describes sources in a group of its own on `pool`, for
+    /// `pixel_ratio`.
+    pub(crate) fn new(file_source: Option<Arc<dyn FileSource>>, pool: &Pool, pixel_ratio: f32) -> Self {
         StyleLoader {
             file_source,
-            run_loop: run_loop.clone(),
-            thread_pool: TaggedScheduler::new(run_loop.pool(), SimpleIdentity::new()),
+            jobs: TaskGroup::new(pool),
             replies: EventQueue::new(),
             url: None,
             request: None,
@@ -195,7 +198,7 @@ impl StyleLoader {
         !self.replies.is_empty()
     }
 
-    /// Sets the waker that runs when a reply arrives.
+    /// Sets the waker that runs, on any thread, when a reply arrives.
     pub(crate) fn set_waker(&self, waker: Option<Waker>) {
         self.replies.set_waker(waker);
     }
@@ -229,11 +232,9 @@ impl StyleLoader {
         let load = self.next_load();
         self.style_load = load;
         let replies = self.replies.clone();
-        self.request = Some(file_source.request(
-            &self.run_loop.scheduler(),
-            &Resource::style(url),
-            Box::new(move |response: Response| replies.push(Reply::Style { load, response })),
-        ));
+        self.request = Some(
+            file_source.request(&Resource::style(url), move |response| replies.push(Reply::Style { load, response })),
+        );
         vec![LoadEvent::Loading]
     }
 
@@ -258,7 +259,9 @@ impl StyleLoader {
                     Err(error) => self.sprite_failed(sprite, error, &mut events),
                 }
             }
-            Reply::Source { load, response } => self.on_source_response(style, load, response, &mut events),
+            Reply::Source { load, fetch, response } => {
+                self.on_source_response(style, load, fetch, response, &mut events);
+            }
             Reply::SourceDescribed { load, describing, result } => {
                 let Some(entry) = self.sources.get_mut(&load.id).filter(|entry| entry.load == load) else {
                     return events;
@@ -291,7 +294,7 @@ impl StyleLoader {
             if self.sources.get(&load.id).is_some_and(|entry| entry.load == load) {
                 continue;
             }
-            let mut entry = SourceLoad { load: load.clone(), request: None, describing: 0, loaded: true };
+            let mut entry = SourceLoad { load: load.clone(), request: None, fetch: 0, describing: 0, loaded: true };
             match source.data().plan_load() {
                 Load::Done => {}
                 Load::Ready(description) => edits.push(Edit::SetSourceDescription {
@@ -302,16 +305,14 @@ impl StyleLoader {
                 }),
                 Load::Fetch(resource) => {
                     entry.loaded = false;
-                    if let Some(file_source) = &self.file_source {
+                    if let Some(file_source) = self.file_source.clone() {
                         let replies = self.replies.clone();
                         let reply_load = load.clone();
-                        entry.request = Some(file_source.request(
-                            &self.run_loop.scheduler(),
-                            &resource,
-                            Box::new(move |response: Response| {
-                                replies.push(Reply::Source { load: reply_load.clone(), response });
-                            }),
-                        ));
+                        let fetch = self.next_load();
+                        entry.fetch = fetch;
+                        entry.request = Some(file_source.request(&resource, move |response| {
+                            replies.push(Reply::Source { load: reply_load.clone(), fetch, response });
+                        }));
                     }
                 }
             }
@@ -323,8 +324,18 @@ impl StyleLoader {
     /// Describes the data of a response to the description request of
     /// `style`'s source, on the thread pool if the source's type asks for
     /// it. A failed response fails the load at once.
-    fn on_source_response(&mut self, style: &Style, load: SourceLoadId, res: Response, events: &mut Vec<LoadEvent>) {
-        let Some(entry) = self.sources.get_mut(&load.id).filter(|entry| entry.load == load) else { return };
+    fn on_source_response(
+        &mut self,
+        style: &Style,
+        load: SourceLoadId,
+        fetch: u64,
+        res: Response,
+        events: &mut Vec<LoadEvent>,
+    ) {
+        let Some(entry) = self.sources.get_mut(&load.id).filter(|entry| entry.load == load && entry.fetch == fetch)
+        else {
+            return;
+        };
         let Some(source) = style.get_source(&load.id).filter(|source| source.instance() == load.instance) else {
             return;
         };
@@ -341,11 +352,12 @@ impl StyleLoader {
         let describing = entry.describing;
         let job = source.data().describe_job(data);
         let replies = self.replies.clone();
-        let respond = move |result| replies.push(Reply::SourceDescribed { load, describing, result });
+        let respond: Respond<_> =
+            Box::new(move |result| replies.push(Reply::SourceDescribed { load, describing, result }));
         if source.data().describes_in_background() {
-            self.thread_pool.schedule_and_reply_later(&self.run_loop.scheduler(), job, respond);
+            self.jobs.spawn(move || job(respond));
         } else {
-            job(Box::new(respond));
+            job(respond);
         }
     }
 
@@ -443,13 +455,9 @@ impl StyleLoader {
         let request = |part: SpritePart, resource: Resource| {
             let replies = self.replies.clone();
             let id = sprite.id.clone();
-            file_source.request(
-                &self.run_loop.scheduler(),
-                &resource,
-                Box::new(move |response: Response| {
-                    replies.push(Reply::Sprite { id: id.clone(), load, part, response });
-                }),
-            )
+            file_source.request(&resource, move |response| {
+                replies.push(Reply::Sprite { id: id.clone(), load, part, response });
+            })
         };
         let requests = vec![
             request(SpritePart::Json, Resource::sprite_json(&sprite.sprite_url, self.pixel_ratio)),
@@ -498,11 +506,14 @@ impl StyleLoader {
         // The image decodes through the `decoder`, which may answer after
         // the job returns (the browser's).
         let job_id = id.clone();
-        self.thread_pool.schedule_and_reply_later(
-            &self.run_loop.scheduler(),
-            move |respond| load_sprite(job_id, image, json, respond),
-            move |result| replies.push(Reply::SpriteParsed { id, load, result }),
-        );
+        self.jobs.spawn(move || {
+            load_sprite(
+                job_id,
+                image,
+                json,
+                Box::new(move |result| replies.push(Reply::SpriteParsed { id, load, result })),
+            );
+        });
     }
 
     /// Records that `sprite` failed with `error`, which counts as loaded

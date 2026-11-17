@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::ThreadId;
 
-use mln_actor::RunLoop;
 use mln_map::LogicalExtent;
 use mln_renderer::query::{RenderedQueryOptions, SourceQueryOptions};
 use mln_util::error::Error;
@@ -25,7 +24,7 @@ use super::local::Pending;
 use super::query::RenderedQueryGeometry;
 use super::target::{
     AttachOptions, BorrowedRing, ConsumerSync, Device, DeviceLease, Driver, ExportKind, FrameTexture, GpuSync,
-    RenderTarget, Surface, SyncKind, SyncKinds, Wake,
+    RenderTarget, SentSurface, Surface, SyncKind, SyncKinds, Wake,
 };
 use super::worker::{self, Init, SessionQueue, TargetInit, Worker};
 use crate::completion::{Completion, Home, Resolver};
@@ -524,7 +523,7 @@ impl SessionShared {
         // A core worker lets go of its graphics objects at its next task,
         // which runs before this returns: the host may destroy what they were
         // made on once it does.
-        // In the browser the session's loop runs on this thread, which runs
+        // In the browser the session's queue runs on this thread, which runs
         // that task here instead, unless it is inside the session's work.
         #[cfg(target_family = "wasm")]
         let run_now = self.driver == Driver::CoreWorker
@@ -628,7 +627,7 @@ impl Drop for Sending<'_> {
     }
 }
 
-/// Runs `call`, which may post to a session's loop with the session's locks
+/// Runs `call`, which may post to a session's queue with the session's locks
 /// held, then the driver wakes that its posts asked for, with nothing locked.
 fn with_unlocked_wakes<R>(call: impl FnOnce() -> R) -> R {
     let outer = DEFERRED_WAKES.with(|deferred| deferred.borrow_mut().replace(Vec::new()));
@@ -759,6 +758,7 @@ fn attach_unlocked<R>(
     then: impl FnOnce(&RenderSession, Completion<()>) -> R,
 ) -> Result<R, Error> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = SessionId(NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let mut ring = None;
     let mut export_kind = None;
     let (size, target) = match target {
@@ -769,7 +769,7 @@ fn attach_unlocked<R>(
             }
             surface.check_area()?;
             surface.check_pixel_format(device.as_ref())?;
-            (size, TargetInit::Surface { surface, device })
+            (size, TargetInit::Surface { surface: SentSurface::new(surface, id), device })
         }
         RenderTarget::Borrowed { size, ring: borrowed, device } => {
             let (producer, consumer) = device.borrowed_sync_kinds(&borrowed)?;
@@ -822,7 +822,6 @@ fn attach_unlocked<R>(
             }
         })));
     }
-    let id = SessionId(NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let scale_factor = map.scale_factor();
     let shared = Arc::new(SessionShared {
         id,
@@ -859,6 +858,7 @@ fn attach_unlocked<R>(
                 tile_cache_enabled: map.tile_cache_enabled(),
                 local_font_family: map.local_font_family(),
                 failure: None,
+                pool: map.pool(),
             })),
             resizes_sent: 0,
             graphics_objects: 0,
@@ -935,17 +935,19 @@ fn attach_unlocked<R>(
 }
 
 /// Starts a core worker's thread, which builds the session's renderer, then
-/// runs the session's loop until the session ends.
+/// runs the session's queue until the session ends.
 #[cfg(not(target_family = "wasm"))]
 fn start_thread(shared: Arc<SessionShared>) -> Result<(ThreadId, Option<Joined>), Error> {
     let thread = mln_util::thread::spawn("RenderSession", move || {
-        let run_loop = RunLoop::new();
         let queue = shared.queue.clone();
         let mut worker = None;
-        worker::build(&shared, &mut worker, &run_loop);
+        worker::build(&shared, &mut worker, &mut None);
         // The worker holds the session from here on.
         drop(shared);
-        queue.run_until_stopped(&run_loop, &mut worker);
+        queue.run(&mut worker);
+        // The session's work that comes from now on drops at once, so tasks
+        // that hold the queue can't keep it alive.
+        queue.close();
         drop(worker);
     })
     .map_err(|error| Error::native(format!("can't start the render session's thread: {error}")))?;
@@ -956,7 +958,7 @@ fn start_thread(shared: Arc<SessionShared>) -> Result<(ThreadId, Option<Joined>)
 
 /// Runs a core worker on this thread, the browser's one, in the instance's
 /// pump: it builds the session's renderer once its device is ready, which
-/// may take the browser's WebGPU a while, then runs the session's loop until
+/// may take the browser's WebGPU a while, then runs the session's queue until
 /// the session ends.
 #[cfg(target_family = "wasm")]
 #[expect(clippy::unnecessary_wraps, reason = "the threads of other builds can fail to start")]
@@ -964,24 +966,18 @@ fn start_thread(shared: Arc<SessionShared>) -> Result<(ThreadId, Option<Joined>)
     let prepared = worker::prepare(&shared);
     wasm_bindgen_futures::spawn_local(async move {
         prepared.await;
-        // The session's own loop, which the renderer's work runs on, apart
-        // from the work of the other sessions and runtimes on this thread.
-        let run_loop = RunLoop::new();
         let queue = shared.queue.clone();
         let mut worker = None;
-        worker::build(&shared, &mut worker, &run_loop);
+        worker::build(&shared, &mut worker, &mut None);
         let id = shared.id;
         // The worker holds the session from here on.
         drop(shared);
         let worker = RefCell::new(worker);
-        crate::web::drive_session(id, &run_loop, queue.clone(), {
-            let run_loop = run_loop.clone();
-            move || {
-                run_loop.run_once();
-                queue.run_once(&mut worker.borrow_mut());
-                if queue.is_stopped() {
-                    drop(worker.borrow_mut().take());
-                }
+        crate::web::drive_session(id, queue.clone(), move || {
+            queue.run_once(&mut worker.borrow_mut());
+            if queue.is_stopped() {
+                queue.close();
+                drop(worker.borrow_mut().take());
             }
         });
     });
@@ -1420,8 +1416,9 @@ impl RenderSession {
             return Err(Error::unsupported("an offscreen session keeps its target"));
         }
         surface.check_area()?;
+        let surface = SentSurface::new(surface, self.shared().id);
         self.resize_then(size, None, move |worker, size, scale_factor, outbox| {
-            worker.set_surface(size, scale_factor, surface, outbox).map(|()| None)
+            worker.set_surface(size, scale_factor, surface.receive()?, outbox).map(|()| None)
         })
     }
 

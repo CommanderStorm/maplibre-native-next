@@ -14,6 +14,7 @@ use mln_tile::TileData;
 use mln_tile_id::OverscaledTileID;
 use mln_util::chrono::Timestamp;
 use mln_util::error::Error;
+use mln_util::pool::Pool;
 use mln_util::tileset::Tileset;
 use parking_lot::Mutex;
 
@@ -339,14 +340,15 @@ impl TilesetLoad {
     }
 }
 
-/// Asks GeoJSON `data` for `tile`'s features, as load `load`: returns them
-/// if they answer before this returns, else they go to `inbox`.
+/// Asks GeoJSON `data` for `tile`'s features, as load `load`, cut on `pool`
+/// if there is one: returns them if they answer before this returns, else
+/// they go to `inbox`.
 pub(crate) fn get_geojson_tile(
     data: &Arc<dyn GeoJSONData>,
     tile: TileKey,
     load: u64,
     inbox: &InboxSender,
-    synchronous: bool,
+    pool: Option<&Pool>,
 ) -> Option<TileData> {
     let slot: Arc<Mutex<Answered>> = Arc::default();
     let callback_slot = Arc::clone(&slot);
@@ -363,7 +365,7 @@ pub(crate) fn get_geojson_tile(
                 *slot = Answered::Now(data);
             }
         }),
-        synchronous,
+        pool,
     );
     match std::mem::replace(&mut *slot.lock(), Answered::Later) {
         Answered::Now(data) => Some(data),

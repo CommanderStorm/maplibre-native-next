@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use geojson::{Feature, Geometry};
-use mln_actor::RunLoop;
 use mln_headless::HeadlessFrontend;
 use mln_map::{CameraOptions, Map, MapDebugOptions, MapMode, MapOptions, TileSettings};
 use mln_renderer::Registry;
@@ -15,6 +14,7 @@ use mln_style::layer::Layer;
 use mln_style::sources::CustomGeometrySourceHandle;
 use mln_style::sources::custom_geometry_source::{self, Options as CustomGeometrySourceOptions};
 use mln_util::geo::LatLngBounds;
+use mln_util::pool::Pool;
 use support::*;
 
 /// Changes the map's tile settings.
@@ -25,7 +25,7 @@ fn set_tile(map: &mut Map, change: impl FnOnce(&mut TileSettings)) {
 }
 
 struct TileLODTest {
-    _run_loop: RunLoop,
+    _run_loop: TestLoop,
     frontend: HeadlessFrontend,
     map: Map,
     tile_count: Arc<AtomicU32>,
@@ -33,18 +33,20 @@ struct TileLODTest {
 
 impl TileLODTest {
     fn new(camera_options: &CameraOptions) -> Self {
-        let run_loop = RunLoop::new();
-        let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
+        let run_loop = TestLoop::new();
+        let pool = Pool::new(4);
+        let mut frontend =
+            HeadlessFrontend::with_pixel_ratio(1.0, run_loop.queue(), &pool).expect("a headless frontend");
         let mut map = Map::with_resource_options(
             MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() },
             &ResourceOptions {
                 asset_path: cpp_root().join("test/fixtures/api/assets").to_str().unwrap().to_owned(),
                 ..ResourceOptions::default()
             },
-            &run_loop,
+            &pool,
         )
         .unwrap();
-        frontend.attach(&map);
+        frontend.attach(&mut map);
         map.jump_to(camera_options);
 
         map.set_debug(MapDebugOptions::TILE_BORDERS);
@@ -61,7 +63,7 @@ impl TileLODTest {
             })),
             ..Default::default()
         };
-        let source = custom_geometry_source::create("custom", options, run_loop.pool()).unwrap();
+        let source = custom_geometry_source::create("custom", options, &pool).unwrap();
         handle.set(CustomGeometrySourceHandle::of(&source).unwrap()).unwrap();
         map.add_source(source).unwrap();
 

@@ -22,6 +22,7 @@ use mln_util::error::Error;
 use mln_util::geo::{LatLng, LatLngBounds};
 use mln_util::hash::HashMap;
 use mln_util::image::PremultipliedImage;
+use mln_util::pool::Pool;
 use mln_util::range::Range;
 use mln_util::tileset::{RasterEncoding, Scheme, VectorEncoding};
 
@@ -968,12 +969,12 @@ fn add_callback_source(
     outbox: &mut Outbox,
     id: String,
     callbacks: Arc<CustomSourceCallbacks>,
-    make: impl FnOnce(String, &Arc<CustomSourceCallbacks>, mln_actor::SchedulerPtr) -> Result<Source, Error>,
+    make: impl FnOnce(String, &Arc<CustomSourceCallbacks>, &Pool) -> Result<Source, Error>,
 ) -> Result<(), Error> {
-    let pool = entry.core.run_loop().pool();
     let map = &mut entry.core;
+    let pool = map.pool().clone();
     let added = require_new_source(map, &id).and_then(|()| {
-        let source = make(id.clone(), &callbacks, pool)?;
+        let source = make(id.clone(), &callbacks, &pool)?;
         let instance = source.instance();
         map.add_source(source)?;
         Ok(instance)
@@ -1069,12 +1070,12 @@ fn start_geojson(
     let build = BUILDS.fetch_add(1, Ordering::Relaxed);
     update.building = Some((build, resolver));
     let next = background.clone();
-    background.pool.schedule(Box::new(move || {
+    background.pool.spawn(move || {
         let data = builder.build(geojson);
         post(&background.queue, move |core, outbox| {
             install_geojson(core, map_id, &source_id, (build, load), data, next, outbox);
         });
-    }));
+    });
 }
 
 /// The builder and the data's load of the source `id`, if it's the GeoJSON

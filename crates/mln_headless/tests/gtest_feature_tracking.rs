@@ -2,7 +2,6 @@ mod support;
 
 use std::sync::Arc;
 
-use mln_actor::RunLoop;
 use mln_headless::{HeadlessFrontend, RenderResult};
 use mln_map::{CameraOptions, FeatureInfo, Map, MapDebugOptions, MapMode, MapOptions, NDCBound};
 use mln_renderer::Registry;
@@ -18,6 +17,7 @@ use mln_style::{Edit, PropertyValue};
 use mln_style_types::{ProjectionDefinition, ProjectionType, VisibilityType};
 use mln_util::geo::LatLng;
 use mln_util::image::PremultipliedImage;
+use mln_util::pool::Pool;
 use serde_json::json;
 use support::*;
 
@@ -62,7 +62,7 @@ fn set(layer: &mut Layer, name: &str, value: &serde_json::Value) {
 struct FeatureTrackingTest {
     map: Map,
     frontend: HeadlessFrontend,
-    _run_loop: RunLoop,
+    _run_loop: TestLoop,
 }
 
 impl FeatureTrackingTest {
@@ -71,9 +71,11 @@ impl FeatureTrackingTest {
     }
 
     fn with_geojson(geojson: &str, camera: CameraOptions) -> Self {
-        let run_loop = RunLoop::new();
-        let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
-        let file_source = Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous));
+        let run_loop = TestLoop::new();
+        let pool = Pool::new(4);
+        let mut frontend =
+            HeadlessFrontend::with_pixel_ratio(1.0, run_loop.queue(), &pool).expect("a headless frontend");
+        let file_source = StubFileSource::on_queue(run_loop.queue(), ResponseType::Asynchronous);
         file_source.set_response(Kind::Glyphs, |_| Some(file_response(GLYPH_PATH)));
         let mut map = Map::with_file_source(
             file_source,
@@ -83,10 +85,10 @@ impl FeatureTrackingTest {
                 capture_rendered_features: true,
                 ..Default::default()
             },
-            &run_loop,
+            &pool,
         )
         .expect("map");
-        frontend.attach(&map);
+        frontend.attach(&mut map);
 
         let source =
             geojson_source_with_data(SOURCE_NAME, GeoJSONOptions::default_options(), geojson.parse().expect("GeoJSON"));

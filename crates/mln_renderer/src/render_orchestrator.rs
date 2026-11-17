@@ -6,7 +6,6 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mln_actor::{ActorRef, Mailbox, RunLoop, TaggedScheduler};
 use mln_gfx::ShaderRegistry;
 use mln_gfx::rendering_stats::{FrameRenderedFeaturesMap, SourceLayerID, merge_layer_features};
 use mln_map_types::{MapMode, TransformState};
@@ -25,6 +24,7 @@ use mln_util::error::Error;
 use mln_util::hash::{HashMap, HashSet};
 use mln_util::identity::SimpleIdentity;
 use mln_util::logging::{Event, Log};
+use mln_util::pool::{Pool, TaskGroup};
 use mln_util::time::Instant;
 use mln_vec_map::{VecMap, VecSet};
 
@@ -50,7 +50,7 @@ use crate::tile::inbox::Waker;
 use crate::tile::source_tiles::SourceTiles;
 use crate::tile::store::{StoreEvent, TileStore};
 use crate::tile::tile_workers::PoolWorkers;
-use crate::tile::worker_codec::{RemoteJobs, RemoteWorkers};
+use crate::tile::worker_codec::RemoteWorkers;
 use crate::tile_parameters::TileParameters;
 use crate::update_parameters::UpdateParameters;
 
@@ -134,14 +134,12 @@ impl GlyphStoreObserver for OrchestratorGlyphObserver {
     }
 }
 
-/// The jobs a native thread of the pool takes at once.
+/// The jobs in flight per thread of the pool.
 const JOBS_PER_THREAD: usize = 2;
 
-/// The target of the mailbox through which a tile worker, on any thread,
-/// asks for an update.
-struct UpdateRequests {
-    events: EventSink,
-}
+/// The jobs in flight on a pool without threads, whose host runs them
+/// between its own work.
+const JOBS_WITHOUT_THREADS: usize = 8;
 
 fn ptr_eq_option<T: ?Sized>(a: Option<&Arc<T>>, b: Option<&Arc<T>>) -> bool {
     match (a, b) {
@@ -208,9 +206,7 @@ pub(crate) struct RenderOrchestrator {
     remake_render_layers: bool,
     filtered_layers_for_source: Vec<Arc<dyn ErasedEvaluatedLayer>>,
 
-    thread_pool: TaggedScheduler,
-    /// The target of the tile store's waker, which asks for an update.
-    _update_requests: Arc<Mailbox>,
+    thread_pool: TaskGroup,
 
     global_state: Option<Arc<GlobalStateMap>>,
 
@@ -246,45 +242,37 @@ pub(crate) struct RenderOrchestrator {
 }
 
 impl RenderOrchestrator {
-    // C++ gets the map's thread pool; the port uses the background pool
-    // with its own tag.
+    /// An orchestrator whose background work runs in a group of its own on
+    /// `pool`, which its drop waits for, and whose tiles and glyphs call
+    /// `waker` for an update (see `Renderer::new`).
     pub(crate) fn new(
         background_layer_as_color: bool,
         local_font_family: Option<String>,
         glyph_cache: Arc<GlyphCache>,
         font_face_engine: Arc<dyn crate::text::font_face_engine::FontFaceEngine>,
         registry: Arc<Registry>,
-        run_loop: &RunLoop,
+        waker: Waker,
+        pool: &Pool,
     ) -> Self {
         let events = EventSink::default();
         // `imageManager->setObserver(this)`.
         let mut image_store = ImageStore::default();
         image_store.set_observer(Some(Rc::new(OrchestratorImageObserver { events: events.clone() })));
-        // symbols: `glyphManager->setObserver(this)`. A response asks for the
-        // update that takes it in.
-        let wake = {
-            let events = events.clone();
-            Rc::new(move || events.emit(RendererEvent::Invalidate))
-        };
-        let thread_pool = TaggedScheduler::new(run_loop.pool(), SimpleIdentity::new());
+        // symbols: `glyphManager->setObserver(this)`.
+        let thread_pool = TaskGroup::new(pool);
         let mut glyph_store = GlyphStore::new(
             Some(Box::new(DefaultLocalGlyphRasterizer::new(local_font_family))),
             glyph_cache,
             thread_pool.clone(),
             font_face_engine,
-            run_loop.clone(),
-            wake,
+            Arc::clone(&waker),
         );
         glyph_store.set_observer(Some(Rc::new(OrchestratorGlyphObserver { events: events.clone() })));
-        let update_requests =
-            Mailbox::with_target(&run_loop.scheduler(), Rc::new(UpdateRequests { events: events.clone() }));
-        let waker: Waker = {
-            let requests = ActorRef::<UpdateRequests>::new(&update_requests);
-            Arc::new(move || {
-                requests.invoke(|requests: &UpdateRequests| requests.events.emit(RendererEvent::Invalidate));
-            })
+        let jobs = match pool.threads() {
+            0 => JOBS_WITHOUT_THREADS,
+            threads => JOBS_PER_THREAD * threads,
         };
-        let pool_workers = PoolWorkers::new(thread_pool.clone(), JOBS_PER_THREAD * mln_actor::BACKGROUND_THREADS);
+        let pool_workers = PoolWorkers::new(thread_pool.clone(), jobs);
         let tile_store = TileStore::new(Box::new(pool_workers), glyph_store, image_store, thread_pool.clone(), waker);
         RenderOrchestrator {
             registry,
@@ -311,7 +299,6 @@ impl RenderOrchestrator {
             ordered_layers: Vec::new(),
             remake_render_layers: false,
             filtered_layers_for_source: Vec::new(),
-            _update_requests: update_requests,
             _wait_for_thread_pool: WaitOnDrop(thread_pool.clone()),
             thread_pool,
             global_state: None,
@@ -329,8 +316,8 @@ impl RenderOrchestrator {
 
     /// Port-only: runs the tiles' jobs in `workers` (by default on the
     /// thread pool). The jobs in flight elsewhere run again there.
-    pub(crate) fn set_tile_workers(&mut self, workers: &Rc<RemoteWorkers>) {
-        self.tile_store.set_workers(Box::new(RemoteJobs(Rc::clone(workers))));
+    pub(crate) fn set_tile_workers(&mut self, workers: RemoteWorkers) {
+        self.tile_store.set_workers(Box::new(workers));
     }
 
     /// Sets the queue the orchestrator and its parts push their events to.
@@ -1656,19 +1643,19 @@ impl RenderOrchestrator {
 
 /// Drops `value` on `thread_pool`, the orchestrator's workers, instead of
 /// this thread. The orchestrator's drop waits for it.
-pub(crate) fn drop_on_workers<T: Send + 'static>(thread_pool: &TaggedScheduler, value: T) {
-    thread_pool.schedule(Box::new(move || drop(value)));
+pub(crate) fn drop_on_workers<T: Send + 'static>(thread_pool: &TaskGroup, value: T) {
+    thread_pool.spawn(move || drop(value));
 }
 
 /// A value that [`RenderOrchestrator::drop_on_workers`] drops once this
 /// drops.
 struct DropOnWorkers<T: Send + 'static> {
     value: Option<T>,
-    thread_pool: TaggedScheduler,
+    thread_pool: TaskGroup,
 }
 
 impl<T: Send + 'static> DropOnWorkers<T> {
-    fn new(value: T, thread_pool: TaggedScheduler) -> Self {
+    fn new(value: T, thread_pool: TaskGroup) -> Self {
         DropOnWorkers { value: Some(value), thread_pool }
     }
 }
@@ -1682,11 +1669,11 @@ impl<T: Send + 'static> Drop for DropOnWorkers<T> {
 }
 
 /// Waits for its thread pool's tasks when it drops.
-struct WaitOnDrop(TaggedScheduler);
+struct WaitOnDrop(TaskGroup);
 
 impl Drop for WaitOnDrop {
     fn drop(&mut self) {
-        self.0.wait_for_empty();
+        self.0.wait();
     }
 }
 
@@ -1697,6 +1684,6 @@ impl Drop for RenderOrchestrator {
         // thread pool, as the C++ members' destructors do.
         self.render_sources.clear();
         self.tile_store.clear();
-        self.thread_pool.wait_for_empty();
+        self.thread_pool.wait();
     }
 }

@@ -28,7 +28,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_actor::{AsyncTask, AsyncTaskSender, RunLoop, TaggedScheduler};
 use mln_storage::{FileSource, Request, Resource, Response};
 use mln_text::glyph::{
     FontData, FontFaces, Glyph, GlyphDependencies, GlyphID, GlyphIDType, GlyphMap, GlyphRange, HBShapeRequests,
@@ -43,12 +42,13 @@ use mln_util::error::Error;
 use mln_util::font_stack::FontStack;
 use mln_util::hash::HashMap;
 use mln_util::logging::{Event, Log};
+use mln_util::pool::TaskGroup;
 use mln_util::tiny_sdf::transform_raster_to_sdf;
 use mln_vec_map::{VecMap, VecSet};
 use parking_lot::Mutex;
 
 use crate::text::font_face_engine::{FontFaceEngine, FontFaceShaper};
-use crate::tile::inbox::{InboxSender, TileEvent};
+use crate::tile::inbox::{InboxSender, TileEvent, Waker};
 
 #[derive(Clone, Debug, Default, mln_wire::Wire)]
 pub(crate) struct HBShapeResult {
@@ -121,13 +121,13 @@ impl Entry {
 /// The loaded HarfBuzz shapers of each font stack, by font face type.
 type HBShapers = VecMap<FontStack, VecMap<GlyphIDType, Rc<dyn FontFaceShaper>>>;
 
-/// What the font-face engine's `prepare` reported, and how to wake the
-/// renderer when it does if a font file waits for it; shared with its
+/// What the font-face engine's `prepare` reported, and whether a font file
+/// waits for it, so that the report asks for an update; shared with its
 /// `ready` callback, which may run on another thread.
 #[derive(Default)]
 struct EngineReadiness {
     result: Option<Result<(), String>>,
-    waker: Option<AsyncTaskSender>,
+    waiting: bool,
 }
 
 /// One wait for glyphs, across the resolves it takes. A range that failed
@@ -152,17 +152,16 @@ pub(crate) struct ResolvedGlyphs {
 }
 
 pub(crate) struct GlyphStore {
-    /// The renderer's loop, where the engine's report arrives.
-    run_loop: RunLoop,
     glyph_url: String,
     entries: HashMap<FontStack, Entry>,
     observer: Rc<dyn GlyphStoreObserver>,
     local_glyph_rasterizer: Box<dyn LocalGlyphRasterizer>,
     glyph_cache: Arc<GlyphCache>,
     /// Where glyph PBFs are parsed.
-    pool: TaggedScheduler,
-    /// Asks the renderer for an update, for the engine's report.
-    wake: Rc<dyn Fn()>,
+    pool: TaskGroup,
+    /// Asks the renderer for an update, from any thread, for the engine's
+    /// report.
+    wake: Waker,
     /// How many requests failed.
     failures: u64,
     /// How many ranges were requested.
@@ -180,29 +179,24 @@ pub(crate) struct GlyphStore {
     /// Font files that arrived before the engine was ready, with the
     /// request each answers.
     deferred_responses: Vec<(FontData, FontStack, GlyphRange, u64)>,
-    /// Wakes the renderer to parse `deferred_responses` once the engine
-    /// reports back.
-    deferred_task: Option<AsyncTask>,
     hb_shapers: HBShapers,
 }
 
 impl GlyphStore {
-    /// A store that shares `glyph_cache`, parses glyph PBFs on `pool`, loads
-    /// font faces with `engine`, hears from the engine on `run_loop`, the
-    /// renderer's, and calls `wake` there when that report is in for
-    /// `update`.
+    /// A store that shares `glyph_cache`, parses glyph PBFs on `pool` and
+    /// loads font faces with `engine`. When the engine reports back while
+    /// font files wait for it, it calls `wake`, on the engine's thread, for
+    /// the `update` that takes them in.
     pub(crate) fn new(
         local_glyph_rasterizer: Option<Box<dyn LocalGlyphRasterizer>>,
         glyph_cache: Arc<GlyphCache>,
-        pool: TaggedScheduler,
+        pool: TaskGroup,
         engine: Arc<dyn FontFaceEngine>,
-        run_loop: RunLoop,
-        wake: Rc<dyn Fn()>,
+        wake: Waker,
     ) -> GlyphStore {
         let local_glyph_rasterizer =
             local_glyph_rasterizer.unwrap_or_else(|| Box::new(DefaultLocalGlyphRasterizer::new(None)));
         GlyphStore {
-            run_loop,
             glyph_url: String::new(),
             entries: HashMap::default(),
             observer: Rc::new(NullObserver),
@@ -218,7 +212,6 @@ impl GlyphStore {
             engine_prepared: false,
             engine_readiness: Arc::default(),
             deferred_responses: Vec::new(),
-            deferred_task: None,
             hb_shapers: VecMap::new(),
         }
     }
@@ -410,7 +403,7 @@ impl GlyphStore {
         // Only the first answer applies: the range is no longer loading once
         // it has one. A revalidation's not-modified isn't an answer.
         let mut answered = false;
-        let (req, responder) = Request::direct(move |response: Response| {
+        let (req, responder) = Request::new(move |response: Response| {
             if response.not_modified || std::mem::replace(&mut answered, true) {
                 return;
             }
@@ -418,10 +411,10 @@ impl GlyphStore {
             let inbox = inbox.clone();
             match (font_data(response), &pool) {
                 (Ok(Some(data)), Some(pool)) => {
-                    pool.schedule(Box::new(move || {
+                    pool.spawn(move || {
                         let result = parse_glyphs(range, &data);
                         inbox.send(TileEvent::Glyphs { font_stack, range, id, result });
-                    }));
+                    });
                 }
                 (result, _) => {
                     let result = result.map(|data| data.map(GlyphData::Font));
@@ -524,18 +517,18 @@ impl GlyphStore {
         if std::mem::replace(&mut self.engine_prepared, true) {
             return;
         }
-        let readiness = Arc::clone(&self.engine_readiness);
+        let (readiness, wake) = (Arc::clone(&self.engine_readiness), Arc::clone(&self.wake));
         self.engine.prepare(Box::new(move |result| {
             if let Err(error) = &result {
                 Log::error(Event::Glyph, format!("font faces can't be loaded: {error}"));
             }
-            let waker = {
+            let waiting = {
                 let mut readiness = readiness.lock();
                 readiness.result = Some(result);
-                readiness.waker.take()
+                std::mem::take(&mut readiness.waiting)
             };
-            if let Some(waker) = waker {
-                waker.send();
+            if waiting {
+                wake();
             }
         }));
     }
@@ -555,9 +548,7 @@ impl GlyphStore {
             return false;
         }
         self.deferred_responses.push((data.clone(), font_stack.clone(), range, id));
-        let wake = Rc::clone(&self.wake);
-        let task = self.deferred_task.get_or_insert_with(|| AsyncTask::new(&self.run_loop, move || wake()));
-        readiness.waker = Some(task.sender());
+        readiness.waiting = true;
         true
     }
 

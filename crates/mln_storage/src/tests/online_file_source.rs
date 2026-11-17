@@ -1,6 +1,4 @@
 // The tests run against a test server (`mln_test_server`), one per test.
-// The tests that request through the network take `serial()`:
-// `NetworkStatus` is process-wide.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -8,15 +6,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use mln_actor::{RunLoop, Timer};
 use mln_test_server::{HttpServer, closed_port_url};
 use mln_util::chrono::{Timestamp, now};
 use mln_util::time::Instant;
 use parking_lot::Mutex;
 
 use super::http_file_source::{LoadState, load_request};
-use super::{Req, req, serial};
-use crate::file_source::{FileSource, FileSourceExt};
+use super::{LocalRequests, Req, TestLoop, req};
+use crate::file_source::FileSource;
 use crate::http_header_transform::HttpHeaderTransform;
 use crate::network_status::{NetworkStatus, Status};
 use crate::online_file_source::OnlineFileSource;
@@ -28,7 +25,12 @@ use crate::response::{Reason, ResourceError, Response};
 const CONNECTION_TIMEOUT: f64 = if cfg!(windows) { 2.0 } else { 0.0 };
 
 fn online_file_source() -> Rc<OnlineFileSource> {
-    Rc::new(OnlineFileSource::new())
+    online_file_source_with(&Arc::new(NetworkStatus::new()))
+}
+
+/// An online file source that follows `network`.
+fn online_file_source_with(network: &Arc<NetworkStatus>) -> Rc<OnlineFileSource> {
+    Rc::new(OnlineFileSource::new(Arc::clone(network)))
 }
 
 fn data(res: &Response) -> &[u8] {
@@ -38,10 +40,8 @@ fn data(res: &Response) -> &[u8] {
 /// Fails the test with `message` if it still runs in a minute. A test that
 /// waits for a retry only a network status change starts would otherwise
 /// hang when that retry never comes.
-fn fail_after_a_minute(run_loop: &RunLoop, message: &'static str) -> Timer {
-    let timer = Timer::new(run_loop);
-    timer.start(Duration::from_secs(60), Duration::ZERO, move || panic!("{message}"));
-    timer
+fn fail_after_a_minute(run_loop: &TestLoop, message: &'static str) {
+    run_loop.fail_after(Duration::from_secs(60), message);
 }
 
 /// The seconds since `start`.
@@ -52,11 +52,12 @@ fn seconds_since(start: Instant) -> f64 {
 // gtest: OnlineFileSource.Cancel
 #[test]
 fn cancel() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
-    drop(fs.request(
-        &run_loop.scheduler(),
+    drop(fs.request_local(
+        &local,
         &Resource::new(Kind::Unknown, "http://127.0.0.1:3000/test"),
         Box::new(|_: Response| panic!("Callback should not be called")),
     ));
@@ -67,19 +68,18 @@ fn cancel() {
 // gtest: OnlineFileSource.CancelMultiple
 #[test]
 fn cancel_multiple() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let resource = Resource::new(Kind::Unknown, server.url("/test"));
 
-    let req2 =
-        fs.request(&run_loop.scheduler(), &resource, Box::new(|_: Response| panic!("Callback should not be called")));
+    let req2 = fs.request_local(&local, &resource, Box::new(|_: Response| panic!("Callback should not be called")));
     let req = req();
     let (r, stop) = (Rc::clone(&req), run_loop.clone());
-    *req.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req.borrow_mut() = Some(fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             r.borrow_mut().take();
@@ -100,9 +100,9 @@ fn cancel_multiple() {
 // gtest: OnlineFileSource.TemporaryError
 #[test]
 fn temporary_error() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     // The test bounds the backoff only from below: a loaded machine can
@@ -111,8 +111,8 @@ fn temporary_error() {
     let counter = Cell::new(0);
 
     let stop = run_loop.clone();
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &Resource::new(Kind::Unknown, server.url("/temporary-error")),
         Box::new(move |res: Response| {
             let n = counter.get();
@@ -150,8 +150,8 @@ fn temporary_error() {
 // gtest: OnlineFileSource.ConnectionError
 #[test]
 fn connection_error() {
-    let _serial = serial();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let start = Instant::now();
@@ -166,8 +166,8 @@ fn connection_error() {
 
     let req = req();
     let (r, stop) = (Rc::clone(&req), run_loop.clone());
-    *req.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req.borrow_mut() = Some(fs.request_local(
+        &local,
         &Resource::new(Kind::Unknown, closed_port_url("/")),
         Box::new(move |res: Response| {
             let duration = seconds_since(start);
@@ -196,9 +196,9 @@ fn connection_error() {
 // gtest: OnlineFileSource.Timeout
 #[test]
 fn timeout() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let counter = Rc::new(Cell::new(0));
@@ -206,8 +206,8 @@ fn timeout() {
     let resource = Resource::new(Kind::Unknown, server.url("/test?cachecontrol=max-age=1"));
     let req = req();
     let (r, stop, c) = (Rc::clone(&req), run_loop.clone(), Rc::clone(&counter));
-    *req.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req.borrow_mut() = Some(fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             c.set(c.get() + 1);
@@ -232,17 +232,17 @@ fn timeout() {
 // gtest: OnlineFileSource.RetryDelayOnExpiredTile
 #[test]
 fn retry_delay_on_expired_tile() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let counter = Rc::new(Cell::new(0));
 
     let resource = Resource::new(Kind::Unknown, server.url("/test?expires=10000"));
     let (stop, c) = (run_loop.clone(), Rc::clone(&counter));
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             c.set(c.get() + 1);
@@ -261,17 +261,17 @@ fn retry_delay_on_expired_tile() {
 // gtest: OnlineFileSource.RetryOnClockSkew
 #[test]
 fn retry_on_clock_skew() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let counter = Cell::new(0);
 
     let resource = Resource::new(Kind::Unknown, server.url("/clockskew"));
     let stop = run_loop.clone();
-    let _req1 = fs.request(
-        &run_loop.scheduler(),
+    let _req1 = fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             assert!(!res.must_revalidate);
@@ -303,28 +303,28 @@ fn retry_on_clock_skew() {
 // gtest: OnlineFileSource.RespectPriorExpires
 #[test]
 fn respect_prior_expires() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     // Very long expiration time, should never arrive.
     let mut resource1 = Resource::new(Kind::Unknown, server.url("/test"));
     resource1.prior_expires = Some(Timestamp::from_secs(now().secs_since_epoch() + 100_000));
 
-    let _req1 = fs.request(&run_loop.scheduler(), &resource1, Box::new(|_: Response| panic!("Should never be called")));
+    let _req1 = fs.request_local(&local, &resource1, Box::new(|_: Response| panic!("Should never be called")));
 
     // No expiration time, should be requested immediately.
     let resource2 = Resource::new(Kind::Unknown, server.url("/test"));
 
     let stop = run_loop.clone();
-    let _req2 = fs.request(&run_loop.scheduler(), &resource2, Box::new(move |_: Response| stop.stop()));
+    let _req2 = fs.request_local(&local, &resource2, Box::new(move |_: Response| stop.stop()));
 
     // Very long expiration time, should never arrive.
     let mut resource3 = Resource::new(Kind::Unknown, server.url("/test"));
     resource3.prior_expires = Some(Timestamp::from_secs(now().secs_since_epoch() + 100_000));
 
-    let _req3 = fs.request(&run_loop.scheduler(), &resource3, Box::new(|_: Response| panic!("Should never be called")));
+    let _req3 = fs.request_local(&local, &resource3, Box::new(|_: Response| panic!("Should never be called")));
 
     run_loop.run();
 }
@@ -332,9 +332,9 @@ fn respect_prior_expires() {
 // gtest: OnlineFileSource.RespectMinimumUpdateInterval
 #[test]
 fn respect_minimum_update_interval() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let start = now();
@@ -345,8 +345,8 @@ fn respect_minimum_update_interval() {
 
     let minimum_update_interval = resource.minimum_update_interval;
     let stop = run_loop.clone();
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &resource,
         Box::new(move |_: Response| {
             let wait = Duration::from_secs((now().secs_since_epoch() - start.secs_since_epoch()) as u64);
@@ -364,9 +364,9 @@ fn load() {
     const CONCURRENCY: usize = 50;
     const MAX: i32 = 10000;
 
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs: Rc<dyn FileSource> = online_file_source();
 
     let state = Rc::new(LoadState { reqs: (0..CONCURRENCY).map(|_| req()).collect(), number: Cell::new(1) });
@@ -374,7 +374,7 @@ fn load() {
     let url: Rc<dyn Fn(i32) -> String> = Rc::new(move |n| format!("{base}{n}"));
 
     for i in 0..CONCURRENCY {
-        load_request(&fs, &state, &url, &run_loop, i, MAX);
+        load_request(&fs, &state, &url, &run_loop, &local, i, MAX);
     }
 
     run_loop.run();
@@ -390,18 +390,19 @@ fn load() {
 // gtest: OnlineFileSource.NetworkStatusChange
 #[test]
 fn network_status_change() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
 
     let resource = Resource::new(Kind::Unknown, server.url("/delayed"));
 
     // This request takes 200 milliseconds to answer.
     let req = req();
     let (r, stop) = (Rc::clone(&req), run_loop.clone());
-    *req.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req.borrow_mut() = Some(fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             r.borrow_mut().take();
@@ -416,8 +417,7 @@ fn network_status_change() {
     ));
 
     // After 50 milliseconds, we're going to trigger a NetworkStatus change.
-    let reachable_timer = Timer::new(&run_loop);
-    reachable_timer.start(Duration::from_millis(50), Duration::ZERO, NetworkStatus::reachable);
+    run_loop.handle().post_after(Duration::from_millis(50), move |_| network.reachable());
 
     run_loop.run();
 }
@@ -429,13 +429,14 @@ fn network_status_change() {
 // gtest: OnlineFileSource.NetworkStatusChangePreempt
 #[test]
 fn network_status_change_preempt() {
-    let _serial = serial();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
     // Longer than the test runs, so that only the network status change can
     // retry the request.
     fs.set_connection_backoff(Duration::from_secs(3600));
-    let _deadline = fail_after_a_minute(&run_loop, "The network status change didn't retry the request");
+    fail_after_a_minute(&run_loop, "The network status change didn't retry the request");
 
     let counter = Rc::new(Cell::new(0));
 
@@ -443,8 +444,8 @@ fn network_status_change_preempt() {
 
     let req = req();
     let (r, stop, c) = (Rc::clone(&req), run_loop.clone(), Rc::clone(&counter));
-    *req.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req.borrow_mut() = Some(fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             let error = res.error.as_ref().expect("error");
@@ -459,7 +460,7 @@ fn network_status_change_preempt() {
             if c.get() == 1 {
                 // The request waits out its backoff by now: the failure
                 // reaches this thread after the backoff starts.
-                NetworkStatus::reachable();
+                network.reachable();
             } else {
                 r.borrow_mut().take();
                 stop.stop();
@@ -475,24 +476,25 @@ fn network_status_change_preempt() {
 // gtest: OnlineFileSource.NetworkStatusOnlineOffline
 #[test]
 fn network_status_online_offline() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
 
     let resource = Resource::new(Kind::Unknown, server.url("/test"));
 
-    assert_eq!(NetworkStatus::get(), Status::Online, "Default status should be Online");
-    NetworkStatus::set(Status::Offline);
+    assert_eq!(network.get(), Status::Online, "Default status should be Online");
+    network.set(Status::Offline);
 
-    let online_timer = Timer::new(&run_loop);
-    online_timer.start(Duration::from_millis(100), Duration::ZERO, || NetworkStatus::set(Status::Online));
-    let _deadline = fail_after_a_minute(&run_loop, "Going back Online didn't retry the request");
+    let online = Arc::clone(&network);
+    run_loop.handle().post_after(Duration::from_millis(100), move |_| online.set(Status::Online));
+    fail_after_a_minute(&run_loop, "Going back Online didn't retry the request");
 
     let req = req();
     let (r, stop) = (Rc::clone(&req), run_loop.clone());
-    *req.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req.borrow_mut() = Some(fs.request_local(
+        &local,
         &resource,
         Box::new(move |res: Response| {
             r.borrow_mut().take();
@@ -500,7 +502,7 @@ fn network_status_online_offline() {
             assert_eq!(None, res.error);
             assert!(res.data.is_some());
 
-            assert_eq!(NetworkStatus::get(), Status::Online, "Triggered before set back to Online");
+            assert_eq!(network.get(), Status::Online, "Triggered before set back to Online");
 
             stop.stop();
         }),
@@ -510,17 +512,17 @@ fn network_status_online_offline() {
 }
 
 fn rate_limit_test(path: &str, expect_retry_after: bool) {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let stop = run_loop.clone();
     // The reset time has whole seconds, so it can pass before the response
     // arrives; it's only certain to be after the request was made.
     let requested_at = now();
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &Resource::new(Kind::Unknown, server.url(path)),
         Box::new(move |res: Response| {
             let error = res.error.as_ref().expect("error");
@@ -560,13 +562,14 @@ fn rate_limit_default() {
 #[test]
 fn low_high_priority_requests() {
     const NUM_REQUESTS: usize = 3;
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
     let response_counter = Rc::new(Cell::new(0usize));
 
-    NetworkStatus::set(Status::Offline);
+    network.set(Status::Offline);
     fs.set_maximum_concurrent_requests(1);
     // After DefaultFileSource was split, OnlineFileSource lives on a separate
     // thread. Pause OnlineFileSource, so that messages are queued for
@@ -577,8 +580,8 @@ fn low_high_priority_requests() {
     let regular1 = Resource::new(Kind::Unknown, server.url("/load/1"));
     let req_0 = req();
     let (r, c) = (Rc::clone(&req_0), Rc::clone(&response_counter));
-    *req_0.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req_0.borrow_mut() = Some(fs.request_local(
+        &local,
         &regular1,
         Box::new(move |_: Response| {
             c.set(c.get() + 1);
@@ -591,8 +594,8 @@ fn low_high_priority_requests() {
     low_prio.set_priority(Priority::Low);
     let req_1 = req();
     let (r, c, stop) = (Rc::clone(&req_1), Rc::clone(&response_counter), run_loop.clone());
-    *req_1.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req_1.borrow_mut() = Some(fs.request_local(
+        &local,
         &low_prio,
         Box::new(move |_: Response| {
             c.set(c.get() + 1);
@@ -607,8 +610,8 @@ fn low_high_priority_requests() {
     let regular2 = Resource::new(Kind::Unknown, server.url("/load/3"));
     let req_2 = req();
     let (r, c) = (Rc::clone(&req_2), Rc::clone(&response_counter));
-    *req_2.borrow_mut() = Some(fs.request(
-        &run_loop.scheduler(),
+    *req_2.borrow_mut() = Some(fs.request_local(
+        &local,
         &regular2,
         Box::new(move |_: Response| {
             c.set(c.get() + 1);
@@ -620,7 +623,7 @@ fn low_high_priority_requests() {
     // every queued request with the network up. If it saw the switch between
     // two of them, those taken offline would wait for the reachability
     // notification and start after the later ones, low priority included.
-    NetworkStatus::set(Status::Online);
+    network.set(Status::Online);
     drop(paused);
     run_loop.run();
 }
@@ -628,15 +631,16 @@ fn low_high_priority_requests() {
 // gtest: OnlineFileSource.LowHighPriorityRequestsMany
 #[test]
 fn low_high_priority_requests_many() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
     let response_counter = Rc::new(Cell::new(0));
     let correct_low = Rc::new(Cell::new(0));
     let correct_regular = Rc::new(Cell::new(0));
 
-    NetworkStatus::set(Status::Offline);
+    network.set(Status::Offline);
     fs.set_maximum_concurrent_requests(1);
     let paused = fs.pause();
 
@@ -646,8 +650,8 @@ fn low_high_priority_requests_many() {
         let r = req();
         if num_reqs % 2 == 0 {
             let (counter, correct_regular) = (Rc::clone(&response_counter), Rc::clone(&correct_regular));
-            *r.borrow_mut() = Some(fs.request(
-                &run_loop.scheduler(),
+            *r.borrow_mut() = Some(fs.request_local(
+                &local,
                 &Resource::new(Kind::Unknown, server.url(&format!("/load/{num_reqs}"))),
                 Box::new(move |_: Response| {
                     counter.set(counter.get() + 1);
@@ -669,8 +673,8 @@ fn low_high_priority_requests_many() {
                 run_loop.clone(),
                 Rc::clone(&collector),
             );
-            *r.borrow_mut() = Some(fs.request(
-                &run_loop.scheduler(),
+            *r.borrow_mut() = Some(fs.request_local(
+                &local,
                 &resource,
                 Box::new(move |_: Response| {
                     counter.set(counter.get() + 1);
@@ -697,7 +701,7 @@ fn low_high_priority_requests_many() {
     }
 
     // Online before resuming, as in LowHighPriorityRequests.
-    NetworkStatus::set(Status::Online);
+    network.set(Status::Online);
     drop(paused);
     run_loop.run();
 }
@@ -707,13 +711,14 @@ fn low_high_priority_requests_many() {
 /// the request, and one cancelled meanwhile doesn't start.
 #[test]
 fn pending_requests_start_by_order() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
     let answered: Rc<RefCell<Vec<usize>>> = Rc::default();
 
-    NetworkStatus::set(Status::Offline);
+    network.set(Status::Offline);
     fs.set_maximum_concurrent_requests(1);
     let paused = fs.pause();
 
@@ -726,13 +731,13 @@ fn pending_requests_start_by_order() {
             resource
         })
         .collect();
-    let mut requests: Vec<Option<crate::Request>> = resources
+    let mut requests: Vec<Option<super::LocalRequest>> = resources
         .iter()
         .enumerate()
         .map(|(index, resource)| {
             let (answered, stop) = (Rc::clone(&answered), run_loop.clone());
-            Some(fs.request(
-                &run_loop.scheduler(),
+            Some(fs.request_local(
+                &local,
                 resource,
                 Box::new(move |_: Response| {
                     answered.borrow_mut().push(index);
@@ -749,7 +754,7 @@ fn pending_requests_start_by_order() {
     requests[2] = None;
 
     // Online before resuming, as in LowHighPriorityRequests.
-    NetworkStatus::set(Status::Online);
+    network.set(Status::Online);
     drop(paused);
     run_loop.run();
     assert_eq!(*answered.borrow(), [0, 4, 3, 1]);
@@ -758,7 +763,7 @@ fn pending_requests_start_by_order() {
 // gtest: OnlineFileSource.MaximumConcurrentRequests
 #[test]
 fn maximum_concurrent_requests() {
-    let _run_loop = RunLoop::new();
+    let _run_loop = TestLoop::new();
     let fs = online_file_source();
 
     assert_eq!(fs.maximum_concurrent_requests(), 20);
@@ -770,9 +775,9 @@ fn maximum_concurrent_requests() {
 // gtest: OnlineFileSource.RequestSameUrlMultipleTimes
 #[test]
 fn request_same_url_multiple_times() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let count = Rc::new(Cell::new(0));
@@ -780,8 +785,8 @@ fn request_same_url_multiple_times() {
 
     for _ in 0..100 {
         let (count, stop) = (Rc::clone(&count), run_loop.clone());
-        requests.push(fs.request(
-            &run_loop.scheduler(),
+        requests.push(fs.request_local(
+            &local,
             &Resource::new(Kind::Unknown, server.url("/load")),
             Box::new(move |_: Response| {
                 count.set(count.get() + 1);
@@ -798,15 +803,16 @@ fn request_same_url_multiple_times() {
 // gtest: OnlineFileSource.FailedResourceTransform
 #[test]
 fn failed_resource_transform() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
     fs.set_resource_transform(Some(Arc::new(|_kind: Kind, _url: &str, finished: FinishedCallback| {
         finished(Err(ResourceError::new(Reason::Other, "No credential")));
     })));
 
     let stop = run_loop.clone();
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &Resource::new(Kind::Unknown, "http://127.0.0.1:3000/test"),
         Box::new(move |res: Response| {
             let error = res.error.as_ref().expect("error");
@@ -825,10 +831,11 @@ fn failed_resource_transform() {
 // gtest: OnlineFileSource.RetryFailedResourceTransform
 #[test]
 fn retry_failed_resource_transform() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
-    let fs = online_file_source();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
+    let network = Arc::new(NetworkStatus::new());
+    let fs = online_file_source_with(&network);
 
     let transforms = Arc::new(AtomicU32::new(0));
     let (delayed, test) = (server.url("/delayed"), server.url("/test"));
@@ -844,8 +851,8 @@ fn retry_failed_resource_transform() {
 
     let responses = Rc::new(Cell::new(0));
     let stop = run_loop.clone();
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &Resource::new(Kind::Unknown, server.url("/delayed")),
         Box::new(move |res: Response| {
             responses.set(responses.get() + 1);
@@ -855,7 +862,7 @@ fn retry_failed_resource_transform() {
                     assert_eq!(Reason::Connection, error.reason);
                     assert_eq!("Offline", error.message);
                     // Retry now instead of after the backoff.
-                    NetworkStatus::reachable();
+                    network.reachable();
                 }
                 2 => {
                     assert_eq!(None, res.error);
@@ -875,9 +882,9 @@ fn retry_failed_resource_transform() {
 // runs again for a retry.
 #[test]
 fn a_header_transform_runs_for_every_attempt() {
-    let _serial = serial();
     let server = HttpServer::new();
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let local = run_loop.dispatcher();
     let fs = online_file_source();
 
     let target = server.url("/temporary-error");
@@ -894,8 +901,8 @@ fn a_header_transform_runs_for_every_attempt() {
 
     let responses = Rc::new(Cell::new(0));
     let stop = run_loop.clone();
-    let _req = fs.request(
-        &run_loop.scheduler(),
+    let _req = fs.request_local(
+        &local,
         &Resource::new(Kind::Source, "localhost://temporary-error"),
         Box::new(move |res: Response| {
             responses.set(responses.get() + 1);

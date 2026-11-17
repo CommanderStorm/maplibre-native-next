@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use mln_actor::RunLoop;
 use mln_gfx::{ConsumerSync, Handoff, RendererBackend, SyncKind};
 use mln_map::{MapView, RenderMode};
 use mln_renderer::text::font_face_engine::FontFaceEngine;
@@ -23,18 +22,22 @@ use mln_style::source_type::SourceData;
 use mln_style::sources::{GeoJSONData, GeoJsonSourceType};
 use mln_text::GlyphCache;
 use mln_util::error::Error;
+use mln_util::event_queue::Waker;
 use mln_util::image::PremultipliedImage;
 use mln_util::logging::{Event, Log};
+use mln_util::pool::Pool;
+use mln_util::queue::Queue;
 use mln_util::size::Size;
 use mln_util::time::Instant;
 
 use super::frame::{DemandMode, FrameDemand, FrameDisposition, FrameResult};
 use super::local::{LocalTarget, Pending, PendingReads};
 use super::session::{Published, RenderSessionState, SessionShared, WorkId, physical_size};
-use super::target::{BorrowedRing, Device, DeviceLease, Driver, ExportKind, ExportedRing, Surface};
+use super::target::{
+    BorrowedRing, Device, DeviceLease, Driver, ExportKind, ExportedRing, SentSurface, Surface, SurfaceOverlay,
+};
 use crate::completion::Resolver;
 use crate::map::Published as MapPublished;
-use crate::queue::Queue;
 use crate::runtime::Outbox;
 
 /// The work of the thread that runs a session, which owns the session's
@@ -112,6 +115,8 @@ pub(crate) struct Init {
     /// Why the session's device couldn't be made before the build: in the
     /// browser, whose WebGPU makes devices asynchronously.
     pub(crate) failure: Option<Error>,
+    /// Where the renderer's background work runs: the runtime's pool.
+    pub(crate) pool: Pool,
 }
 
 impl TargetInit {
@@ -174,7 +179,7 @@ pub(crate) fn prepare(shared: &Arc<SessionShared>) -> impl Future<Output = ()> +
 /// What a session renders into, before its thread builds it.
 pub(crate) enum TargetInit {
     Offscreen(Option<Device>),
-    Surface { surface: Surface, device: Option<Device> },
+    Surface { surface: SentSurface, device: Option<Device> },
     Borrowed { ring: BorrowedRing, device: Device, producer: SyncKind },
     Exported { ring: ExportedRing, device: Device, kind: ExportKind, producer: SyncKind },
 }
@@ -209,16 +214,16 @@ impl TargetInit {
 }
 
 /// Builds the session's renderer into `slot`, on the thread that runs the
-/// session's work, before any other work. The renderer runs its own work on
-/// `run_loop`.
-pub(crate) fn build(shared: &Arc<SessionShared>, slot: &mut Option<Worker>, run_loop: &RunLoop) {
+/// session's work, before any other work. The build takes `overlay` for
+/// the session's first surface, if it builds.
+pub(crate) fn build(shared: &Arc<SessionShared>, slot: &mut Option<Worker>, overlay: &mut Option<SurfaceOverlay>) {
     let Some(Ok(init)) = shared.state.lock().init.take().map(<Box<dyn Any + Send>>::downcast::<Init>) else {
         return;
     };
     let _call = shared.enter_call();
     let mut outbox = Outbox::default();
     let gate = shared.gate.lock();
-    let worker = Worker::new(Arc::clone(shared), *init, run_loop, &mut outbox);
+    let worker = Worker::new(Arc::clone(shared), *init, overlay.take(), &mut outbox);
     *slot = Some(worker);
     drop(gate);
     shared.wait_for_senders();
@@ -237,8 +242,8 @@ struct Gfx {
     registry: Arc<Registry>,
     /// The font family the renderer draws CJK glyphs in (`Init`).
     local_font_family: Option<String>,
-    /// The loop that the renderer runs its own work on.
-    run_loop: RunLoop,
+    /// Where the renderer's background work runs (`Init`).
+    pool: Pool,
 }
 
 impl Gfx {
@@ -246,7 +251,9 @@ impl Gfx {
     /// renderer's, which the renderer makes when it first draws.
     const OBJECTS: u32 = 2;
 
-    fn new(init: Init, run_loop: &RunLoop) -> Result<Gfx, Error> {
+    /// A renderer on `init`'s target, which reports to `events`, with
+    /// `overlay` drawn over the frames that a surface target presents.
+    fn new(init: Init, overlay: Option<SurfaceOverlay>, events: &RendererEvents) -> Result<Gfx, Error> {
         let Init {
             target,
             size,
@@ -257,6 +264,7 @@ impl Gfx {
             tile_cache_enabled,
             local_font_family,
             failure,
+            pool,
         } = init;
         if let Some(failure) = failure {
             return Err(failure);
@@ -265,7 +273,7 @@ impl Gfx {
         let size = physical_size(size, pixel_ratio);
         let target = match target {
             TargetInit::Offscreen(device) => LocalTarget::offscreen(device, size)?,
-            TargetInit::Surface { surface, device } => LocalTarget::surface(surface, device, size)?,
+            TargetInit::Surface { surface, device } => LocalTarget::surface(surface.receive()?, overlay, device, size)?,
             TargetInit::Borrowed { ring, device, producer } => LocalTarget::borrowed(device, ring, producer)?,
             TargetInit::Exported { ring, device, kind, producer } => {
                 LocalTarget::exported(device, &ring, kind, size, producer)?
@@ -279,20 +287,12 @@ impl Gfx {
             Arc::clone(&glyph_cache),
             Arc::clone(&font_face_engine),
             Arc::clone(&registry),
-            run_loop,
+            invalidate(events),
+            &pool,
         );
         renderer.set_tile_cache_enabled(tile_cache_enabled);
-        set_tile_workers(&mut renderer, &registry, run_loop);
-        Ok(Gfx {
-            renderer,
-            target,
-            backend,
-            glyph_cache,
-            font_face_engine,
-            registry,
-            local_font_family,
-            run_loop: run_loop.clone(),
-        })
+        set_tile_workers(&mut renderer, &registry);
+        Ok(Gfx { renderer, target, backend, glyph_cache, font_face_engine, registry, local_font_family, pool })
     }
 
     /// Whether the target can take a frame now: its window, if any, has an
@@ -317,25 +317,33 @@ impl Gfx {
             Arc::clone(&self.glyph_cache),
             Arc::clone(&self.font_face_engine),
             Arc::clone(&self.registry),
-            &self.run_loop,
+            invalidate(events),
+            &self.pool,
         );
         renderer.set_tile_cache_enabled(self.renderer.get_tile_cache_enabled());
         renderer.set_event_queue(Some(events.clone()));
-        set_tile_workers(&mut renderer, &self.registry, &self.run_loop);
+        set_tile_workers(&mut renderer, &self.registry);
         self.renderer = renderer;
     }
+}
+
+/// The renderer's waker: it asks the map for an update through `events`,
+/// the queue the renderer reports to.
+fn invalidate(events: &RendererEvents) -> Waker {
+    let events = events.clone();
+    Arc::new(move || events.push(RendererEvent::Invalidate))
 }
 
 /// In the browser, puts the renderer's tile workers in the instance's Web
 /// Workers, which lay out with `registry`. Elsewhere they stay on the
 /// background threads.
-fn set_tile_workers(renderer: &mut Renderer, registry: &Arc<Registry>, run_loop: &RunLoop) {
+fn set_tile_workers(renderer: &mut Renderer, registry: &Arc<Registry>) {
     #[cfg(target_family = "wasm")]
-    if let Some(workers) = crate::web::tile_workers(&run_loop.scheduler(), registry) {
-        renderer.set_tile_workers(&workers);
+    if let Some(workers) = crate::web::tile_workers(registry) {
+        renderer.set_tile_workers(workers);
     }
     #[cfg(not(target_family = "wasm"))]
-    let _ = (renderer, registry, run_loop);
+    let _ = (renderer, registry);
 }
 
 /// A host's frame demand on its way, and the last command sent before it.
@@ -401,6 +409,9 @@ pub(crate) struct Worker {
     shared: Arc<SessionShared>,
     /// `None` once the session failed to build it, or let go of it.
     gfx: Option<Gfx>,
+    /// What the host draws over the frames presented to the next surface
+    /// that the session makes ([`DriverWork::set_overlay`](super::DriverWork::set_overlay)).
+    pub(crate) overlay: Option<SurfaceOverlay>,
     /// The scale factor that the renderer draws at.
     scale_factor: f64,
     reader: Option<UpdateReader>,
@@ -501,7 +512,7 @@ impl Drop for Ticker {
 
 /// Starts a thread that has the session's thread poll the host's reads on
 /// its later turns, until the returned ticker drops. It posts to the
-/// session's loop, so a caller-driven session's host gets a wake for each
+/// session's queue, so a caller-driven session's host gets a wake for each
 /// poll.
 #[cfg(target_family = "wasm")]
 fn start_ticker(queue: SessionQueue) -> Ticker {
@@ -550,7 +561,7 @@ fn target_lost() -> Error {
 }
 
 impl Worker {
-    fn new(shared: Arc<SessionShared>, init: Init, run_loop: &RunLoop, outbox: &mut Outbox) -> Worker {
+    fn new(shared: Arc<SessionShared>, init: Init, overlay: Option<SurfaceOverlay>, outbox: &mut Outbox) -> Worker {
         let renderer_events = RendererEvents::new();
         let queue = shared.queue.clone();
         renderer_events.set_waker(Some(Arc::new(move || {
@@ -565,7 +576,7 @@ impl Worker {
             TargetInit::Borrowed { ring, .. } => Some(ring.clone()),
             _ => None,
         };
-        let built = attaching.then(|| Gfx::new(init, run_loop));
+        let built = attaching.then(|| Gfx::new(init, overlay, &renderer_events));
         let gfx = match built {
             Some(Ok(mut gfx)) => {
                 gfx.renderer.set_event_queue(Some(renderer_events.clone()));
@@ -594,6 +605,7 @@ impl Worker {
         Worker {
             shared,
             gfx,
+            overlay: None,
             scale_factor,
             reader: None,
             map_events: None,
@@ -1587,7 +1599,7 @@ impl Worker {
         self.set_scale_factor(scale_factor)?;
         let gfx = self.gfx.as_mut().ok_or_else(target_lost)?;
         let physical = physical_size(size, scale_factor as f32);
-        let replaced = gfx.target.set_surface(surface, physical);
+        let replaced = gfx.target.set_surface(surface, self.overlay.take(), physical);
         match replaced {
             Ok(true) => gfx.renew_renderer(&self.renderer_events),
             Ok(false) => {}
@@ -1772,7 +1784,7 @@ impl Worker {
         outbox.push(move || waiters.settle(&Ok(()), target_lost));
         outbox.push(move || drop(map));
         self.finished = true;
-        // A target that views keep stops the loop once they end.
+        // A target that views keep stops the queue once they end.
         if self.shared.driver == Driver::CoreWorker && self.viewed.is_none() {
             self.shared.queue.stop();
         }

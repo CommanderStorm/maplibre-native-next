@@ -48,12 +48,15 @@ mod tile_store_test;
 // The VectorTile tests of test/tile/vector_tile.test.cpp.
 mod vector_tile_test;
 
+/// A pool for a test's background work.
+pub(crate) fn pool() -> mln_util::pool::Pool {
+    mln_util::pool::Pool::new(4)
+}
+
 /// Port-only: a tile store whose jobs run on `workers` and which frees and
-/// parses glyphs on `pool`, whose glyph store hears from its engine on
-/// `run_loop`, with no images and no sprite loaded.
+/// parses glyphs on `pool`, with no images and no sprite loaded.
 pub(crate) fn tile_store(
-    run_loop: &mln_actor::RunLoop,
-    pool: &mln_actor::TaggedScheduler,
+    pool: &mln_util::pool::TaskGroup,
     workers: Box<dyn crate::tile::tile_workers::TileWorkers>,
 ) -> crate::tile::store::TileStore {
     let glyphs = crate::text::glyph_store::GlyphStore::new(
@@ -61,8 +64,7 @@ pub(crate) fn tile_store(
         std::sync::Arc::default(),
         pool.clone(),
         crate::text::font_face_engine::default_engine(),
-        run_loop.clone(),
-        std::rc::Rc::new(|| {}),
+        std::sync::Arc::new(|| {}),
     );
     crate::tile::store::TileStore::new(
         workers,
@@ -74,11 +76,8 @@ pub(crate) fn tile_store(
 }
 
 /// Port-only: a tile store whose jobs run on `pool`.
-pub(crate) fn pool_store(
-    run_loop: &mln_actor::RunLoop,
-    pool: &mln_actor::TaggedScheduler,
-) -> crate::tile::store::TileStore {
-    tile_store(run_loop, pool, Box::new(crate::tile::tile_workers::PoolWorkers::new(pool.clone(), 8)))
+pub(crate) fn pool_store(pool: &mln_util::pool::TaskGroup) -> crate::tile::store::TileStore {
+    tile_store(pool, Box::new(crate::tile::tile_workers::PoolWorkers::new(pool.clone(), 8)))
 }
 
 /// Port-only: one update of `store`'s tiles, as the renderer's: gives the
@@ -285,6 +284,24 @@ impl OneTile {
     /// One update of the store.
     pub(crate) fn update(&mut self) -> bool {
         update(&mut self.store)
+    }
+
+    /// Updates the store until the tiles `ids` are all complete, updating at
+    /// least once.
+    ///
+    /// # Panics
+    ///
+    /// If they don't complete within 30 seconds.
+    pub(crate) fn settle(&mut self, ids: &[mln_tile_id::OverscaledTileID]) {
+        let deadline = mln_util::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            self.update();
+            if ids.iter().all(|id| self.tile_at(id).is_complete()) {
+                return;
+            }
+            assert!(mln_util::time::Instant::now() < deadline, "the tiles didn't complete");
+            std::thread::yield_now();
+        }
     }
 
     /// Whether the tile shows a layout.
