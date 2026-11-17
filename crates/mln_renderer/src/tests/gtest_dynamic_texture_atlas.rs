@@ -10,7 +10,7 @@ use mln_text::glyph::{Glyph, GlyphID, GlyphMap, GlyphMetrics, Glyphs};
 use mln_util::image::{AlphaImage, PremultipliedImage};
 use mln_util::size::Size;
 
-use crate::gfx::dynamic_texture::{DynamicTextureBinId, TextureHandle};
+use crate::gfx::dynamic_texture::{DynamicTextureBinId, QueuedPixels, TextureHandle};
 use crate::gfx::dynamic_texture_atlas::{DynamicTextureAtlas, GlyphPage, ImagePage};
 
 fn make_glyph(code: char) -> Arc<Glyph> {
@@ -298,7 +298,9 @@ fn patched_pattern_is_queued_for_its_bin() {
     assert_eq!(queued(&test), original);
 
     test.atlas.patch_image(&make_gradient_image("pattern"));
-    let (rect, data) = queued(&test);
+    let (rect, QueuedPixels::Bytes(data)) = queued(&test) else {
+        panic!("a patch queues the bin's pixels");
+    };
     assert_eq!(&rect, tex_handle.get_rectangle());
 
     // The image starts two pixels in: one of padding, one of wrapped edge.
