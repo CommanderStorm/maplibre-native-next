@@ -34,6 +34,25 @@ pub(crate) const WORLD: TileSet = TileSet {
     description: "OpenMapTiles vector tiles of the whole world, zooms 0 to 4",
 };
 
+/// Elevation over the street set's area, for hillshading and color relief.
+pub(crate) const TERRAIN: TileSet = TileSet {
+    name: "terrain",
+    area: STREET.area,
+    max_zoom: 12,
+    description: "Mapterhorn's terrain tiles of central San Francisco, Terrarium-encoded WebP of 512 pixels, zooms 0 to 12",
+};
+
+/// The world's tiles to zoom 4 with San Francisco's and Tokyo's to 14, in
+/// one archive, for a flight from one city to the other. Its tiles are
+/// those of [`STREET`], [`WORLD`] and [`CJK`]; it has none of its own.
+pub(crate) const FLIGHT: TileSet = TileSet {
+    name: "flight",
+    area: WORLD.area,
+    max_zoom: 14,
+    description: "OpenMapTiles vector tiles of the whole world, zooms 0 to 4, and of central San Francisco and \
+        central Tokyo, zooms 0 to 14, for a flight from one city to the other",
+};
+
 /// Central Tokyo, whose names are in Japanese script.
 pub(crate) const CJK: TileSet = TileSet {
     name: "cjk",
@@ -108,6 +127,8 @@ pub(crate) enum Encoding {
     Mvt,
     /// MapLibre Tiles, stored as they are.
     Mlt,
+    /// WebP images, stored as they are.
+    Webp,
 }
 
 /// Writes an archive of `tiles` (uncompressed), with `metadata`, for `set`.
@@ -123,6 +144,7 @@ pub(crate) fn write_archive(
     let (tile_type, compression) = match encoding {
         Encoding::Mvt => (TileType::Mvt, Compression::Gzip),
         Encoding::Mlt => (TileType::Mlt, Compression::None),
+        Encoding::Webp => (TileType::Webp, Compression::None),
     };
     let [west, south, east, north] = set.bounds();
     let [lon, lat] = set.center();
@@ -188,7 +210,7 @@ pub(crate) fn encode_mlt(mvt: &[u8]) -> Result<Vec<u8>, String> {
 /// layers and attribution.
 pub(crate) fn metadata(set: &TileSet, encoding: Encoding, tilejson: &Value) -> Value {
     let name = match encoding {
-        Encoding::Mvt => set.name.to_owned(),
+        Encoding::Mvt | Encoding::Webp => set.name.to_owned(),
         Encoding::Mlt => format!("{}-mlt", set.name),
     };
     json!({

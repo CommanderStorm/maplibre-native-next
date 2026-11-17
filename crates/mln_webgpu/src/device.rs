@@ -70,11 +70,19 @@ fn shared_instance(backends: wgpu::Backends) -> wgpu::Instance {
 /// What the library's device is made with: the WebGPU default limits,
 /// lowered to what `adapter` supports (the Metal of the iOS, tvOS and
 /// visionOS simulators allows fewer inter-stage shader variables than they
-/// ask), and 32-bit float depth with stencil where `adapter` has it.
+/// ask), and 32-bit float depth with stencil where `adapter` has it. A
+/// benchmark that counts the pipeline's work also asks for pipeline
+/// statistics queries (`bench::count_pipeline_statistics`).
 fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    #[cfg_attr(not(feature = "bench"), expect(unused_mut, reason = "only a benchmark asks for more"))]
+    let mut features = wgpu::Features::DEPTH32FLOAT_STENCIL8;
+    #[cfg(feature = "bench")]
+    if crate::bench::counting() {
+        features |= wgpu::Features::PIPELINE_STATISTICS_QUERY;
+    }
     wgpu::DeviceDescriptor {
         label: Some("MapLibre WebGPU Device"),
-        required_features: adapter.features() & wgpu::Features::DEPTH32FLOAT_STENCIL8,
+        required_features: adapter.features() & features,
         required_limits: wgpu::Limits::default().or_worse_values_from(&adapter.limits()),
         ..Default::default()
     }
