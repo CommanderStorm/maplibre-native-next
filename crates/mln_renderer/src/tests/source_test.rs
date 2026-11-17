@@ -15,14 +15,16 @@ use mln_storage::{FileSource, FileSourceExt, Kind, RequestOrder, Resource, Respo
 use mln_style::layer::Layer;
 use mln_style::layer_type::LayerStyle;
 use mln_style::layers::{Circle, Hillshade, Line, Raster};
+use mln_style::source_type::SourceData;
 use mln_style::sources::custom_geometry_source::{self, Options as CustomGeometrySourceOptions};
 use mln_style::sources::custom_vector_source::{self, Options as CustomVectorSourceOptions, TileDataFormat};
-use mln_style::sources::geojson::{GeoJSONOptions, create_geojson_data, geojson_source};
+use mln_style::sources::geojson::{GeoJSONOptions, GeoJsonSourceType, create_geojson_data, geojson_source};
 use mln_style::sources::{
-    CustomGeometrySourceHandle, CustomVectorSourceHandle, raster_dem_source, raster_source, vector_source,
+    CustomGeometrySourceHandle, CustomVectorSourceHandle, VectorSourceType, raster_dem_source, raster_source,
+    vector_source,
 };
 use mln_style::{Edit, Source, Style};
-use mln_style_types::{ProjectionDefinition, SourceType};
+use mln_style_types::ProjectionDefinition;
 use mln_tile_id::{CanonicalTileID, OverscaledTileID};
 use mln_util::error::Error;
 use mln_util::geo::LatLng;
@@ -30,7 +32,7 @@ use mln_util::identity::SimpleIdentity;
 use mln_util::logging::{Event, EventSeverity, Log, Observer as LogObserver};
 use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
-use mln_util::tileset::PartialTileset;
+use mln_util::tileset::{PartialTileset, Tileset};
 use parking_lot::Mutex;
 
 use crate::Registry;
@@ -175,6 +177,15 @@ fn edited(source: &Source, edit: Edit) -> Source {
     style.get_source(source.id()).unwrap().clone()
 }
 
+/// `source`, a vector source with a loaded tileset, with `tiles` as that
+/// tileset's tile URLs.
+fn with_tiles(source: &Source, tiles: &[&str]) -> Source {
+    let data = SourceData::<VectorSourceType>::recover(source).expect("a vector source");
+    let tileset = data.description.clone().expect("a loaded tileset");
+    let tileset = Tileset { tiles: tiles.iter().map(|&tile| tile.to_owned()).collect(), ..tileset };
+    source.with_data(SourceData::<VectorSourceType> { description: Some(tileset), ..data.clone() })
+}
+
 /// The three tiled source types the C++ tests repeat each case for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Tiled {
@@ -215,11 +226,11 @@ impl Tiled {
         }
     }
 
-    fn source_type(self) -> SourceType {
+    fn type_name(self) -> &'static str {
         match self {
-            Tiled::Raster => SourceType::Raster,
-            Tiled::RasterDEM => SourceType::RasterDEM,
-            Tiled::Vector => SourceType::Vector,
+            Tiled::Raster => "raster",
+            Tiled::RasterDEM => "raster-dem",
+            Tiled::Vector => "vector",
         }
     }
 }
@@ -230,13 +241,14 @@ fn tiles_tileset() -> PartialTileset {
 
 /// The shared body of the `<Type>Tile<Case>` tests: a source of `kind`
 /// whose tiles get `tile_response`, a render source observed by `observer`,
-/// one update, then `test.run()`. Returns the render source's type.
+/// one update, then `test.run()`. Returns the name of the render source's
+/// type.
 fn run_tile_case(
     test: &SourceTest,
     kind: Tiled,
     file_source: Arc<StubFileSource>,
     observer: &StubStoreObserver,
-) -> SourceType {
+) -> &'static str {
     let layers = kind.layers();
     let source = crate::tests::ready(kind.source(None, tiles_tileset()));
 
@@ -253,7 +265,7 @@ fn run_tile_case(
     );
 
     test.run_observed(&mut store, observer);
-    render_source.base().style_source.get_type()
+    render_source.base().style_source.info().name
 }
 
 fn tile_empty(kind: Tiled) {
@@ -306,7 +318,7 @@ fn tile_fail(kind: Tiled) {
 
     // C++ checks `source_.baseImpl->type` in the callback; the port's
     // observer gets the source id, so the type is checked here.
-    assert_eq!(kind.source_type(), run_tile_case(&test, kind, file_source, &observer));
+    assert_eq!(kind.type_name(), run_tile_case(&test, kind, file_source, &observer));
     assert!(*failed.borrow());
 }
 
@@ -338,7 +350,7 @@ fn tile_corrupt(kind: Tiled) {
         }));
     }
 
-    assert_eq!(kind.source_type(), run_tile_case(&test, kind, file_source, &observer));
+    assert_eq!(kind.type_name(), run_tile_case(&test, kind, file_source, &observer));
     assert!(*failed.borrow());
 }
 
@@ -750,15 +762,15 @@ fn empty_tileset() {
     render_source.update(&mut store, source.clone(), &layers, true, true, &parameters);
     assert!(render_source.is_loaded(&store));
 
-    source = edited(&source, Edit::SetSourceTiles { id: "source".to_owned(), tiles: vec!["tiles".to_owned()] });
+    source = with_tiles(&source, &["tiles"]);
     render_source.update(&mut store, source.clone(), &layers, true, false, &parameters);
     assert!(!render_source.is_loaded(&store));
 
-    source = edited(&source, Edit::SetSourceTiles { id: "source".to_owned(), tiles: Vec::new() });
+    source = with_tiles(&source, &[]);
     render_source.update(&mut store, source.clone(), &layers, true, false, &parameters);
     assert!(render_source.is_loaded(&store));
 
-    source = edited(&source, Edit::SetSourceTiles { id: "source".to_owned(), tiles: vec!["tiles".to_owned()] });
+    source = with_tiles(&source, &["tiles"]);
     render_source.update(&mut store, source.clone(), &layers, true, false, &parameters);
     assert!(!render_source.is_loaded(&store));
 
@@ -799,7 +811,7 @@ fn geojson_source_tiles_after_data_reset() {
         .unwrap();
     let geojson_data =
         create_geojson_data(geojson, scheduler::get_sequenced(), &GeoJSONOptions::default_options()).unwrap();
-    source = edited(&source, Edit::SetGeoJsonData { id: "source".to_owned(), data: Some(Arc::clone(&geojson_data)) });
+    source = edited(&source, GeoJsonSourceType::set_data("source", Some(Arc::clone(&geojson_data))));
     let mut store = test.store();
     let mut render_source = crate::tests::create_render_source(&source, &mut store);
 
@@ -813,15 +825,15 @@ fn geojson_source_tiles_after_data_reset() {
     // loaded == false, means that the source contains pending tiles.
     assert!(!render_source.is_loaded(&store));
 
-    source = edited(&source, Edit::SetGeoJsonData { id: "source".to_owned(), data: None });
+    source = edited(&source, GeoJsonSourceType::set_data("source", None));
     render_source.update(&mut store, source.clone(), &layers, true, true, &continuous);
     assert!(!render_source.is_loaded(&store)); // Tiles remain in continuous mode.
 
-    source = edited(&source, Edit::SetGeoJsonData { id: "source".to_owned(), data: Some(geojson_data) });
+    source = edited(&source, GeoJsonSourceType::set_data("source", Some(geojson_data)));
     render_source.update(&mut store, source.clone(), &layers, true, true, &continuous);
     assert!(!render_source.is_loaded(&store));
 
-    source = edited(&source, Edit::SetGeoJsonData { id: "source".to_owned(), data: None });
+    source = edited(&source, GeoJsonSourceType::set_data("source", None));
     render_source.update(&mut store, source.clone(), &layers, true, true, &test.tile_parameters(MapMode::Static));
     assert!(render_source.is_loaded(&store)); // Tiles are reset in static mode.
 }
@@ -864,7 +876,7 @@ impl SynchronousUpdateSource {
             .parse::<GeoJson>()
             .unwrap();
         let data = Some(create_geojson_data(geojson, scheduler::get_sequenced(), &self.options).unwrap());
-        self.source = edited(&self.source, Edit::SetGeoJsonData { id: "source".to_owned(), data });
+        self.source = edited(&self.source, GeoJsonSourceType::set_data("source", data));
         let mut parameters = test.tile_parameters(MapMode::Continuous);
         parameters.is_update_synchronous = self.source.data().is_update_synchronous();
         self.render_source.update(&mut self.store, self.source.clone(), &self.layers, true, true, &parameters);
@@ -875,7 +887,7 @@ impl SynchronousUpdateSource {
 
 /// The edit that sets the synchronous update of the GeoJSON source "source".
 fn synchronous_update(synchronous: bool) -> Edit {
-    Edit::SetGeoJsonSynchronous { id: "source".to_owned(), synchronous }
+    GeoJsonSourceType::set_synchronous("source", synchronous)
 }
 
 // gtest: Source.GeoJSONSourceSynchronousUpdateOverrideAppliesToExistingTiles
@@ -932,7 +944,7 @@ fn geojson_source_slices_inline_while_a_background_slice_runs() {
         .unwrap();
     let data =
         create_geojson_data(geojson, Arc::<HeldScheduler>::clone(&slicer), &GeoJSONOptions::default_options()).unwrap();
-    source = edited(&source, Edit::SetGeoJsonData { id: "source".to_owned(), data: Some(data) });
+    source = edited(&source, GeoJsonSourceType::set_data("source", Some(data)));
     let mut store = test.store();
     let mut render_source = crate::tests::create_render_source(&source, &mut store);
     let layers = circle_layers();
