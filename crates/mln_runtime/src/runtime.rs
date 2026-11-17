@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread::ThreadId;
 
-use mln_actor::{AsyncTask, RunLoop, SchedulerPtr};
 use mln_renderer::Registry;
 use mln_renderer::text::font_face_engine::FontFaceEngine;
 use mln_storage::http_header_transform::{HttpHeaderTransform, HttpHeaders};
+use mln_storage::network_status::NetworkStatus;
 use mln_storage::resource::Kind;
 use mln_storage::resource_transform::{FinishedCallback, ResourceTransform};
 use mln_storage::{FileSource, Loader, OnlineFileSource, ResourceOptions};
@@ -19,6 +19,8 @@ use mln_storage::{FileSource, Loader, OnlineFileSource, ResourceOptions};
 use mln_storage_offline::RegionDatabase;
 use mln_text::GlyphCache;
 use mln_util::error::Error;
+use mln_util::pool::Pool;
+use mln_util::queue::Queue;
 use mln_util::thread::Joined;
 use parking_lot::Mutex;
 
@@ -26,10 +28,10 @@ use crate::completion::{Completion, Resolver};
 use crate::event::{EventHandler, RuntimeEvent};
 use crate::map::{Applied, Map, MapEntry, MapId, MapOptions, MapShared, Published};
 use crate::offline::Offline;
-use crate::queue::Queue;
 use crate::resources::{CacheDatabaseOperation, ProviderFileSource, ResourceHooks, ResourceProvider};
 
-/// Where a runtime keeps its assets and its cache.
+/// Where a runtime keeps its assets and its cache, and the network status
+/// its requests follow.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RuntimeOptions {
     /// The directory that `asset://` URLs load from. `None` uses the working
@@ -40,6 +42,16 @@ pub struct RuntimeOptions {
     /// regions. Its directory must be writable. `None` keeps the cache in
     /// memory.
     pub cache_path: Option<PathBuf>,
+    /// The network status that the runtime's network requests follow. `None`
+    /// gives the runtime one of its own, which stays online.
+    pub network_status: Option<Arc<NetworkStatus>>,
+    /// In the browser, where the browser's fetch looks for a response that
+    /// the host fetched ahead before it fetches a whole resource:
+    /// `take(url)` returns a promise of the `Response` fetched for exactly
+    /// `url`, at most once for each, or undefined. A promise that rejects
+    /// is fetched again. `None` fetches every resource.
+    #[cfg(target_family = "wasm")]
+    pub fetch_preloads: Option<js_sys::Function>,
 }
 
 /// A runtime: a thread of its own that holds maps, and the resource loading,
@@ -96,6 +108,9 @@ pub(crate) struct RuntimeShared {
     /// declares font faces.
     pub(crate) font_face_engine: Arc<dyn FontFaceEngine>,
     pub(crate) registry: Arc<Registry>,
+    /// Where the runtime's background work runs: its maps', and their
+    /// render sessions'.
+    pub(crate) pool: Pool,
     /// The runtime's thread, which the drop waits for after the shutdown
     /// unless a release or disposal detached it, except in the browser,
     /// where the thread is the host's.
@@ -113,7 +128,7 @@ impl RuntimeShared {
     /// Runs `task` with `value` on the runtime's thread, after everything
     /// sent before it, or `instead` with `value` on this thread when the
     /// runtime has shut down, so that what must happen either way isn't lost
-    /// with the runtime's loop.
+    /// with the runtime's queue.
     pub(crate) fn post_or<V: Send + 'static>(
         &self,
         value: V,
@@ -206,6 +221,23 @@ fn font_face_engine() -> Arc<dyn FontFaceEngine> {
     Arc::new(mln_web_host::shaper::ShaperModuleEngine)
 }
 
+/// The most worker threads of a runtime's pool.
+#[cfg(not(target_family = "wasm"))]
+const POOL_THREADS: usize = 4;
+
+/// The pool of a new runtime.
+#[cfg(not(target_family = "wasm"))]
+fn runtime_pool() -> Pool {
+    Pool::new(POOL_THREADS)
+}
+
+/// The pool of a new runtime: in the browser, one without threads, which
+/// the instance's pump runs.
+#[cfg(target_family = "wasm")]
+fn runtime_pool() -> Pool {
+    Pool::local()
+}
+
 fn released() -> Error {
     Error::invalid_state("the runtime was released")
 }
@@ -217,29 +249,13 @@ pub(crate) type CoreQueue = Queue<Option<RuntimeCore>>;
 /// Where a runtime's background work runs, and where its results come back.
 #[derive(Clone)]
 pub(crate) struct Background {
-    pub(crate) pool: SchedulerPtr,
+    pub(crate) pool: Pool,
     pub(crate) queue: CoreQueue,
 }
 
 /// Posts `task` to the runtime thread that runs `queue`.
 pub(crate) fn post(queue: &CoreQueue, task: impl FnOnce(&mut RuntimeCore, &mut Outbox) + Send + 'static) {
     queue.post(move |core| run(core, task, false));
-}
-
-/// An `AsyncTask` on the runtime's loop, `run_loop`, that posts `task` to
-/// `queue`, which runs it once the loop has run the tasks queued on it.
-/// Sends before it runs make one run. It must be made on the runtime's
-/// thread.
-pub(crate) fn async_task(
-    run_loop: &RunLoop,
-    queue: &CoreQueue,
-    task: impl Fn(&mut RuntimeCore, &mut Outbox) + Send + Sync + 'static,
-) -> AsyncTask {
-    let (queue, task) = (queue.clone(), Arc::new(task));
-    AsyncTask::new(run_loop, move || {
-        let task = Arc::clone(&task);
-        queue.post(move |core| run(core, |core, outbox| task(core, outbox), false));
-    })
 }
 
 /// Runs `task` on the runtime's state, then delivers what it sends to the
@@ -305,15 +321,15 @@ pub(crate) struct RuntimeCore {
     database: OnceCell<Arc<RegionDatabase>>,
     /// The library's own network loading, behind the host's provider.
     online: OnceCell<Arc<OnlineFileSource>>,
+    /// What the library's own network loading follows and, in the browser,
+    /// looks in first.
+    network_options: NetworkOptions,
     network: OnceCell<Arc<dyn FileSource>>,
     /// The runtime's thread's work.
     pub(crate) queue: CoreQueue,
     pub(crate) registry: Arc<Registry>,
-    /// The runtime's thread's loop, which its maps run their own work on.
-    /// Its pool, the process's, which a runtime shares with the others and,
-    /// in the browser, the instance's cooperative scheduler, is taken at its
-    /// first use.
-    pub(crate) run_loop: RunLoop,
+    /// [`RuntimeShared::pool`].
+    pub(crate) pool: Pool,
     /// [`RuntimeShared::queued`].
     queued: Arc<AtomicUsize>,
     /// The tasks of the burst in progress that haven't finished.
@@ -325,13 +341,22 @@ pub(crate) struct RuntimeCore {
     spare_deliveries: Vec<Box<dyn FnOnce()>>,
 }
 
+/// What the library's own network loading of a runtime follows.
+struct NetworkOptions {
+    status: Arc<NetworkStatus>,
+    /// [`RuntimeOptions::fetch_preloads`].
+    #[cfg(target_family = "wasm")]
+    fetch_preloads: Option<js_sys::Function>,
+}
+
 impl RuntimeCore {
     fn new(
         resource_options: ResourceOptions,
+        network_options: NetworkOptions,
         queue: CoreQueue,
         queued: Arc<AtomicUsize>,
         registry: Arc<Registry>,
-        run_loop: &RunLoop,
+        pool: Pool,
     ) -> Self {
         RuntimeCore {
             maps: BTreeMap::new(),
@@ -342,10 +367,11 @@ impl RuntimeCore {
             #[cfg(not(target_family = "wasm"))]
             database: OnceCell::new(),
             online: OnceCell::new(),
+            network_options,
             network: OnceCell::new(),
             queue,
             registry,
-            run_loop: run_loop.clone(),
+            pool,
             queued,
             burst_left: 0,
             holding: false,
@@ -389,10 +415,9 @@ impl RuntimeCore {
     /// The loader that the runtime's maps share.
     pub(crate) fn loader(&self) -> &Arc<dyn FileSource> {
         self.loader.get_or_init(|| {
-            let builder = Loader::builder()
+            let builder = Loader::builder(&self.pool)
                 .asset_path(&self.resource_options.asset_path)
-                .network(Arc::clone(self.network()))
-                .pool(self.run_loop.pool());
+                .network(Arc::clone(self.network()));
             #[cfg(not(target_family = "wasm"))]
             let builder = builder.database(Arc::<RegionDatabase>::clone(self.database()));
             Arc::new(builder.build())
@@ -401,7 +426,16 @@ impl RuntimeCore {
 
     /// The library's own network loading.
     fn online(&self) -> &Arc<OnlineFileSource> {
-        self.online.get_or_init(|| Arc::new(OnlineFileSource::new()))
+        self.online.get_or_init(|| {
+            #[cfg(not(target_family = "wasm"))]
+            let online = OnlineFileSource::new(Arc::clone(&self.network_options.status));
+            #[cfg(target_family = "wasm")]
+            let online = crate::web::online(
+                Arc::clone(&self.network_options.status),
+                self.network_options.fetch_preloads.clone(),
+            );
+            Arc::new(online)
+        })
     }
 
     /// The runtime's network: the host's resource provider, in front of the
@@ -413,7 +447,7 @@ impl RuntimeCore {
 
     /// Where the runtime's background work runs, and its results come back.
     pub(crate) fn background(&self) -> Background {
-        Background { pool: self.run_loop.pool(), queue: self.queue.clone() }
+        Background { pool: self.pool.clone(), queue: self.queue.clone() }
     }
 
     /// Sends `events` to the event handler.
@@ -509,10 +543,22 @@ impl Runtime {
     /// Fails as [`new`](Self::new) does.
     pub fn with_registry(options: &RuntimeOptions, registry: Arc<Registry>) -> Result<Runtime, Error> {
         let resource_options = resource_options(options)?;
+        let network_options = NetworkOptions {
+            status: options.network_status.clone().unwrap_or_default(),
+            #[cfg(target_family = "wasm")]
+            fetch_preloads: options.fetch_preloads.clone(),
+        };
         let queued = Arc::new(AtomicUsize::new(0));
         let queue = CoreQueue::default();
-        let (thread, thread_end) =
-            Self::start(resource_options, queue.clone(), Arc::clone(&queued), Arc::clone(&registry))?;
+        let pool = runtime_pool();
+        let (thread, thread_end) = Self::start(
+            resource_options,
+            network_options,
+            queue.clone(),
+            Arc::clone(&queued),
+            Arc::clone(&registry),
+            pool.clone(),
+        )?;
         Ok(Runtime {
             shared: Arc::new(RuntimeShared {
                 queue,
@@ -523,6 +569,7 @@ impl Runtime {
                 glyph_cache: Arc::default(),
                 font_face_engine: font_face_engine(),
                 registry,
+                pool,
                 thread_end,
             }),
         })
@@ -533,15 +580,25 @@ impl Runtime {
     #[cfg(not(target_family = "wasm"))]
     fn start(
         resource_options: ResourceOptions,
+        network_options: NetworkOptions,
         queue: CoreQueue,
         queued: Arc<AtomicUsize>,
         registry: Arc<Registry>,
+        pool: Pool,
     ) -> Result<(ThreadId, Option<Joined>), Error> {
         let thread = mln_util::thread::spawn("Runtime", move || {
-            let run_loop = RunLoop::new();
-            let mut core = Some(RuntimeCore::new(resource_options, queue.clone(), queued, registry, &run_loop));
-            queue.run_until_stopped(&run_loop, &mut core);
+            let own_pool = pool.clone();
+            let mut core =
+                Some(RuntimeCore::new(resource_options, network_options, queue.clone(), queued, registry, pool));
+            queue.run(&mut core);
+            // What comes after the shutdown drops at once, so tasks that hold
+            // the queue can't keep it alive.
+            queue.close();
             drop(core);
+            // Nothing of the runtime runs after this, but a render session
+            // that kept its graphics forgot its renderer, which holds the
+            // pool: its workers stop here rather than with the last handle.
+            own_pool.shut_down();
         })
         .map_err(|error| Error::native(format!("can't start the runtime's thread: {error}")))?;
         let thread_id = thread.thread().id();
@@ -555,14 +612,15 @@ impl Runtime {
     #[expect(clippy::unnecessary_wraps, reason = "the threads of other builds can fail to start")]
     fn start(
         resource_options: ResourceOptions,
+        network_options: NetworkOptions,
         queue: CoreQueue,
         queued: Arc<AtomicUsize>,
         registry: Arc<Registry>,
+        pool: Pool,
     ) -> Result<(ThreadId, Option<Joined>), Error> {
-        crate::web::install();
-        let run_loop = RunLoop::new();
-        let core = RuntimeCore::new(resource_options, queue.clone(), queued, registry, &run_loop);
-        crate::web::drive(&run_loop, queue, Some(core));
+        let core = RuntimeCore::new(resource_options, network_options, queue.clone(), queued, registry, pool);
+        let pool = core.pool.clone();
+        crate::web::drive(&pool, queue, Some(core));
         Ok((std::thread::current().id(), None))
     }
 
@@ -728,21 +786,6 @@ impl Runtime {
     pub fn clear_http_header_transform(&self) -> Result<Completion<()>, Error> {
         self.apply(move |core| {
             core.online().set_http_header_transform(HttpHeaderTransform::default());
-            Ok(())
-        })
-    }
-
-    /// Sets where the browser's fetch looks for a response that the host
-    /// fetched ahead before it fetches a whole resource: `take(url)` returns
-    /// a promise of the `Response` fetched for exactly `url`, at most once
-    /// for each, or undefined. A promise that rejects is fetched again.
-    /// `None` stops looking. Call it on the thread that runs the runtime.
-    #[cfg(target_family = "wasm")]
-    pub fn set_fetch_preloads(&self, take: Option<js_sys::Function>) -> Result<Completion<()>, Error> {
-        let take = take.map(mln_actor::LocalObject::new);
-        self.apply(move |core| {
-            let take = take.as_ref().and_then(mln_actor::LocalObject::get).map(|take| (*take).clone());
-            core.online().set_fetch_preloads(take);
             Ok(())
         })
     }

@@ -17,7 +17,9 @@ use mln_style::layers::CustomLayerFrame;
 use mln_text::GlyphCache;
 use mln_tile_id::UnwrappedTileID;
 use mln_util::Color;
+use mln_util::event_queue::Waker;
 use mln_util::logging::{Event, Log};
+use mln_util::pool::Pool;
 use mln_util::time::Instant;
 
 use crate::Registry;
@@ -87,18 +89,24 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// A renderer with a glyph cache of its own, on `run_loop`, which runs
-    /// on this thread: it takes its tiles' and glyphs' responses there, and
-    /// runs its background work on the loop's pool. `local_font_family` is
-    /// the platform's `LocalGlyphRasterizer`'s (see
-    /// `DefaultLocalGlyphRasterizer`).
+    /// A renderer with a glyph cache of its own, which runs its background
+    /// work on `pool`. `local_font_family` is the platform's
+    /// `LocalGlyphRasterizer`'s (see `DefaultLocalGlyphRasterizer`).
+    ///
+    /// `waker` runs, on any thread, when something the renderer waits for
+    /// arrives, such as a tile's data or a font engine that got ready: the
+    /// host asks the renderer's map for an update for it, as by pushing
+    /// [`RendererEvent::Invalidate`] to the queue the renderer reports to
+    /// ([`set_event_queue`](Self::set_event_queue)). It must not call the
+    /// renderer.
     pub fn new(
         backend: Rc<dyn RendererBackend>,
         pixel_ratio: f32,
         local_font_family: Option<String>,
-        run_loop: &mln_actor::RunLoop,
+        waker: Waker,
+        pool: &Pool,
     ) -> Self {
-        Self::with_glyph_cache(backend, pixel_ratio, local_font_family, Arc::default(), run_loop)
+        Self::with_glyph_cache(backend, pixel_ratio, local_font_family, Arc::default(), waker, pool)
     }
 
     /// A renderer that uses `glyph_cache`: renderers given the same
@@ -108,11 +116,12 @@ impl Renderer {
         pixel_ratio: f32,
         local_font_family: Option<String>,
         glyph_cache: Arc<GlyphCache>,
-        run_loop: &mln_actor::RunLoop,
+        waker: Waker,
+        pool: &Pool,
     ) -> Self {
         let engine = crate::text::font_face_engine::default_engine();
         let registry = Registry::with_builtins();
-        Self::with_fonts(backend, pixel_ratio, local_font_family, glyph_cache, engine, registry, run_loop)
+        Self::with_fonts(backend, pixel_ratio, local_font_family, glyph_cache, engine, registry, waker, pool)
     }
 
     /// A renderer that uses `glyph_cache`, loads the font files of a style's
@@ -122,6 +131,7 @@ impl Renderer {
     ///
     /// The map that the renderer draws must have a registry filled by the
     /// same calls: a layer whose type `registry` lacks isn't drawn.
+    #[expect(clippy::too_many_arguments, reason = "each argument is a part of the renderer that its host picks")]
     pub fn with_fonts(
         backend: Rc<dyn RendererBackend>,
         pixel_ratio: f32,
@@ -129,7 +139,8 @@ impl Renderer {
         glyph_cache: Arc<GlyphCache>,
         font_face_engine: Arc<dyn crate::text::font_face_engine::FontFaceEngine>,
         registry: Arc<Registry>,
-        run_loop: &mln_actor::RunLoop,
+        waker: Waker,
+        pool: &Pool,
     ) -> Self {
         Renderer {
             orchestrator: ManuallyDrop::new(RenderOrchestrator::new(
@@ -138,7 +149,8 @@ impl Renderer {
                 glyph_cache,
                 font_face_engine,
                 registry,
-                run_loop,
+                waker,
+                pool,
             )),
             context: Rc::new(Context::new(Rc::clone(&backend))),
             backend,
@@ -176,9 +188,9 @@ impl Renderer {
     }
 
     /// Port-only: runs the tiles' jobs, and the raster tiles' workers, in
-    /// `workers` (by default on the map's thread pool). Set it before the
+    /// `workers` (by default on the renderer's pool). Set it before the
     /// first render so that every tile uses it.
-    pub fn set_tile_workers(&mut self, workers: &Rc<RemoteWorkers>) {
+    pub fn set_tile_workers(&mut self, workers: RemoteWorkers) {
         self.orchestrator.set_tile_workers(workers);
     }
 

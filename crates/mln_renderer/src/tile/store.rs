@@ -11,11 +11,11 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_actor::TaggedScheduler;
 use mln_storage::FileSource;
 use mln_tile_id::OverscaledTileID;
 use mln_util::error::Error;
 use mln_util::hash::{HashMap, HashSet};
+use mln_util::pool::TaskGroup;
 
 use crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas;
 use crate::image_store::ImageStore;
@@ -56,7 +56,7 @@ pub(crate) struct StoreContext {
     pub(crate) images: ImageStore,
     pub(crate) atlas: DynamicTextureAtlas,
     /// The renderer's workers, which free what tiles let go of.
-    pub(crate) pool: TaggedScheduler,
+    pub(crate) pool: TaskGroup,
     /// Where glyphs load from.
     pub(crate) file_source: Option<Arc<dyn FileSource>>,
     events: Vec<StoreEvent>,
@@ -202,13 +202,13 @@ impl TileStore {
         workers: Box<dyn TileWorkers>,
         glyphs: GlyphStore,
         images: ImageStore,
-        pool: TaggedScheduler,
+        pool: TaskGroup,
         wake: Waker,
     ) -> Self {
         let inbox = Inbox::new(wake);
         let ctx = StoreContext {
             inbox: inbox.sender().clone(),
-            jobs: Jobs::new(workers),
+            jobs: Jobs::new(workers, inbox.sender()),
             glyphs,
             images,
             atlas: DynamicTextureAtlas::new(),
@@ -246,7 +246,7 @@ impl TileStore {
 
     /// Runs the tiles' jobs in `workers`, where those in flight run again.
     pub(crate) fn set_workers(&mut self, workers: Box<dyn TileWorkers>) {
-        self.ctx.jobs.set_workers(workers);
+        self.ctx.jobs.set_workers(workers, &self.ctx.inbox);
         for source in self.sources.values_mut() {
             source.update_each(
                 &mut self.ctx,
@@ -300,41 +300,51 @@ impl TileStore {
     pub(crate) fn receive(&mut self) {
         self.ctx.glyphs.update();
         while let Some(event) = self.inbox.next() {
-            match event {
-                TileEvent::Response { tile, load, response } => {
-                    let awaits = |tile: &Tile| tile.load.awaits_response(load);
-                    if let Some((source, tile)) = find(&mut self.sources, tile, awaits) {
-                        source.update(&tile, &mut self.ctx, |tile| tile.apply_response(load, &response));
-                    }
+            self.take(event);
+        }
+    }
+
+    /// Takes in one event for the tiles.
+    fn take(&mut self, event: TileEvent) {
+        match event {
+            TileEvent::Response { tile, load, response } => {
+                let awaits = |tile: &Tile| tile.load.awaits_response(load);
+                if let Some((source, tile)) = find(&mut self.sources, tile, awaits) {
+                    source.update(&tile, &mut self.ctx, |tile| tile.apply_response(load, &response));
                 }
-                TileEvent::Data { tile, load, data } => {
-                    if let Some((source, tile)) = find(&mut self.sources, tile, |tile| tile.load.accepts(load)) {
-                        source.update(&tile, &mut self.ctx, |tile| tile.apply_source_data(load, data));
-                    }
+            }
+            TileEvent::Data { tile, load, data } => {
+                if let Some((source, tile)) = find(&mut self.sources, tile, |tile| tile.load.accepts(load)) {
+                    source.update(&tile, &mut self.ctx, |tile| tile.apply_source_data(load, data));
                 }
-                TileEvent::Reply { lane, id, body, times } => {
-                    if !self.ctx.jobs.replied(&id, times) {
-                        drop_on_workers(&self.ctx.pool, body);
-                        continue;
-                    }
-                    let running = |tile: &Tile| tile.pipeline.in_flight().is_some_and(|job| job.id == id);
-                    match find(&mut self.sources, id.tile, running) {
-                        Some((source, tile)) => {
-                            source.update(&tile, &mut self.ctx, |tile| tile.apply_reply(lane, id, body));
-                        }
-                        None => drop_on_workers(&self.ctx.pool, body),
-                    }
+            }
+            TileEvent::Reply { lane, id, body, times } => {
+                if !self.ctx.jobs.replied(&id, times) {
+                    drop_on_workers(&self.ctx.pool, body);
+                    return;
                 }
-                TileEvent::LaneLost(lane) => {
-                    self.ctx.jobs.lost(lane);
-                    for source in self.sources.values_mut() {
-                        let holds = |slot: &Slot| slot.tile.pipeline.lane() == Some(lane);
-                        source.update_each(&mut self.ctx, holds, |tile| tile.lane_lost(lane));
+                let running = |tile: &Tile| tile.pipeline.in_flight().is_some_and(|job| job.id == id);
+                match find(&mut self.sources, id.tile, running) {
+                    Some((source, tile)) => {
+                        source.update(&tile, &mut self.ctx, |tile| tile.apply_reply(lane, id, body));
                     }
+                    None => drop_on_workers(&self.ctx.pool, body),
                 }
-                TileEvent::Glyphs { font_stack, range, id, result } => {
-                    self.ctx.glyphs.take_response(&font_stack, range, id, result);
+            }
+            TileEvent::LaneLost(lane) => {
+                self.ctx.jobs.lost(lane);
+                for source in self.sources.values_mut() {
+                    let holds = |slot: &Slot| slot.tile.pipeline.lane() == Some(lane);
+                    source.update_each(&mut self.ctx, holds, |tile| tile.lane_lost(lane));
                 }
+            }
+            TileEvent::Remote(event) => {
+                if let Some(event) = self.ctx.jobs.receive(event) {
+                    self.take(event);
+                }
+            }
+            TileEvent::Glyphs { font_stack, range, id, result } => {
+                self.ctx.glyphs.take_response(&font_stack, range, id, result);
             }
         }
     }
@@ -448,7 +458,7 @@ impl TileStore {
         self.ctx.jobs.log_stats();
     }
 
-    pub(crate) fn pool(&self) -> &TaggedScheduler {
+    pub(crate) fn pool(&self) -> &TaskGroup {
         &self.ctx.pool
     }
 

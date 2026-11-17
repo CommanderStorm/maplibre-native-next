@@ -47,7 +47,7 @@ mod worker_side;
 
 pub use envelope::Encoded;
 pub use host::TileWorkerHost;
-pub(crate) use transport::RemoteJobs;
+pub(crate) use transport::RemoteEvent;
 pub use transport::{RemoteWorkers, ReplySink, ThreadWorkerInstances, WorkerInstances};
 
 #[cfg(test)]

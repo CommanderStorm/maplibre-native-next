@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use geo_types::Geometry;
-use mln_actor::RunLoop;
 use mln_map_types::{
     AnimationOptions, BoundOptions, CameraDelta, CameraError, CameraOptions, CameraUpdate, MapDebugOptions, MapMode,
     MapView, ProjectionMode, TileLodMode, TransformState, VerticalPerspectiveProjection, Viewport,
@@ -15,7 +14,9 @@ use mln_renderer::{
     FeatureInfo, LayerFeaturesMap, Registry, RendererEvent, RendererEvents, RenderingStats, SourceLayerID,
     UpdateParameters, UpdateReader, UpdateSlot,
 };
-use mln_storage::{FileSource, Loader, ResourceOptions};
+use mln_storage::FileSource;
+#[cfg(not(target_family = "wasm"))]
+use mln_storage::{Loader, ResourceOptions};
 use mln_style::conversion::{Convertible, convert_source};
 use mln_style::{Edit, Source, Style, StyleRegistry};
 use mln_style_types::{ProjectionDefinition, ProjectionType};
@@ -25,6 +26,7 @@ use mln_util::geo::{EdgeInsets, LatLng, LatLngBounds, ScreenCoordinate, WrapMode
 use mln_util::geometry::for_each_point;
 use mln_util::logging::{Event, Log};
 use mln_util::mat4::Mat4;
+use mln_util::pool::Pool;
 use mln_util::size::Size;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_util::time::Instant;
@@ -62,8 +64,8 @@ enum StillImage {
 /// phase, before the commands that should see what was reported, such as a
 /// camera command that should land after the style's default camera. What
 /// the map reports to its owner waits in another queue, for `drain_events`.
-/// An owner that runs a `RunLoop` sets a waker
-/// ([`set_waker`](Self::set_waker)) that schedules those calls.
+/// An owner sets a waker ([`set_waker`](Self::set_waker)) that schedules
+/// those calls on its thread.
 pub struct Map {
     updates: UpdateSlot,
     transform: Transform,
@@ -108,46 +110,46 @@ pub struct Map {
 
     /// Declared after `style`, so the style and its requests go first.
     file_source: Option<Arc<dyn FileSource>>,
-    /// The loop that the map's responses and background work answer on.
-    run_loop: RunLoop,
+    /// Where the map's background work runs.
+    pool: Pool,
 }
 
 impl Map {
     /// A map with a [`Loader`] of its own for the default
-    /// `ResourceOptions`, on `run_loop`, which runs on this thread: the map's
-    /// responses and background work answer there, and its background work
-    /// runs on the loop's pool.
+    /// `ResourceOptions`, whose background work runs on `pool`.
     ///
     /// Fails with [`ErrorKind::InvalidArgument`](mln_util::ErrorKind) for an empty `map_options.size`.
-    pub fn new(map_options: MapOptions, run_loop: &RunLoop) -> Result<Map, Error> {
-        Self::with_resource_options(map_options, &ResourceOptions::default(), run_loop)
+    #[cfg(not(target_family = "wasm"))]
+    pub fn new(map_options: MapOptions, pool: &Pool) -> Result<Map, Error> {
+        Self::with_resource_options(map_options, &ResourceOptions::default(), pool)
     }
 
     /// A map with a [`Loader`] of its own for `resource_options`, on
-    /// `run_loop`.
+    /// `pool`.
+    #[cfg(not(target_family = "wasm"))]
     pub fn with_resource_options(
         map_options: MapOptions,
         resource_options: &ResourceOptions,
-        run_loop: &RunLoop,
+        pool: &Pool,
     ) -> Result<Map, Error> {
-        let loader: Arc<dyn FileSource> = Arc::new(Loader::new(resource_options));
-        Self::with_registry(loader, map_options, Arc::clone(Registry::with_builtins().style()), run_loop)
+        let loader: Arc<dyn FileSource> = Arc::new(Loader::new(resource_options, pool));
+        Self::with_registry(loader, map_options, Arc::clone(Registry::with_builtins().style()), pool)
     }
 
     // gtests-core: the C++ tests' `MapAdapter` (test/include/mln/test/
     // map_adapter.hpp): a map over a given file source.
-    /// A map whose resources come from `file_source`, on `run_loop`.
+    /// A map whose resources come from `file_source`, on `pool`.
     pub fn with_file_source(
         file_source: Arc<dyn FileSource>,
         map_options: MapOptions,
-        run_loop: &RunLoop,
+        pool: &Pool,
     ) -> Result<Map, Error> {
-        Self::with_registry(file_source, map_options, Arc::clone(Registry::with_builtins().style()), run_loop)
+        Self::with_registry(file_source, map_options, Arc::clone(Registry::with_builtins().style()), pool)
     }
 
     /// A map whose resources come from `file_source` and whose style parses
-    /// against `registry`, on `run_loop`. The other constructors use the
-    /// built-in registrations.
+    /// against `registry`, on `pool`. The other constructors
+    /// use the built-in registrations.
     ///
     /// The renderer that draws the map must be given a registry filled by
     /// the same calls as `registry` ([`mln_renderer::Registry::style`]): it
@@ -156,13 +158,13 @@ impl Map {
         file_source: Arc<dyn FileSource>,
         map_options: MapOptions,
         registry: Arc<StyleRegistry>,
-        run_loop: &RunLoop,
+        pool: &Pool,
     ) -> Result<Map, Error> {
         let events = EventQueue::new();
         let renderer_events = RendererEvents::new();
         let pixel_ratio = map_options.pixel_ratio;
         let style = Arc::new(Style::new(registry));
-        let loader = StyleLoader::new(Some(Arc::clone(&file_source)), run_loop, pixel_ratio);
+        let loader = StyleLoader::new(Some(Arc::clone(&file_source)), pool, pixel_ratio);
         let mut transform = Transform::new(map_options.constrain_mode, map_options.viewport_mode);
         transform.set_north_orientation(map_options.north_orientation);
         let mut map = Map {
@@ -199,17 +201,17 @@ impl Map {
             events,
             command_ends: Vec::new(),
             file_source: Some(file_source),
-            run_loop: run_loop.clone(),
+            pool: pool.clone(),
         };
         map.share_projection_with_transform();
         map.transform.resize(map_options.size)?;
         Ok(map)
     }
 
-    /// The loop that the map's responses and background work answer on.
+    /// Where the map's background work runs.
     #[must_use]
-    pub fn run_loop(&self) -> &RunLoop {
-        &self.run_loop
+    pub fn pool(&self) -> &Pool {
+        &self.pool
     }
 
     // MARK: - Renderer
@@ -264,7 +266,7 @@ impl Map {
     /// handle or to drain. It must not call the map: it schedules a call of
     /// [`drain_events`](Self::drain_events) or
     /// [`process_events`](Self::process_events) on the map's thread, as by
-    /// sending an `AsyncTask`.
+    /// posting to the owner's `Queue`.
     pub fn set_waker(&mut self, waker: Option<Waker>) {
         self.loader.set_waker(waker.clone());
         self.renderer_events.set_waker(waker.clone());

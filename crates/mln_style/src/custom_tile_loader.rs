@@ -4,15 +4,14 @@
 //! reaches a tile through [`CustomTileSubscriber`], since the tiles live in
 //! `mln_renderer`.
 
-use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
 
-use mln_actor::SchedulerPtr;
 use mln_tile_id::tile_range::TileRange;
 use mln_tile_id::{CanonicalTileID, OverscaledTileID};
 use mln_util::error::Error;
 use mln_util::geo::LatLngBounds;
 use mln_util::hash::HashMap;
+use mln_util::pool::{Pool, TaskGroup};
 use parking_lot::Mutex;
 
 /// Called with the canonical ID of a tile that the map needs, or no longer
@@ -234,32 +233,22 @@ impl<D: Clone> CustomTileLoader<D> {
     }
 }
 
-/// A call that waits its turn on a provider's strand.
-type Call<D> = Box<dyn FnOnce(&CustomProvider<D>) + Send>;
-
-/// What a provider's lock guards: the tiles' state and the calls that wait.
-struct State<D: Clone + Send + 'static> {
-    loader: CustomTileLoader<D>,
-    queue: VecDeque<Call<D>>,
-    /// Whether a pool job is running the queue's calls.
-    draining: bool,
-}
-
 /// The provider of a custom source's tile data, between the tiles and the
 /// host: it asks the host for each canonical tile that a tile needs, once,
 /// and hands the host's answer to every tile that shares it.
 ///
-/// Every call, from the tiles or from the host, waits its turn on the
-/// provider's strand: a queue under its lock, which one pool job at a time
-/// runs in order. The host's fetch and cancel functions run on that pool
-/// thread, one call at a time, in the order the tiles asked, and outside the
-/// lock, so a host may answer from inside its fetch function, on any thread.
-/// A call made after the provider is gone does nothing.
+/// Every call, from the tiles or from the host, is a task of the provider's
+/// serial group on the pool, so the calls run one at a time, in the order
+/// they were made. The host's fetch and cancel functions run in those
+/// tasks, in the order the tiles asked, with no lock held, so a host may
+/// answer from inside its fetch function, on any thread: the answer runs
+/// after the fetch. A call that runs after the provider is gone does
+/// nothing.
 pub struct CustomProvider<D: Clone + Send + 'static> {
     fetch_tile_function: Option<TileFunction>,
     cancel_tile_function: Option<TileFunction>,
-    state: Mutex<State<D>>,
-    pool: SchedulerPtr,
+    loader: Mutex<CustomTileLoader<D>>,
+    calls: TaskGroup,
     this: Weak<Self>,
 }
 
@@ -269,13 +258,13 @@ impl<D: Clone + Send + 'static> CustomProvider<D> {
     pub fn new(
         fetch_tile_function: Option<TileFunction>,
         cancel_tile_function: Option<TileFunction>,
-        pool: SchedulerPtr,
+        pool: &Pool,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| CustomProvider {
             fetch_tile_function,
             cancel_tile_function,
-            state: Mutex::new(State { loader: CustomTileLoader::new(), queue: VecDeque::new(), draining: false }),
-            pool,
+            loader: Mutex::new(CustomTileLoader::new()),
+            calls: TaskGroup::serial(pool),
             this: Weak::clone(this),
         })
     }
@@ -304,15 +293,15 @@ impl<D: Clone + Send + 'static> CustomProvider<D> {
         self.with_loader(move |loader| loader.set_tile_data(&tile_id, data));
     }
 
-    /// Hands over the data that `make` makes, on the strand and outside
-    /// the lock, if a tile needs the canonical tile's data.
+    /// Hands over the data that `make` makes, in the provider's turn and
+    /// outside the lock, if a tile needs the canonical tile's data.
     pub fn set_tile_data_with(&self, tile_id: CanonicalTileID, make: impl FnOnce() -> D + Send + 'static) {
-        self.enqueue(Box::new(move |provider| {
-            if provider.state.lock().loader.is_required(&tile_id) {
+        self.call(move |provider| {
+            if provider.loader.lock().is_required(&tile_id) {
                 let data = make();
                 provider.locked(|loader| loader.set_tile_data(&tile_id, data));
             }
-        }));
+        });
     }
 
     /// Reports that the host failed to load a tile. The tiles stay
@@ -333,19 +322,19 @@ impl<D: Clone + Send + 'static> CustomProvider<D> {
         self.with_loader(move |loader| loader.invalidate_region(&bounds));
     }
 
-    /// Runs `change` on the tiles' state on the strand, then the host calls
-    /// it asked for.
+    /// Runs `change` on the tiles' state in the provider's turn, then the
+    /// host calls it asked for.
     fn with_loader(&self, change: impl FnOnce(&mut CustomTileLoader<D>) + Send + 'static) {
-        self.enqueue(Box::new(move |provider| provider.locked(change)));
+        self.call(move |provider| provider.locked(change));
     }
 
     /// Runs `change` under the lock, then, outside it, the host calls it
-    /// asked for. Only the strand calls it.
+    /// asked for. Only the provider's group's tasks call it.
     fn locked(&self, change: impl FnOnce(&mut CustomTileLoader<D>)) {
         let calls = {
-            let mut state = self.state.lock();
-            change(&mut state.loader);
-            std::mem::take(&mut state.loader.calls)
+            let mut loader = self.loader.lock();
+            change(&mut loader);
+            std::mem::take(&mut loader.calls)
         };
         for call in calls {
             let (function, tile_id) = match call {
@@ -358,38 +347,15 @@ impl<D: Clone + Send + 'static> CustomProvider<D> {
         }
     }
 
-    /// Queues `call`, and starts a pool job that runs the queue unless one
-    /// runs.
-    fn enqueue(&self, call: Call<D>) {
-        let start = {
-            let mut state = self.state.lock();
-            state.queue.push_back(call);
-            !std::mem::replace(&mut state.draining, true)
-        };
-        if start {
-            let this = Weak::clone(&self.this);
-            self.pool.schedule(Box::new(move || {
-                if let Some(provider) = this.upgrade() {
-                    provider.drain();
-                }
-            }));
-        }
-    }
-
-    /// Runs the queued calls in order until the queue is empty.
-    fn drain(&self) {
-        loop {
-            let call = {
-                let mut state = self.state.lock();
-                if let Some(call) = state.queue.pop_front() {
-                    call
-                } else {
-                    state.draining = false;
-                    return;
-                }
-            };
-            call(self);
-        }
+    /// Runs `call` in the provider's serial group, if the provider is still
+    /// there when its turn comes.
+    fn call(&self, call: impl FnOnce(&Self) + Send + 'static) {
+        let this = Weak::clone(&self.this);
+        self.calls.spawn(move || {
+            if let Some(provider) = this.upgrade() {
+                call(&provider);
+            }
+        });
     }
 }
 
@@ -415,7 +381,7 @@ mod tests {
     // and a fetch that answers from inside itself doesn't deadlock.
     #[test]
     fn host_calls_run_off_the_calling_thread_in_order_and_may_reenter() {
-        let pool = mln_actor::scheduler::get_background();
+        let pool = Pool::new(4);
         let fetches: Arc<Mutex<Vec<(ThreadId, CanonicalTileID)>>> = Arc::default();
         let provider_cell: Arc<OnceLock<Weak<CustomProvider<u32>>>> = Arc::default();
         let fetch: TileFunction = {
@@ -427,7 +393,7 @@ mod tests {
                 }
             })
         };
-        let provider = CustomProvider::new(Some(fetch), None, Arc::clone(&pool));
+        let provider = CustomProvider::new(Some(fetch), None, &pool);
         let _ = provider_cell.set(Arc::downgrade(&provider));
 
         let received: Arc<Mutex<Vec<u32>>> = Arc::default();
@@ -436,7 +402,12 @@ mod tests {
             let id = OverscaledTileID::new(3, 0, *tile);
             provider.fetch_tile(id, key as SubscriberKey, Box::new(Recorder(Arc::clone(&received))));
         }
-        pool.wait_for_empty();
+        // Each fetch answers before the next, so the last answer comes last.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while received.lock().len() < tiles.len() {
+            assert!(std::time::Instant::now() < deadline, "the host's answers didn't arrive");
+            std::thread::yield_now();
+        }
 
         let fetches = fetches.lock();
         assert_eq!(tiles, fetches.iter().map(|(_, tile)| *tile).collect::<Vec<_>>());

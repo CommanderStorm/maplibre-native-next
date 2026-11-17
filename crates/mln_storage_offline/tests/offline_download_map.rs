@@ -2,12 +2,12 @@
 // separate target for the `mln_map` and `mln_headless` dependencies. The
 // database is a file in the temporary directory.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use mln_actor::{LocalObject, RunLoop};
 use mln_headless::HeadlessFrontend;
 use mln_map::{CameraOptions, Map, MapEvent, MapMode, MapOptions, RenderFrameStatus, RenderMode};
 use mln_renderer::Registry;
@@ -22,18 +22,20 @@ use mln_storage::{FileSource, Kind, Resource, Response};
 use mln_storage_offline::{Downloads, OfflineDownload, Post};
 use mln_util::compression::compress;
 use mln_util::geo::{LatLng, LatLngBounds};
+use mln_util::pool::Pool;
+use mln_util::queue::Queue;
 
 fn cpp_path(relative: &str) -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata").join(relative)
 }
 
 /// `test.response(path)`.
-fn fixture_response(size: &Cell<u64>, path: &str) -> Response {
+fn fixture_response(size: &AtomicU64, path: &str) -> Response {
     let mut result = Response::new();
     let data = std::fs::read(cpp_path(&format!("test/fixtures/offline_download/{path}"))).unwrap();
     let uncompressed = data.len() as u64;
     let compressed = compress(&data).unwrap().len() as u64;
-    size.set(size.get() + uncompressed.min(compressed));
+    size.fetch_add(uncompressed.min(compressed), Ordering::SeqCst);
     result.data = Some(Arc::new(data));
     result
 }
@@ -52,25 +54,25 @@ impl<F: Fn(OfflineRegionStatus)> OfflineRegionObserver for StatusObserver<F> {
 #[test]
 fn resource_offline_usage_unset() {
     // `OfflineTest test{filename_test_fs}`.
-    let run_loop = RunLoop::new();
-    let file_source = Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous));
+    let run_loop = Queue::new();
+    let pool = Pool::new(4);
+    let file_source = StubFileSource::on_queue(&run_loop, ResponseType::Asynchronous);
     // A database of this run's own, which goes when the test ends.
     let dir = tempfile::tempdir().unwrap();
     let filename = dir.path().join("offline_download.db").to_string_lossy().into_owned();
     // The database and its downloads, which this thread owns as a
-    // database's worker does; the downloads' tasks run on this thread's loop.
+    // database's worker does; the downloads' tasks run on this thread's
+    // queue, with the host.
     let host: Rc<RefCell<Option<(OfflineDatabase, Downloads)>>> = Rc::default();
-    let slot = Arc::new(LocalObject::from_rc(Rc::clone(&host)));
-    let handle = run_loop.handle();
+    let handle = run_loop.downgrade();
     let post: Post = Arc::new(move |task| {
-        let slot = Arc::clone(&slot);
-        handle.invoke(move || {
-            if let Some(host) = slot.get()
-                && let Some((db, downloads)) = &mut *host.borrow_mut()
-            {
-                task(db, downloads);
-            }
-        });
+        if let Some(queue) = handle.upgrade() {
+            queue.post(move |host: &mut Rc<RefCell<Option<(OfflineDatabase, Downloads)>>>| {
+                if let Some((db, downloads)) = &mut *host.borrow_mut() {
+                    task(db, downloads);
+                }
+            });
+        }
     });
     let network: Arc<dyn FileSource> = Arc::<StubFileSource>::clone(&file_source);
     *host.borrow_mut() = Some((
@@ -82,7 +84,7 @@ fn resource_offline_usage_unset() {
         let (db, downloads) = host.as_mut().expect("the host");
         f(db, downloads);
     };
-    let size = Rc::new(Cell::new(0u64));
+    let size = Arc::new(AtomicU64::new(0));
 
     let mut region = None;
     with(&mut |db, _| {
@@ -121,14 +123,14 @@ fn resource_offline_usage_unset() {
         Arc::clone(Registry::with_builtins().style()),
     );
 
-    let s = Rc::clone(&size);
+    let s = Arc::clone(&size);
     file_source.set_response(Kind::Style, move |resource: &Resource| {
         assert_eq!(resource.priority, Priority::Low);
         assert_eq!(resource.usage, Usage::Offline);
         Some(fixture_response(&s, "inline_source.style.json"))
     });
 
-    let s = Rc::clone(&size);
+    let s = Arc::clone(&size);
     file_source.set_response(Kind::Tile, move |resource: &Resource| {
         assert_eq!(resource.priority, Priority::Low);
         assert_eq!(resource.usage, Usage::Offline);
@@ -146,32 +148,34 @@ fn resource_offline_usage_unset() {
     let region_id = region.id;
     let mut download = Some(download);
     with(&mut |_, downloads| downloads.insert(download.take().expect("the download")));
-    run_loop.run();
+    run_loop.run(&mut Rc::clone(&host));
     // Once download completes, invalidate region and try rendering map.
     // Resource requests must not have Offline usage tag.
     with(&mut |db, _| assert!(db.invalidate_region(region_id).is_none()));
 
-    let stubfile_source = Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous));
-    let s = Rc::clone(&size);
+    // The map's thread's queue.
+    let queue = Queue::new();
+    let stubfile_source = StubFileSource::on_queue(&queue, ResponseType::Asynchronous);
+    let s = Arc::clone(&size);
     stubfile_source.set_response(Kind::Style, move |resource: &Resource| {
         assert_ne!(resource.usage, Usage::Offline);
         Some(fixture_response(&s, "inline_source.style.json"))
     });
 
-    let s = Rc::clone(&size);
+    let s = Arc::clone(&size);
     stubfile_source.set_response(Kind::Tile, move |resource: &Resource| {
         assert_ne!(resource.usage, Usage::Offline);
         Some(fixture_response(&s, "0-0-0.vector.pbf"))
     });
 
-    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
+    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &queue, &pool).expect("a headless frontend");
     let mut map = Map::with_file_source(
         stubfile_source,
         MapOptions { map_mode: MapMode::Continuous, size: frontend.size(), ..Default::default() },
-        &run_loop,
+        &pool,
     )
     .unwrap();
-    frontend.attach(&map);
+    frontend.attach(&mut map);
 
     map.load_style_url("http://127.0.0.1:3000/inline_source.style.json");
     map.jump_to(&CameraOptions { center: Some(LatLng::new(0.0, 0.0).unwrap()), zoom: Some(0.0), ..Default::default() });
@@ -184,11 +188,11 @@ fn resource_offline_usage_unset() {
         if full_frame {
             break;
         }
-        // A frame reports to the map, which handles that before the loop
-        // waits.
+        // A frame reports to the map, which handles that before the queue
+        // parks.
         let drew = frontend.render_update();
-        if !run_loop.run_once() && !drew {
-            run_loop.wait_for_work();
+        if !queue.run_once(&mut ()) && !drew {
+            queue.park();
         }
     }
 }

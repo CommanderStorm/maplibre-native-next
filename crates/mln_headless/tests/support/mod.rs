@@ -24,7 +24,6 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::{Arc, OnceLock};
 
-use mln_actor::{AsyncTask, LocalObject, RunLoop, Timer};
 use mln_headless::{HeadlessFrontend, RenderResult};
 use mln_map::{Map, MapEvent, MapMode, MapOptions, RenderFrameStatus};
 use mln_renderer::{FontStack, GlyphRange, OverscaledTileID, TileOperation, UpdateReader};
@@ -37,7 +36,9 @@ use mln_tile_id::CanonicalTileID;
 use mln_util::Error;
 use mln_util::image::PremultipliedImage;
 use mln_util::logging::{Event, EventSeverity, Log};
-use parking_lot::Mutex;
+use mln_util::pool::Pool;
+use mln_util::queue::Queue;
+use parking_lot::{Mutex, MutexGuard};
 
 // MARK: - Fixtures
 
@@ -302,22 +303,22 @@ impl StubMapObserver {
         }
     }
 
-    /// Dispatches `map`'s events from the run loop whenever the map has
-    /// some, while the returned value lives. With a `frontend`, which
+    /// Dispatches `map`'s events in the turns of `run_loop` whenever the map
+    /// has some, while the returned value lives. With a `frontend`, which
     /// renders `map`, it also draws each update that the map publishes
     /// first, as a window's frontend draws when the display asks for a
     /// frame; while someone else holds the frontend, they draw.
     pub(crate) fn observe(
         self: &Rc<Self>,
+        run_loop: &TestLoop,
         map: &Rc<RefCell<Map>>,
         frontend: Option<&Rc<RefCell<HeadlessFrontend>>>,
     ) -> Observing {
-        let run_loop = map.borrow().run_loop().clone();
-        let task = {
+        let turn: Rc<dyn Fn()> = {
             let observer = Rc::downgrade(self);
             let map = Rc::downgrade(map);
             let frontend = frontend.map(Rc::downgrade);
-            AsyncTask::new(&run_loop, move || {
+            Rc::new(move || {
                 if let Some(frontend) = frontend.as_ref().and_then(Weak::upgrade)
                     && let Ok(mut frontend) = frontend.try_borrow_mut()
                 {
@@ -328,25 +329,24 @@ impl StubMapObserver {
                 }
             })
         };
-        let sender = task.sender();
-        map.borrow_mut().set_waker(Some(Arc::new(move || sender.send())));
+        run_loop.each_turn(&turn);
+        map.borrow_mut().set_waker(Some(run_loop.waker()));
         let updates = frontend.map(|_| {
             let updates = map.borrow().update_reader();
-            let sender = task.sender();
-            updates.set_waker(Some(Arc::new(move || sender.send())));
+            updates.set_waker(Some(run_loop.waker()));
             // The update that the map published already.
-            task.send();
+            run_loop.queue().wake();
             updates
         });
-        Observing { _task: task, _updates: updates }
+        Observing { _turn: turn, _updates: updates }
     }
 }
 
-/// What [`StubMapObserver::observe`] handles from the run loop, while it
+/// What [`StubMapObserver::observe`] runs in the loop's turns, while it
 /// lives.
 pub(crate) struct Observing {
-    _task: AsyncTask,
-    /// The map's updates, whose waker wakes the task.
+    _turn: Rc<dyn Fn()>,
+    /// The map's updates, whose waker wakes the loop.
     _updates: Option<UpdateReader>,
 }
 
@@ -357,40 +357,35 @@ struct FakeRequestEntry {
     responder: Responder,
 }
 
-type FakeRequests = RefCell<Vec<FakeRequestEntry>>;
-
 /// Records the requests made; the test responds to them.
 pub(crate) struct FakeFileSource {
-    requests: LocalObject<FakeRequests>,
+    requests: Mutex<Vec<FakeRequestEntry>>,
 }
 
 impl FakeFileSource {
     pub(crate) fn new() -> Self {
-        FakeFileSource { requests: LocalObject::new(RefCell::new(Vec::new())) }
+        FakeFileSource { requests: Mutex::new(Vec::new()) }
     }
 
     /// The requests that weren't cancelled.
-    fn list(&self) -> Rc<FakeRequests> {
-        let list = self.requests.get().expect("FakeFileSource used from another thread");
-        list.borrow_mut().retain(|entry| !entry.responder.is_cancelled());
+    fn list(&self) -> MutexGuard<'_, Vec<FakeRequestEntry>> {
+        let mut list = self.requests.lock();
+        list.retain(|entry| !entry.responder.is_cancelled());
         list
     }
 
     pub(crate) fn requests_len(&self) -> usize {
-        self.list().borrow().len()
+        self.list().len()
     }
 
     /// `respond(kind, response)`: answers the first pending request of that
     /// kind; returns whether there was one.
     pub(crate) fn respond(&self, kind: Kind, response: &Response) -> bool {
-        let responder = {
-            let list = self.list();
-            let list = list.borrow();
-            list.iter().find(|entry| entry.resource.kind == kind).map(|entry| entry.responder.clone())
-        };
+        let responder =
+            self.list().iter().find(|entry| entry.resource.kind == kind).map(|entry| entry.responder.clone());
         match responder {
             Some(responder) => {
-                responder.send_now(response.clone());
+                responder.send(response.clone());
                 true
             }
             None => false,
@@ -406,7 +401,7 @@ impl Default for FakeFileSource {
 
 impl FileSource for FakeFileSource {
     fn load(&self, resource: &Resource, responder: Responder) {
-        self.list().borrow_mut().push(FakeRequestEntry { resource: resource.clone(), responder });
+        self.list().push(FakeRequestEntry { resource: resource.clone(), responder });
     }
 
     fn can_request(&self, _resource: &Resource) -> bool {
@@ -481,25 +476,137 @@ impl Drop for FixtureLog {
     }
 }
 
-// MARK: - RunLoop with an emergency stop
+// MARK: - The test's loop
+
+/// Work that runs after each turn of a [`TestLoop`] while it lives.
+type Turn = Weak<dyn Fn()>;
+
+/// The test thread's loop: a queue of `Send` tasks, which the frontends on
+/// the thread run too, and the work of what observes the thread's maps,
+/// which runs after each turn. Clones share the loop.
+#[derive(Clone, Default)]
+pub(crate) struct TestLoop {
+    queue: Queue<()>,
+    turns: Rc<RefCell<Vec<Turn>>>,
+}
+
+impl TestLoop {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// The queue, which the thread's frontends run while they wait.
+    pub(crate) fn queue(&self) -> &Queue<()> {
+        &self.queue
+    }
+
+    /// A handle that other threads post to and stop the loop with.
+    pub(crate) fn handle(&self) -> Queue<()> {
+        self.queue.clone()
+    }
+
+    /// Wakes the loop, from any thread.
+    pub(crate) fn waker(&self) -> Arc<dyn Fn() + Send + Sync> {
+        let queue = self.queue.downgrade();
+        Arc::new(move || {
+            if let Some(queue) = queue.upgrade() {
+                queue.wake();
+            }
+        })
+    }
+
+    /// Runs `turn` after each turn of the loop while it lives.
+    pub(crate) fn each_turn(&self, turn: &Rc<dyn Fn()>) {
+        self.turns.borrow_mut().push(Rc::downgrade(turn));
+    }
+
+    fn run_turns(&self) {
+        let turns: Vec<Rc<dyn Fn()>> = {
+            let mut turns = self.turns.borrow_mut();
+            turns.retain(|turn| turn.strong_count() > 0);
+            turns.iter().filter_map(Weak::upgrade).collect()
+        };
+        for turn in turns {
+            turn();
+        }
+    }
+
+    /// Runs what waits now, then the turns' work. Returns whether a task ran.
+    pub(crate) fn run_once(&self) -> bool {
+        let ran = self.queue.run_once(&mut ());
+        self.run_turns();
+        ran
+    }
+
+    /// Runs the loop until [`stop`](Self::stop).
+    pub(crate) fn run(&self) {
+        self.queue.run_with(&mut (), |()| self.run_turns());
+    }
+
+    pub(crate) fn stop(&self) {
+        self.queue.stop();
+    }
+}
+
+/// Runs `run_loop` until it stops or `limit` passes, and returns whether it
+/// stopped in time.
+pub(crate) fn run_within(run_loop: &TestLoop, limit: std::time::Duration) -> bool {
+    let timeout = LoopTimer::new(run_loop);
+    let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (timed_out, stop) = (Arc::clone(&timed_out), run_loop.handle());
+        timeout.start(limit, move || {
+            timed_out.store(true, std::sync::atomic::Ordering::SeqCst);
+            stop.stop();
+        });
+    }
+    run_loop.run();
+    !timed_out.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 /// Runs `run_loop`, stopping it and failing after `seconds` if nothing
 /// stopped it: a hang fails the test instead of hanging the test run.
 #[track_caller]
-pub(crate) fn run_with_timeout(run_loop: &RunLoop, seconds: u64) {
-    let timed_out = Rc::new(Cell::new(false));
-    let timer = Timer::new(run_loop);
-    {
-        let timed_out = Rc::clone(&timed_out);
-        let run_loop = run_loop.clone();
-        timer.start(std::time::Duration::from_secs(seconds), std::time::Duration::ZERO, move || {
-            timed_out.set(true);
-            run_loop.stop();
+pub(crate) fn run_with_timeout(run_loop: &TestLoop, seconds: u64) {
+    assert!(
+        run_within(run_loop, std::time::Duration::from_secs(seconds)),
+        "the run loop was not stopped within {seconds} s"
+    );
+}
+
+/// A wait on the test's loop that runs its callback in the first turn after
+/// it ends. Starting it again replaces the wait in progress, and dropping
+/// it withdraws it.
+pub(crate) struct LoopTimer {
+    queue: Queue<()>,
+    /// Counts the starts and stops: a wait runs only while it's the last.
+    generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl LoopTimer {
+    pub(crate) fn new(run_loop: &TestLoop) -> Self {
+        LoopTimer { queue: run_loop.handle(), generation: Arc::default() }
+    }
+
+    pub(crate) fn start(&self, delay: std::time::Duration, callback: impl FnOnce() + Send + 'static) {
+        let generation = self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let current = Arc::clone(&self.generation);
+        self.queue.post_after(delay, move |()| {
+            if current.load(std::sync::atomic::Ordering::SeqCst) == generation {
+                callback();
+            }
         });
     }
-    run_loop.run();
-    timer.stop();
-    assert!(!timed_out.get(), "the run loop was not stopped within {seconds} s");
+
+    pub(crate) fn stop(&self) {
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for LoopTimer {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 // MARK: - MapTest (test/map/map.test.cpp)
@@ -512,14 +619,15 @@ pub(crate) fn run_with_timeout(run_loop: &RunLoop, seconds: u64) {
 /// [`map`](Self::map) hands out the map once it has handled what its style
 /// and renderer reported, and the observer gets the map's events when the
 /// call through it, or through [`render`](Self::render), returns, as C++
-/// observers get the calls at once. Otherwise they come from the run loop.
+/// observers get the calls at once. Otherwise they come in the loop's turns.
 pub(crate) struct MapTest<FS: FileSource + 'static = StubFileSource> {
     events: Observing,
     pub map: Rc<RefCell<Map>>,
     pub frontend: Rc<RefCell<HeadlessFrontend>>,
     pub observer: Rc<StubMapObserver>,
     pub file_source: Arc<FS>,
-    pub run_loop: RunLoop,
+    pub run_loop: TestLoop,
+    pub pool: Pool,
 }
 
 impl MapTest<StubFileSource> {
@@ -529,15 +637,15 @@ impl MapTest<StubFileSource> {
     }
 
     pub(crate) fn with_mode(pixel_ratio: f32, mode: MapMode) -> Self {
-        let run_loop = RunLoop::new();
-        let file_source = Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous));
+        let run_loop = TestLoop::new();
+        let file_source = StubFileSource::on_queue(run_loop.queue(), ResponseType::Asynchronous);
         Self::create(run_loop, file_source, pixel_ratio, mode)
     }
 }
 
 impl MapTest<FakeFileSource> {
     pub(crate) fn fake() -> Self {
-        let run_loop = RunLoop::new();
+        let run_loop = TestLoop::new();
         let file_source = Arc::new(FakeFileSource::new());
         Self::create(run_loop, file_source, 1.0, MapMode::Static)
     }
@@ -547,20 +655,22 @@ impl<FS: FileSource + 'static> MapTest<FS> {
     /// The shared constructor: `fileSource`, `frontend(pixelRatio)`,
     /// `map(frontend, observer, fileSource, MapOptions().withMapMode(mode)
     /// .withSize(frontend.getSize()).withPixelRatio(pixelRatio))`.
-    pub(crate) fn create(run_loop: RunLoop, file_source: Arc<FS>, pixel_ratio: f32, mode: MapMode) -> Self {
+    pub(crate) fn create(run_loop: TestLoop, file_source: Arc<FS>, pixel_ratio: f32, mode: MapMode) -> Self {
         let observer = Rc::new(StubMapObserver::default());
-        let mut frontend = HeadlessFrontend::with_pixel_ratio(pixel_ratio, &run_loop).expect("a headless frontend");
+        let pool = Pool::new(4);
+        let mut frontend =
+            HeadlessFrontend::with_pixel_ratio(pixel_ratio, run_loop.queue(), &pool).expect("a headless frontend");
         let options = MapOptions { map_mode: mode, size: frontend.size(), pixel_ratio, ..Default::default() };
-        let map = Map::with_file_source(Arc::<FS>::clone(&file_source), options, &run_loop).unwrap();
-        frontend.attach(&map);
+        let mut map = Map::with_file_source(Arc::<FS>::clone(&file_source), options, &pool).unwrap();
+        frontend.attach(&mut map);
         let map = Rc::new(RefCell::new(map));
         let frontend = Rc::new(RefCell::new(frontend));
-        let events = observer.observe(&map, Some(&frontend));
-        MapTest { events, map, frontend, observer, file_source, run_loop }
+        let events = observer.observe(&run_loop, &map, Some(&frontend));
+        MapTest { events, map, frontend, observer, file_source, run_loop, pool }
     }
 
-    /// `test.frontend`, which draws each update of the map from the run
-    /// loop while nobody holds it.
+    /// `test.frontend`, which draws each update of the map in the loop's
+    /// turns while nobody holds it.
     pub(crate) fn frontend(&self) -> RefMut<'_, HeadlessFrontend> {
         self.frontend.borrow_mut()
     }

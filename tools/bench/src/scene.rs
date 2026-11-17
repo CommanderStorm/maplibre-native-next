@@ -3,16 +3,12 @@
 //! database, and maplibre-native-ffi's basemap, read from the files
 //! `fixtures.py` prepared. Nothing uses the network.
 
-use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use feature::{Value, ValueObject};
-use mln_actor::RunLoop;
-use mln_actor::timer::Timer;
 use mln_headless::HeadlessFrontend;
 use mln_map::{CameraOptions, Map, MapEvent, MapMode, MapOptions, RenderFrameStatus, RenderMode};
 use mln_renderer::query::SourceQueryOptions;
@@ -24,6 +20,8 @@ use mln_text::GlyphCache;
 use mln_util::feature::feature_id_to_string;
 use mln_util::geo::LatLng;
 use mln_util::image::PremultipliedImage;
+use mln_util::pool::Pool;
+use mln_util::queue::Queue;
 use mln_util::size::Size;
 use parking_lot::Mutex;
 
@@ -220,7 +218,7 @@ pub enum Mode {
     /// `Scene::render_frame`, as a host on a display clock does.
     OnDemand,
     /// A continuous map, drawn whenever the map updates while the scene
-    /// runs the run loop.
+    /// runs its queue.
     Driven,
 }
 
@@ -247,10 +245,24 @@ impl Observer {
     }
 }
 
+/// The pool of the scenes, which the scenes alive at once share as a
+/// host's maps share their runtime's. It ends with the last of them, as a
+/// runtime's ends with the runtime, so that a case doesn't start with what
+/// an earlier case left on its workers.
+fn shared_pool() -> Arc<Pool> {
+    static SHARED: Mutex<Weak<Pool>> = Mutex::new(Weak::new());
+    let mut shared = SHARED.lock();
+    shared.upgrade().unwrap_or_else(|| {
+        let pool = Arc::new(Pool::new(4));
+        *shared = Arc::downgrade(&pool);
+        pool
+    })
+}
+
 /// The file source of the scenes over `resource_options`' cache database:
 /// the render suite's proxy, with the tile latency of [`crate::latency`].
 /// The scenes alive at once share it, as a host's maps share their runtime's.
-fn shared_file_source(resource_options: &ResourceOptions) -> Arc<dyn FileSource> {
+fn shared_file_source(resource_options: &ResourceOptions, pool: &Pool) -> Arc<dyn FileSource> {
     static SHARED: Mutex<Vec<(ResourceOptions, Weak<dyn FileSource>)>> = Mutex::new(Vec::new());
     let mut shared = SHARED.lock();
     shared.retain(|(_, file_source)| file_source.strong_count() > 0);
@@ -259,7 +271,7 @@ fn shared_file_source(resource_options: &ResourceOptions) -> Arc<dyn FileSource>
         .find(|(options, _)| options == resource_options)
         .and_then(|(_, file_source)| file_source.upgrade());
     live.unwrap_or_else(|| {
-        let file_source = crate::latency::delayed(render_test::file_source::proxy_loader(resource_options));
+        let file_source = crate::latency::delayed(render_test::file_source::proxy_loader(resource_options, pool));
         shared.push((resource_options.clone(), Arc::downgrade(&file_source)));
         file_source
     })
@@ -267,13 +279,16 @@ fn shared_file_source(resource_options: &ResourceOptions) -> Arc<dyn FileSource>
 
 pub struct Scene {
     frontend: HeadlessFrontend,
-    /// Whether the scene draws each update of the map as it waits for the
-    /// run loop, or only when the case asks.
+    /// Whether the scene draws each update of the map as it waits, or only
+    /// when the case asks.
     draws_updates: bool,
     map: Map,
     observer: Observer,
-    /// The loop of the scene's thread, which its map and frontend run on.
-    run_loop: RunLoop,
+    /// The queue of the scene's thread, which the scene and its frontend
+    /// run while they wait.
+    queue: Queue<()>,
+    /// Keeps the scenes' pool while the scene lives.
+    _pool: Arc<Pool>,
 }
 
 impl Scene {
@@ -294,15 +309,23 @@ impl Scene {
         );
         let resource_options =
             ResourceOptions { cache_path: cache.display().to_string(), ..ResourceOptions::default() };
-        let run_loop = RunLoop::new();
+        let queue = Queue::new();
+        let pool = shared_pool();
         let mut frontend =
-            HeadlessFrontend::with_glyph_cache(size, 1.0, glyph_cache, &run_loop).expect("a headless frontend");
-        let file_source = shared_file_source(&resource_options);
+            HeadlessFrontend::with_glyph_cache(size, 1.0, glyph_cache, &queue, &pool).expect("a headless frontend");
+        let file_source = shared_file_source(&resource_options, &pool);
         let map_mode = if mode == Mode::Still { MapMode::Static } else { MapMode::Continuous };
         let options = MapOptions { map_mode, size, pixel_ratio: 1.0, ..Default::default() };
-        let map = Map::with_file_source(file_source, options, &run_loop).expect("the map");
-        frontend.attach(&map);
-        Scene { frontend, draws_updates: mode != Mode::OnDemand, map, observer: Observer::default(), run_loop }
+        let mut map = Map::with_file_source(file_source, options, &pool).expect("the map");
+        frontend.attach(&mut map);
+        Scene {
+            frontend,
+            draws_updates: mode != Mode::OnDemand,
+            map,
+            observer: Observer::default(),
+            queue,
+            _pool: pool,
+        }
     }
 
     /// Starts loading a style; it loads while the scene renders.
@@ -367,9 +390,9 @@ impl Scene {
         });
     }
 
-    /// A complete still frame, read back. Waits on the run loop, which
-    /// sleeps until there is work, rather than polling it, so the wait
-    /// costs no CPU time.
+    /// A complete still frame, read back. Waits on the scene's queue, which
+    /// parks until there is work, rather than polling it, so the wait costs
+    /// no CPU time.
     pub(crate) fn render_still(&mut self) -> PremultipliedImage {
         self.map.process_events();
         self.map.render_still().unwrap_or_else(|error| panic!("still: {error}"));
@@ -397,26 +420,26 @@ impl Scene {
 
     /// Delivers what the map's workers have finished, without waiting.
     pub(crate) fn pump(&mut self) {
-        self.run_loop.run_once();
+        self.queue.run_once(&mut ());
         self.observe();
     }
 
-    /// Runs the run loop, and the map's events, until `done`, drawing each
-    /// update of the map unless the case draws (`Mode::OnDemand`). The
-    /// loop sleeps until there is work, rather than polling it, so the
-    /// wait costs no CPU time.
+    /// Runs the queue, and the map's events, until `done`, drawing each
+    /// update of the map unless the case draws (`Mode::OnDemand`). It parks
+    /// until there is work, rather than polling it, so the wait costs no
+    /// CPU time.
     fn run_until(&mut self, mut done: impl FnMut(&mut Map) -> bool) {
-        let run_loop = self.run_loop.clone();
+        let queue = self.queue.clone();
         loop {
             self.observe();
             if done(&mut self.map) {
                 return;
             }
-            // A frame reports to the map, which handles that before the loop
-            // waits.
+            // A frame reports to the map, which handles that before the
+            // scene parks.
             let drew = self.draws_updates && self.frontend.render_update();
-            if !run_loop.run_once() && !drew {
-                run_loop.wait_for_work();
+            if !queue.run_once(&mut ()) && !drew {
+                queue.park();
             }
         }
     }
@@ -501,14 +524,13 @@ impl Scene {
         assert!(start.elapsed() < WAIT_LIMIT, "the view isn't complete after {WAIT_LIMIT:?}");
     }
 
-    /// Lets the run loop work for `duration`, drawing as the map asks
+    /// Lets the map work for `duration`, drawing as it asks
     /// (`Mode::Driven`).
     pub(crate) fn run_for(&mut self, duration: Duration) {
-        let timer = Timer::new(&self.run_loop);
-        let elapsed = Rc::new(Cell::new(false));
-        let done = Rc::clone(&elapsed);
-        timer.start(duration, Duration::ZERO, move || done.set(true));
-        self.run_until(|_| elapsed.get());
+        let deadline = Instant::now() + duration;
+        // Wakes the scene's park at the deadline.
+        self.queue.post_at(deadline, |()| {});
+        self.run_until(|_| Instant::now() >= deadline);
     }
 
     /// The frames the renderer has drawn.

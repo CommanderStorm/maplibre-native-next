@@ -222,7 +222,13 @@ impl<'a> TileMut<'a> {
             *current = Some(load);
         }
         let key = self.source.tile_key(self.tile);
-        if let Some(data) = loading::get_geojson_tile(data, key, load, &self.store.inbox, self.source.synchronous) {
+        if let Some(data) = loading::get_geojson_tile(
+            data,
+            key,
+            load,
+            &self.store.inbox,
+            (!self.source.synchronous).then(|| self.store.pool.pool()),
+        ) {
             self.take_input(TileInput::Geometry { data: Some(data), missing: false });
         }
     }
@@ -632,7 +638,7 @@ impl<'a> TileMut<'a> {
         let inbox = self.store.inbox.clone();
         // One response per request: a reload is a new request.
         let (request, responder) =
-            Request::direct_once(move |response| inbox.send(TileEvent::Response { tile: key, load, response }));
+            Request::once(move |response| inbox.send(TileEvent::Response { tile: key, load, response }));
         file_source.load(tileset.resource_for(method), responder);
         debug_assert!(tileset.is_idle(), "one request at a time");
         tileset.fetch = match method {

@@ -1,18 +1,20 @@
 // The database runs on a worker thread of its own ("DatabaseFileSource"),
-// which owns it; requests and operations reach the worker as actor messages
-// and the responses go to the requests' responders.
+// which owns it and runs the tasks of its queue: requests and operations
+// reach the worker as tasks, and the responses go to the requests'
+// responders.
 //
 // The offline region downloads need the style parser, which sits above this
 // crate: mln_storage_offline keeps them in the worker's extension, which the
-// worker owns beside the database.
+// worker owns beside the database, and which posts its own work to the
+// worker's queue.
 
-use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use mln_actor::{ActorRef, RunLoop, Thread, Timer};
 use mln_util::constants::{ASSET_PROTOCOL, FILE_PROTOCOL};
+use mln_util::logging::{Event, Log};
+use mln_util::queue::Queue;
 
 use crate::file_source::FileSource;
 use crate::offline_database::{DatabaseError, OfflineDatabase};
@@ -24,33 +26,27 @@ use crate::response::{Reason, ResourceError, Response};
 /// map load share one write.
 const ACCESSED_FLUSH_DELAY: Duration = Duration::from_millis(250);
 
-/// What a database worker owns: the database, and what an extension keeps
-/// beside it, such as the offline regions' downloads.
-pub struct DatabaseState<E> {
+/// The queue of a database's worker, whose tasks run on the database's
+/// thread in the order they were posted. Once the database has dropped, the
+/// worker has ended and the queue drops what is posted to it.
+pub type DatabaseQueue<E> = Queue<DatabaseWorker<E>>;
+
+/// What a database's worker owns, on the database's thread: the database,
+/// and what an extension keeps beside it, such as the offline regions'
+/// downloads.
+pub struct DatabaseWorker<E: 'static> {
     pub db: OfflineDatabase,
     pub extension: E,
-}
-
-/// The worker that owns a database, on the database's thread.
-pub struct DatabaseWorker<E: 'static> {
-    state: RefCell<DatabaseState<E>>,
     network: Option<Arc<dyn FileSource>>,
-    self_ref: ActorRef<DatabaseWorker<E>>,
-    accessed_flush_timer: Timer,
-    /// A flush of the `accessed` timestamps is scheduled. A failed flush
-    /// isn't rescheduled until the next cache hit, so an idle map stays
-    /// idle.
-    accessed_flush_scheduled: Arc<AtomicBool>,
 }
 
-/// Makes the extension of a database worker, on the worker's thread, from the
-/// worker's own reference and its network.
-type MakeExtension<E> = Box<dyn FnOnce(ActorRef<DatabaseWorker<E>>, Option<Arc<dyn FileSource>>) -> E + Send>;
+/// Makes the extension of a database worker, on the worker's thread, from
+/// the worker's queue and its network.
+type MakeExtension<E> = Box<dyn FnOnce(DatabaseQueue<E>, Option<Arc<dyn FileSource>>) -> E + Send>;
 
 impl<E: 'static> DatabaseWorker<E> {
     fn new(
-        self_ref: ActorRef<DatabaseWorker<E>>,
-        run_loop: &RunLoop,
+        queue: &DatabaseQueue<E>,
         network: Option<Arc<dyn FileSource>>,
         cache_path: &str,
         read_only: bool,
@@ -60,37 +56,22 @@ impl<E: 'static> DatabaseWorker<E> {
         if read_only {
             db.reopen_database_read_only(true);
         }
-        let accessed_flush_scheduled = Arc::new(AtomicBool::new(false));
-        let (scheduled, actor) = (Arc::clone(&accessed_flush_scheduled), self_ref.clone());
+        // A cache hit that leaves `accessed` timestamps to write, while no
+        // write is due, makes one due. A failed write isn't retried until
+        // the next cache hit, so an idle map stays idle.
+        let due = Arc::new(AtomicBool::new(false));
+        let flush = queue.clone();
         db.set_accessed_callback(Box::new(move || {
-            if !scheduled.swap(true, Ordering::Relaxed) {
-                actor.invoke(|t: &DatabaseWorker<E>| t.start_accessed_flush_timer());
+            if !due.swap(true, Ordering::Relaxed) {
+                let due = Arc::clone(&due);
+                flush.post_after(ACCESSED_FLUSH_DELAY, move |worker| {
+                    due.store(false, Ordering::Relaxed);
+                    worker.db.flush_accessed();
+                });
             }
         }));
-        let extension = make(self_ref.clone(), network.clone());
-        DatabaseWorker {
-            state: RefCell::new(DatabaseState { db, extension }),
-            network,
-            self_ref,
-            accessed_flush_timer: Timer::new(run_loop),
-            accessed_flush_scheduled,
-        }
-    }
-
-    fn start_accessed_flush_timer(&self) {
-        let actor = self.self_ref.clone();
-        self.accessed_flush_timer.start(ACCESSED_FLUSH_DELAY, Duration::ZERO, move || {
-            actor.invoke(|t: &DatabaseWorker<E>| {
-                t.accessed_flush_scheduled.store(false, Ordering::Relaxed);
-                t.with(|state| state.db.flush_accessed());
-            });
-        });
-    }
-
-    /// Runs `f` with what the worker owns. What `f` sets off comes back
-    /// later, as a message to the worker, not inside `f`.
-    pub fn with<R>(&self, f: impl FnOnce(&mut DatabaseState<E>) -> R) -> R {
-        f(&mut self.state.borrow_mut())
+        let extension = make(queue.clone(), network.clone());
+        DatabaseWorker { db, extension, network }
     }
 
     /// The network that offline regions download through, if there is one.
@@ -98,12 +79,9 @@ impl<E: 'static> DatabaseWorker<E> {
         self.network.as_ref()
     }
 
-    pub(crate) fn request(&self, resource: &Resource, responder: &Responder) {
-        let offline_response = if resource.storage_policy == StoragePolicy::Volatile {
-            None
-        } else {
-            self.with(|state| state.db.get(resource))
-        };
+    fn request(&mut self, resource: &Resource, responder: &Responder) {
+        let offline_response =
+            if resource.storage_policy == StoragePolicy::Volatile { None } else { self.db.get(resource) };
         let response = match offline_response {
             None => {
                 let mut response = Response::new();
@@ -123,11 +101,11 @@ impl<E: 'static> DatabaseWorker<E> {
     }
 
     fn maintain(
-        &self,
+        &mut self,
         operation: impl FnOnce(&mut OfflineDatabase) -> Option<DatabaseError>,
         callback: impl FnOnce(Result<(), DatabaseError>),
     ) {
-        let error = self.with(|state| operation(&mut state.db));
+        let error = operation(&mut self.db);
         callback(error.map_or(Ok(()), Err));
     }
 }
@@ -141,9 +119,12 @@ pub trait Cache: FileSource {
 
 /// The `Database` file source: the ambient cache and the offline regions,
 /// in an SQLite database that a worker thread owns, with the worker's
-/// extension `E` beside it.
+/// extension `E` beside it. Its drop waits for the worker to end, unless it
+/// drops on the worker's thread. When the worker's thread can't start, the
+/// source logs why, fails each request, and drops the work sent to it.
 pub struct DatabaseFileSource<E: 'static = ()> {
-    thread: Thread<DatabaseWorker<E>>,
+    queue: DatabaseQueue<E>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl DatabaseFileSource {
@@ -165,26 +146,40 @@ impl DatabaseFileSource {
 
 impl<E: 'static> DatabaseFileSource<E> {
     /// A database at `cache_path`, read-only or not, whose worker keeps the
-    /// extension that `make` makes on the worker's thread.
+    /// extension that `make` makes on the worker's thread, from the
+    /// worker's queue and the database's network.
     #[must_use]
     pub fn with_extension(
         cache_path: &str,
         network: Option<Arc<dyn FileSource>>,
         read_only: bool,
-        make: impl FnOnce(ActorRef<DatabaseWorker<E>>, Option<Arc<dyn FileSource>>) -> E + Send + 'static,
+        make: impl FnOnce(DatabaseQueue<E>, Option<Arc<dyn FileSource>>) -> E + Send + 'static,
     ) -> Self {
         let cache_path = cache_path.to_owned();
         let make: MakeExtension<E> = Box::new(make);
-        let thread = Thread::new("DatabaseFileSource", move |self_ref, run_loop| {
-            DatabaseWorker::new(self_ref, run_loop, network, &cache_path, read_only, make)
-        });
-        DatabaseFileSource { thread }
+        let queue = DatabaseQueue::new();
+        let own = queue.clone();
+        let thread = mln_util::thread::spawn("DatabaseFileSource", move || {
+            let mut worker = DatabaseWorker::new(&own, network, &cache_path, read_only, make);
+            own.run(&mut worker);
+            // What comes once the database has dropped drops at once, so the
+            // handles that the worker's extension holds can't keep the queue
+            // alive.
+            own.close();
+            drop(worker);
+        })
+        .inspect_err(|error| Log::error(Event::Database, format!("The database's thread didn't start: {error}")))
+        .ok();
+        if thread.is_none() {
+            queue.close();
+        }
+        DatabaseFileSource { queue, thread }
     }
 
     /// Holds the database thread until the guard drops (`crate::tests::pause`).
     #[cfg(test)]
     pub(crate) fn pause(&self) -> crate::tests::Paused {
-        crate::tests::pause(&self.thread.actor())
+        crate::tests::pause(|hold| self.invoke(move |_| hold()))
     }
 
     /// Switches to the database at `path`, creating it if needed. The
@@ -193,27 +188,21 @@ impl<E: 'static> DatabaseFileSource<E> {
     pub(crate) fn set_database_path(&self, path: &str, callback: Option<Box<dyn FnOnce() + Send>>) {
         let path = path.to_owned();
         self.invoke(move |t| {
-            t.with(|state| state.db.change_path(&path));
+            t.db.change_path(&path);
             if let Some(callback) = callback {
                 callback();
             }
         });
     }
 
-    /// Stores a response to `resource`, then runs `then` on `queue`.
+    /// Stores a response to `resource`, then runs `then` on the database
+    /// thread.
     #[cfg(test)]
-    pub(crate) fn put_then(
-        &self,
-        resource: &Resource,
-        response: &Response,
-        queue: &mln_actor::SchedulerPtr,
-        then: Box<dyn FnOnce() + Send>,
-    ) {
-        let mut then = mln_actor::scheduler::bind_once(queue, then);
+    pub(crate) fn put_then(&self, resource: &Resource, response: &Response, then: Box<dyn FnOnce() + Send>) {
         let resource = resource.clone();
         let response = response.clone();
         self.invoke(move |t| {
-            t.with(|state| state.db.put(&resource, &response));
+            t.db.put(&resource, &response);
             then();
         });
     }
@@ -256,8 +245,19 @@ impl<E: 'static> DatabaseFileSource<E> {
 
     /// Runs `f` on the database thread, after the requests and operations
     /// sent before it.
-    pub fn invoke(&self, f: impl FnOnce(&DatabaseWorker<E>) + Send + 'static) {
-        self.thread.actor().invoke(f);
+    pub fn invoke(&self, f: impl FnOnce(&mut DatabaseWorker<E>) + Send + 'static) {
+        self.queue.post(f);
+    }
+}
+
+impl<E: 'static> Drop for DatabaseFileSource<E> {
+    fn drop(&mut self) {
+        self.queue.stop();
+        if let Some(thread) = self.thread.take()
+            && thread.thread().id() != std::thread::current().id()
+        {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -269,17 +269,23 @@ impl<E: 'static> Cache for DatabaseFileSource<E> {
         let resource = resource.clone();
         let response = response.clone();
         self.invoke(move |t| {
-            t.with(|state| state.db.put(&resource, &response));
+            t.db.put(&resource, &response);
         });
     }
 }
 
 impl<E: 'static> FileSource for DatabaseFileSource<E> {
     fn load(&self, resource: &Resource, responder: Responder) {
+        if self.thread.is_none() {
+            let mut response = Response::new();
+            response.error = Some(Box::new(ResourceError::new(Reason::Other, "The database's thread isn't running.")));
+            responder.send(response);
+            return;
+        }
         let resource = resource.clone();
-        self.invoke(move |t| {
+        self.invoke(move |worker| {
             if !responder.is_cancelled() {
-                t.request(&resource, &responder);
+                worker.request(&resource, &responder);
             }
         });
     }
@@ -288,5 +294,38 @@ impl<E: 'static> FileSource for DatabaseFileSource<E> {
         resource.has_loading_method(LoadingMethod::Cache)
             && !resource.url.starts_with(ASSET_PROTOCOL)
             && !resource.url.starts_with(FILE_PROTOCOL)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn a_drop_waits_for_the_work_sent_before() {
+        let database = DatabaseFileSource::new(":memory:", None);
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        database.invoke(move |_| {
+            std::thread::sleep(Duration::from_millis(50));
+            flag.store(true, Ordering::SeqCst);
+        });
+        drop(database);
+        assert!(ran.load(Ordering::SeqCst));
+    }
+
+    /// The last owner of a database may drop it on the database's thread.
+    #[test]
+    fn a_database_dropped_on_its_own_thread_ends() {
+        let database = DatabaseFileSource::new(":memory:", None);
+        let queue = database.queue.clone();
+        let (dropped, done) = mpsc::channel();
+        queue.post(move |_| {
+            drop(database);
+            dropped.send(()).unwrap();
+        });
+        done.recv_timeout(Duration::from_secs(10)).expect("the drop returns");
     }
 }

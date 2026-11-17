@@ -7,14 +7,13 @@ mod support;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use feature::Value;
 use geo_types::{LineString, Point};
 use geojson::{GeoJson, Geometry};
-use mln_actor::{RunLoop, Timer};
 use mln_gfx::shaders::shader_source::BuiltIn;
 use mln_headless::HeadlessFrontend;
 use mln_map::{
@@ -57,8 +56,10 @@ use mln_util::geo::{EdgeInsets, LatLng, LatLngBounds, ScreenCoordinate, WrapMode
 use mln_util::hash::HashSet;
 use mln_util::image::PremultipliedImage;
 use mln_util::logging::{Event, EventSeverity};
+use mln_util::pool::Pool;
 use mln_util::size::Size;
 use mln_util::tileset::{PartialTileset, Scheme};
+use parking_lot::Mutex;
 use serde_json::json;
 use support::*;
 
@@ -317,11 +318,6 @@ fn a_sourceless_style_loaded_after_the_camera_renders() {
     );
 
     let loaded = Rc::new(Cell::new(false));
-    let timeout = Timer::new(&test.run_loop);
-    {
-        let run_loop = test.run_loop.clone();
-        timeout.start(Duration::from_secs(5), Duration::ZERO, move || run_loop.stop());
-    }
     {
         let loaded = Rc::clone(&loaded);
         let run_loop = test.run_loop.clone();
@@ -330,7 +326,7 @@ fn a_sourceless_style_loaded_after_the_camera_renders() {
             run_loop.stop();
         });
     }
-    test.run_loop.run();
+    run_within(&test.run_loop, Duration::from_secs(5));
     test.observer.did_finish_loading_map_callback.clear();
     assert!(loaded.get(), "the map never finished loading");
 
@@ -346,11 +342,6 @@ fn fly_too_slow_to_time_jumps_and_the_map_goes_idle() {
     test.load_json(r#"{"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background"}]}"#);
     let run_until_idle = || {
         let idle = Rc::new(Cell::new(false));
-        let timeout = Timer::new(&test.run_loop);
-        {
-            let run_loop = test.run_loop.clone();
-            timeout.start(Duration::from_secs(5), Duration::ZERO, move || run_loop.stop());
-        }
         {
             let idle = Rc::clone(&idle);
             let run_loop = test.run_loop.clone();
@@ -359,7 +350,7 @@ fn fly_too_slow_to_time_jumps_and_the_map_goes_idle() {
                 run_loop.stop();
             });
         }
-        test.run_loop.run();
+        run_within(&test.run_loop, Duration::from_secs(5));
         test.observer.did_become_idle_callback.clear();
         idle.get()
     };
@@ -631,30 +622,39 @@ fn pixel_for_lat_lng_during_a_fling_across_the_antimeridian() {
 }
 
 /// A loader over an online file source and a cache database at
-/// `cache_path`, with assets at `asset_path`, and the database.
-fn loader_with_database(cache_path: &str, asset_path: &str) -> (Arc<Loader>, Arc<DatabaseFileSource>) {
-    let network: Arc<dyn FileSource> = Arc::new(OnlineFileSource::new());
+/// `cache_path`, with assets at `asset_path`, the database, and the network
+/// status the online file source follows.
+fn loader_with_database(
+    cache_path: &str,
+    asset_path: &str,
+) -> (Arc<Loader>, Arc<DatabaseFileSource>, Arc<NetworkStatus>) {
+    let pool = Pool::new(4);
+    let status = Arc::new(NetworkStatus::new());
+    let network: Arc<dyn FileSource> = Arc::new(OnlineFileSource::new(Arc::clone(&status)));
     let database = Arc::new(DatabaseFileSource::new(cache_path, Some(Arc::clone(&network))));
-    let loader = Loader::builder()
+    let loader = Loader::builder(&pool)
         .asset_path(asset_path)
         .network(network)
         .database(Arc::<DatabaseFileSource>::clone(&database))
         .build();
-    (Arc::new(loader), database)
+    (Arc::new(loader), database, status)
 }
 
 /// A map test that loads through a `Loader` with these cache and asset
-/// paths, and the loader's database.
-fn main_resource_loader_test(cache_path: &str, asset_path: &str) -> (MapTest<Loader>, Arc<DatabaseFileSource>) {
-    let run_loop = RunLoop::new();
-    let (file_source, database) = loader_with_database(cache_path, asset_path);
-    (MapTest::create(run_loop, file_source, 1.0, MapMode::Static), database)
+/// paths, the loader's database, and its network status.
+fn main_resource_loader_test(
+    cache_path: &str,
+    asset_path: &str,
+) -> (MapTest<Loader>, Arc<DatabaseFileSource>, Arc<NetworkStatus>) {
+    let run_loop = TestLoop::new();
+    let (file_source, database, status) = loader_with_database(cache_path, asset_path);
+    (MapTest::create(run_loop, file_source, 1.0, MapMode::Static), database, status)
 }
 
 // gtest: Map.Offline
 #[test]
 fn offline() {
-    let (test, dbfs) = main_resource_loader_test(":memory:", ".");
+    let (test, dbfs, network) = main_resource_loader_test(":memory:", ".");
 
     // C++ CI leaves this test out on the macOS runners
     // (.github/workflows/macos-ci.yml, --gtest_filter=-...:Map.Offline, for
@@ -679,7 +679,7 @@ fn offline() {
         response
     };
 
-    NetworkStatus::set(NetworkStatusType::Offline);
+    network.set(NetworkStatusType::Offline);
     let prefix = "http://127.0.0.1:3000/";
     dbfs.put(&Resource::style(&format!("{prefix}style.json")), &expired_item("style.json"));
     dbfs.put(&Resource::source(&format!("{prefix}streets.json")), &expired_item("streets.json"));
@@ -711,7 +711,7 @@ fn offline() {
     test.map().load_style_url(&format!("{prefix}style.json"));
 
     check_image("test/fixtures/map/offline", &test.render().image, 0.0015, 0.1);
-    NetworkStatus::set(NetworkStatusType::Online);
+    network.set(NetworkStatusType::Online);
 }
 
 // gtest: Map.SetStyleDefaultCamera
@@ -1071,8 +1071,8 @@ fn style_loaded_signal() {
 }
 
 fn online_file_source_test() -> MapTest<OnlineFileSource> {
-    let run_loop = RunLoop::new();
-    let file_source = Arc::new(OnlineFileSource::new());
+    let run_loop = TestLoop::new();
+    let file_source = Arc::new(OnlineFileSource::new(Arc::new(NetworkStatus::new())));
     MapTest::create(run_loop, file_source, 1.0, MapMode::Static)
 }
 
@@ -1099,16 +1099,16 @@ fn style_not_found() {
 
     test.map().load_style_url(&server.url("/style-fail-once-404"));
 
-    let timer = Rc::new(Timer::new(&test.run_loop));
+    let timer = Rc::new(LoopTimer::new(&test.run_loop));
 
     // Not found errors should not trigger a retry like other errors.
     test.observer.did_finish_loading_style_callback.set(|()| panic!("Should not retry on not found!"));
 
     {
-        let (timer, run_loop) = (Rc::clone(&timer), test.run_loop.clone());
+        let (timer, run_loop) = (Rc::clone(&timer), test.run_loop.handle());
         test.observer.did_fail_loading_map_callback.set(move |()| {
             let run_loop = run_loop.clone();
-            timer.start(Duration::from_millis(1100), Duration::ZERO, move || run_loop.stop());
+            timer.start(Duration::from_millis(1100), move || run_loop.stop());
         });
     }
 
@@ -1232,12 +1232,12 @@ fn dont_load_unneeded_tiles() {
 }"#,
     );
 
-    let tiles: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::default()));
+    let tiles: Arc<Mutex<HashSet<String>>> = Arc::default();
 
     {
-        let tiles = Rc::clone(&tiles);
+        let tiles = Arc::clone(&tiles);
         test.file_source.set_response(Kind::Tile, move |rsc: &Resource| {
-            tiles.borrow_mut().insert(rsc.url.clone());
+            tiles.lock().insert(rsc.url.clone());
             Some(no_content())
         });
     }
@@ -1263,10 +1263,10 @@ fn dont_load_unneeded_tiles() {
         // times 10
         // Note: using z += 0.1 in the loop doesn't produce accurate floating point numbers.
         let z = f64::from(zoom) / 10.0;
-        tiles.borrow_mut().clear();
+        tiles.lock().clear();
         test.map().jump_to(&CameraOptions { zoom: Some(z), ..Default::default() });
         test.render();
-        assert_eq!(reference_tiles(z), *tiles.borrow(), "zoom level {z}");
+        assert_eq!(reference_tiles(z), *tiles.lock(), "zoom level {z}");
     }
 }
 
@@ -1274,27 +1274,28 @@ fn dont_load_unneeded_tiles() {
 #[test]
 #[ignore = "TEST_DISABLED_ON_CI (timing-dependent); see map.test.cpp:994"]
 fn continuous_rendering() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
 
-    let did_not_stop = Rc::new(Cell::new(false));
-    let emergency_shutoff = Timer::new(&run_loop);
+    let did_not_stop = Arc::new(AtomicBool::new(false));
+    let emergency_shutoff = LoopTimer::new(&run_loop);
     {
-        let run_loop = run_loop.clone();
-        let did_not_stop = Rc::clone(&did_not_stop);
-        emergency_shutoff.start(Duration::from_secs(10), Duration::ZERO, move || {
+        let run_loop = run_loop.handle();
+        let did_not_stop = Arc::clone(&did_not_stop);
+        emergency_shutoff.start(Duration::from_secs(10), move || {
             run_loop.stop();
-            did_not_stop.set(true);
+            did_not_stop.store(true, Ordering::SeqCst);
         });
     }
 
-    let timer = Rc::new(Timer::new(&run_loop));
+    let timer = Rc::new(LoopTimer::new(&run_loop));
 
-    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
+    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, run_loop.queue(), &pool).expect("a headless frontend");
 
     let observer = Rc::new(StubMapObserver::default());
     {
         let timer = Rc::downgrade(&timer);
-        let run_loop = run_loop.clone();
+        let run_loop = run_loop.handle();
         observer.did_finish_rendering_frame_callback.set(move |_| {
             // Start a timer that ends the test one second from now. If we are
             // continuing to render indefinitely, the timer will be constantly
@@ -1302,34 +1303,34 @@ fn continuous_rendering() {
             // will trigger, failing the test.
             if let Some(timer) = timer.upgrade() {
                 let run_loop = run_loop.clone();
-                timer.start(Duration::from_secs(1), Duration::ZERO, move || run_loop.stop());
+                timer.start(Duration::from_secs(1), move || run_loop.stop());
             }
         });
     }
 
-    let map = Map::with_resource_options(
+    let mut map = Map::with_resource_options(
         MapOptions { map_mode: MapMode::Continuous, size: frontend.size(), ..Default::default() },
         &ResourceOptions {
             asset_path: cpp_root().join("test/fixtures/api/assets").to_str().unwrap().to_owned(),
             ..ResourceOptions::default()
         },
-        &run_loop,
+        &pool,
     )
     .unwrap();
-    frontend.attach(&map);
+    frontend.attach(&mut map);
     let map = Rc::new(RefCell::new(map));
     let frontend = Rc::new(RefCell::new(frontend));
-    let _events = observer.observe(&map, Some(&frontend));
+    let _events = observer.observe(&run_loop, &map, Some(&frontend));
     map.borrow_mut().load_style_json(&read_file("test/fixtures/api/water.json"));
 
     run_loop.run();
-    assert!(!did_not_stop.get(), "Did not stop rendering");
+    assert!(!did_not_stop.load(Ordering::SeqCst), "Did not stop rendering");
 }
 
 // gtest: Map.NoContentTiles
 #[test]
 fn no_content_tiles() {
-    let (test, dbfs) = main_resource_loader_test(":memory:", ".");
+    let (test, dbfs, _) = main_resource_loader_test(":memory:", ".");
 
     // Insert a 204 No Content response for the 0/0/0 tile
     let mut response = Response::new();
@@ -2027,11 +2028,11 @@ fn rendering_trims_unused_requested_images_past_the_cache_limit() {
 #[test]
 fn style_switch_evicts_the_glyphs_of_unused_font_stacks() {
     let test = MapTest::new();
-    let requested = Rc::new(RefCell::new(Vec::<String>::new()));
+    let requested = Arc::new(Mutex::new(Vec::<String>::new()));
     {
-        let requested = Rc::clone(&requested);
+        let requested = Arc::clone(&requested);
         test.file_source.set_response(Kind::Glyphs, move |resource| {
-            requested.borrow_mut().push(resource.url.clone());
+            requested.lock().push(resource.url.clone());
             Some(file_response("test/fixtures/resources/glyphs.pbf"))
         });
     }
@@ -2060,15 +2061,15 @@ fn style_switch_evicts_the_glyphs_of_unused_font_stacks() {
 
     test.load_json(&style(&["Kept", "Dropped"]));
     test.render();
-    assert_eq!(requested.borrow().len(), 2, "{:?}", requested.borrow());
+    assert_eq!(requested.lock().len(), 2, "{:?}", requested.lock());
     test.load_json(&style(&["Kept"]));
     test.render();
-    requested.borrow_mut().clear();
+    requested.lock().clear();
 
     test.load_json(&style(&["Kept", "Dropped"]));
     test.render();
 
-    assert_eq!(*requested.borrow(), ["test://glyphs/Dropped/0-255.pbf"]);
+    assert_eq!(*requested.lock(), ["test://glyphs/Dropped/0-255.pbf"]);
 }
 
 // gtest: Map.EmptyImageNameIsNoImage
@@ -2153,7 +2154,7 @@ fn prefetch_delta_override() {
     }
 
     // Custom source
-    test.map().add_source(counted_custom_source(&requested_tiles, Some(0), &test.run_loop)).unwrap();
+    test.map().add_source(counted_custom_source(&requested_tiles, Some(0), &test.pool)).unwrap();
 
     test.map().jump_to(&CameraOptions { zoom: Some(16.0), ..Default::default() });
     {
@@ -2182,12 +2183,8 @@ fn prefetch_delta_override() {
 }
 
 /// A custom geometry source "custom" that counts its fetches in
-/// `requested_tiles` and answers each with empty data, on `run_loop`'s pool.
-fn counted_custom_source(
-    requested_tiles: &Arc<AtomicI32>,
-    prefetch_zoom_delta: Option<u8>,
-    run_loop: &RunLoop,
-) -> Source {
+/// `requested_tiles` and answers each with empty data, on `pool`.
+fn counted_custom_source(requested_tiles: &Arc<AtomicI32>, prefetch_zoom_delta: Option<u8>, pool: &Pool) -> Source {
     let handle = Arc::new(OnceLock::<CustomGeometrySourceHandle>::new());
     let fetch: TileFunction = {
         let handle = Arc::clone(&handle);
@@ -2204,7 +2201,7 @@ fn counted_custom_source(
         cancel_tile_function: Some(Arc::new(|_: &CanonicalTileID| {})),
         ..Default::default()
     };
-    let custom = custom_geometry_source::create("custom", options, run_loop.pool()).unwrap();
+    let custom = custom_geometry_source::create("custom", options, pool).unwrap();
     handle.set(CustomGeometrySourceHandle::of(&custom).unwrap()).unwrap();
     if prefetch_zoom_delta.is_some() {
         return with_common(&custom, |common| common.prefetch_zoom_delta = prefetch_zoom_delta);
@@ -2232,13 +2229,12 @@ fn globe_prefetch_requests_coarser_tiles() {
     );
     test.map().add_source(vector_source("vector", "a/{z}/{x}/{y}")).unwrap();
 
-    // C++ guards `zooms` with a mutex; the stub file source answers on this thread.
-    let zooms: Rc<RefCell<BTreeSet<i32>>> = Rc::new(RefCell::new(BTreeSet::new()));
+    let zooms: Arc<Mutex<BTreeSet<i32>>> = Arc::default();
     {
-        let zooms = Rc::clone(&zooms);
+        let zooms = Arc::clone(&zooms);
         test.file_source.set_response(Kind::Tile, move |resource: &Resource| {
             if let Some(tile_data) = &resource.tile_data {
-                zooms.borrow_mut().insert(i32::from(tile_data.z));
+                zooms.lock().insert(i32::from(tile_data.z));
             }
             Some(no_content())
         });
@@ -2248,8 +2244,8 @@ fn globe_prefetch_requests_coarser_tiles() {
     test.observer.did_finish_loading_map_callback.set(move |()| run_loop.stop());
     run_with_timeout(&test.run_loop, 60);
 
-    assert!(zooms.borrow().contains(&4));
-    assert!(zooms.borrow().contains(&8));
+    assert!(zooms.lock().contains(&4));
+    assert!(zooms.lock().contains(&8));
 }
 
 // gtest: Map.GlobeTileDrawnForItsChildrenMeetsFinerTilesWithoutAGap
@@ -2267,18 +2263,17 @@ fn globe_tile_drawn_for_its_children_meets_finer_tiles_without_a_gap() {
     );
 
     let ocean = Arc::new(read_bytes("test/fixtures/map/globe_tile_masks/ocean.mvt"));
-    // C++ guards `holdChildren` and `served` with a mutex; the stub file source answers on this thread.
-    let hold_children = Rc::new(Cell::new(false));
-    let served: Rc<RefCell<BTreeSet<CanonicalTileID>>> = Rc::new(RefCell::new(BTreeSet::new()));
+    let hold_children = Arc::new(AtomicBool::new(false));
+    let served: Arc<Mutex<BTreeSet<CanonicalTileID>>> = Arc::default();
     {
-        let hold_children = Rc::clone(&hold_children);
-        let served = Rc::clone(&served);
+        let hold_children = Arc::clone(&hold_children);
+        let served = Arc::clone(&served);
         test.file_source.set_response(Kind::Tile, move |resource: &Resource| {
             let tile = resource.tile_data.as_ref().expect("tile data");
-            if hold_children.get() && tile.z == 8 && tile.x / 2 == 20 && tile.y / 2 == 49 {
+            if hold_children.load(Ordering::SeqCst) && tile.z == 8 && tile.x / 2 == 20 && tile.y / 2 == 49 {
                 return None;
             }
-            served.borrow_mut().insert(CanonicalTileID::new(tile.z as u8, tile.x as u32, tile.y as u32));
+            served.lock().insert(CanonicalTileID::new(tile.z as u8, tile.x as u32, tile.y as u32));
             let mut response = Response::new();
             response.data = Some(Arc::clone(&ocean));
             Some(response)
@@ -2295,8 +2290,8 @@ fn globe_tile_drawn_for_its_children_meets_finer_tiles_without_a_gap() {
     run_with_timeout(&test.run_loop, 60);
     test.observer.did_finish_loading_map_callback.clear();
 
-    hold_children.set(true);
-    served.borrow_mut().clear();
+    hold_children.store(true, Ordering::SeqCst);
+    served.lock().clear();
     let parsed: Rc<RefCell<BTreeSet<CanonicalTileID>>> = Rc::new(RefCell::new(BTreeSet::new()));
     {
         let parsed = Rc::clone(&parsed);
@@ -2309,7 +2304,7 @@ fn globe_tile_drawn_for_its_children_meets_finer_tiles_without_a_gap() {
     let all_parsed = Rc::new(Cell::new(false));
     {
         let all_parsed = Rc::clone(&all_parsed);
-        let served = Rc::clone(&served);
+        let served = Arc::clone(&served);
         let parsed = Rc::clone(&parsed);
         let run_loop = test.run_loop.clone();
         test.observer.did_finish_rendering_frame_callback.set(move |_| {
@@ -2317,7 +2312,7 @@ fn globe_tile_drawn_for_its_children_meets_finer_tiles_without_a_gap() {
                 run_loop.stop();
                 return;
             }
-            let served = served.borrow();
+            let served = served.lock();
             all_parsed.set(!served.is_empty() && served.is_subset(&parsed.borrow()));
         });
     }
@@ -2351,7 +2346,7 @@ fn prefetch_delta_override_custom_source() {
 
     let requested_tiles = Arc::new(AtomicI32::new(0));
 
-    test.map().add_source(counted_custom_source(&requested_tiles, Some(0), &test.run_loop)).unwrap();
+    test.map().add_source(counted_custom_source(&requested_tiles, Some(0), &test.pool)).unwrap();
 
     test.map().jump_to(&CameraOptions { zoom: Some(16.0), ..Default::default() });
     {
@@ -2370,7 +2365,7 @@ fn prefetch_delta_override_custom_source() {
         map.edit_style(|style| style.apply(Edit::RemoveLayer("custom".to_owned()))).unwrap();
         map.remove_source("custom");
         map.edit_style(|style| style.apply(Edit::AddLayer { layer, before: None })).unwrap();
-        map.add_source(counted_custom_source(&requested_tiles, None, &test.run_loop)).unwrap();
+        map.add_source(counted_custom_source(&requested_tiles, None, &test.pool)).unwrap();
     }
     test.run_loop.run();
 
@@ -2390,18 +2385,19 @@ fn expired_sprite_sheet() {
     // `MapTest<MainResourceLoader, ForwardingHeadlessFrontend>
     // test{":memory:", ".", 1, MapMode::Continuous}`: the frontend's
     // check runs on the update each frame draws.
-    let run_loop = RunLoop::new();
-    let (file_source, dbfs) = loader_with_database(":memory:", ".");
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
+    let (file_source, dbfs, network) = loader_with_database(":memory:", ".");
     let observer = Rc::new(StubMapObserver::default());
-    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
+    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, run_loop.queue(), &pool).expect("a headless frontend");
     let options =
         MapOptions { map_mode: MapMode::Continuous, size: frontend.size(), pixel_ratio: 1.0, ..Default::default() };
-    let map = Map::with_file_source(file_source, options, &run_loop).unwrap();
-    frontend.attach(&map);
+    let mut map = Map::with_file_source(file_source, options, &pool).unwrap();
+    frontend.attach(&mut map);
     let updates = map.update_reader();
     let map = Rc::new(RefCell::new(map));
     let frontend = Rc::new(RefCell::new(frontend));
-    let _events = observer.observe(&map, Some(&frontend));
+    let _events = observer.observe(&run_loop, &map, Some(&frontend));
 
     // The server's own address replaces 127.0.0.1:3000 in the fixtures, as in
     // what it serves.
@@ -2415,8 +2411,9 @@ fn expired_sprite_sheet() {
     {
         let weak_observer = Rc::downgrade(&observer);
         let run_loop = run_loop.clone();
+        let network = Arc::clone(&network);
         observer.did_finish_loading_map_callback.set(move |()| {
-            NetworkStatus::set(NetworkStatusType::Online);
+            network.set(NetworkStatusType::Online);
 
             if let Some(observer) = weak_observer.upgrade() {
                 let updates = updates.clone();
@@ -2431,7 +2428,7 @@ fn expired_sprite_sheet() {
         });
     }
 
-    NetworkStatus::set(NetworkStatusType::Offline);
+    network.set(NetworkStatusType::Offline);
     let prefix = server.url("/online/");
     dbfs.put(&Resource::style(&format!("{prefix}style.json")), &make_response("style.json", false));
     dbfs.put(&Resource::source(&format!("{prefix}streets.json")), &make_response("streets.json", false));
@@ -2492,19 +2489,19 @@ fn source_minimum_update_interval_override() {
     let vector_source_b = vector_source("source-b", "b/{z}/{x}/{y}");
     test.map().add_source(vector_source_b).unwrap();
 
-    let requested_tiles_a = Rc::new(Cell::new(0));
-    let requested_tiles_b = Rc::new(Cell::new(0));
+    let requested_tiles_a = Arc::new(AtomicI32::new(0));
+    let requested_tiles_b = Arc::new(AtomicI32::new(0));
     {
-        let (a, b) = (Rc::clone(&requested_tiles_a), Rc::clone(&requested_tiles_b));
+        let (a, b) = (Arc::clone(&requested_tiles_a), Arc::clone(&requested_tiles_b));
         test.file_source.set_response(Kind::Tile, move |resource: &Resource| {
             assert_ne!(resource.url, "");
             let first_symbol = resource.url.as_bytes()[0];
             if first_symbol == b'a' {
                 assert_eq!(Duration::from_secs(1), resource.minimum_update_interval);
-                a.set(a.get() + 1);
+                a.fetch_add(1, Ordering::SeqCst);
             } else if first_symbol == b'b' {
                 assert_eq!(Duration::ZERO, resource.minimum_update_interval);
-                b.set(b.get() + 1);
+                b.fetch_add(1, Ordering::SeqCst);
             } else {
                 panic!("Never reached");
             }
@@ -2518,15 +2515,18 @@ fn source_minimum_update_interval_override() {
     test.observer.did_finish_loading_map_callback.set(move |()| run_loop.stop());
     run_with_timeout(&test.run_loop, 60);
 
-    assert_eq!(8, requested_tiles_a.get());
-    assert_eq!(8, requested_tiles_b.get());
+    assert_eq!(8, requested_tiles_a.load(Ordering::SeqCst));
+    assert_eq!(8, requested_tiles_b.load(Ordering::SeqCst));
 }
 
 /// The `makeResponse(file, incrementCounter)` of map.test.cpp.
-fn make_response(file: &'static str, counter: Option<Rc<Cell<i32>>>) -> impl Fn(&Resource) -> Option<Response> {
+fn make_response(
+    file: &'static str,
+    counter: Option<Arc<AtomicI32>>,
+) -> impl Fn(&Resource) -> Option<Response> + Send + Sync {
     move |_| {
         if let Some(counter) = &counter {
-            counter.set(counter.get() + 1);
+            counter.fetch_add(1, Ordering::SeqCst);
         }
         Some(file_response(&format!("test/fixtures/resources/{file}")))
     }
@@ -2536,10 +2536,10 @@ fn make_response(file: &'static str, counter: Option<Rc<Cell<i32>>>) -> impl Fn(
 #[test]
 fn keep_render_data() {
     let test = MapTest::new();
-    let requests_count = Rc::new(Cell::new(0));
+    let requests_count = Arc::new(AtomicI32::new(0));
 
-    test.file_source.set_response(Kind::Tile, make_response("vector.tile", Some(Rc::clone(&requests_count))));
-    test.file_source.set_response(Kind::Glyphs, make_response("glyphs.pbf", Some(Rc::clone(&requests_count))));
+    test.file_source.set_response(Kind::Tile, make_response("vector.tile", Some(Arc::clone(&requests_count))));
+    test.file_source.set_response(Kind::Glyphs, make_response("glyphs.pbf", Some(Arc::clone(&requests_count))));
     // The resources below belong to style and requested on style re-load.
     test.file_source.set_response(Kind::Style, make_response("style_vector.json", None));
     test.file_source.set_response(Kind::Source, make_response("source_vector.json", None));
@@ -2551,19 +2551,19 @@ fn keep_render_data() {
     let iterations = 3;
     let resources_count = 4; /*tiles*/
 
-    requests_count.set(0);
+    requests_count.store(0, Ordering::SeqCst);
     // Keep render data.
     for _ in 1..=iterations {
         test.render();
-        assert_eq!(resources_count, requests_count.get());
+        assert_eq!(resources_count, requests_count.load(Ordering::SeqCst));
     }
 
-    requests_count.set(0);
+    requests_count.store(0, Ordering::SeqCst);
     // Clear render data.
     for i in 1..=iterations {
         test.frontend().renderer().clear_data();
         test.render();
-        assert_eq!(resources_count * i, requests_count.get());
+        assert_eq!(resources_count * i, requests_count.load(Ordering::SeqCst));
     }
 }
 
@@ -2588,13 +2588,13 @@ fn disabled_placed_symbol_data() {
         true
     }
 
-    let run_loop = RunLoop::new();
-    let file_source = Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous));
+    let run_loop = TestLoop::new();
+    let file_source = StubFileSource::on_queue(run_loop.queue(), ResponseType::Asynchronous);
     let test = MapTest::create(run_loop, file_source, 1.0, MapMode::Tile);
-    let requests_count = Rc::new(Cell::new(0));
+    let requests_count = Arc::new(AtomicI32::new(0));
 
-    test.file_source.set_response(Kind::Tile, make_response("vector.tile", Some(Rc::clone(&requests_count))));
-    test.file_source.set_response(Kind::Glyphs, make_response("glyphs.pbf", Some(Rc::clone(&requests_count))));
+    test.file_source.set_response(Kind::Tile, make_response("vector.tile", Some(Arc::clone(&requests_count))));
+    test.file_source.set_response(Kind::Glyphs, make_response("glyphs.pbf", Some(Arc::clone(&requests_count))));
     test.file_source.set_response(Kind::Style, make_response("style_vector.json", None));
     test.file_source.set_response(Kind::Source, make_response("source_vector.json", None));
     test.file_source.set_response(Kind::SpriteJSON, make_response("sprite.json", None));
@@ -2672,14 +2672,14 @@ fn disabled_placed_symbol_data() {
 fn volatile_source() {
     let test = MapTest::with_mode(1.0, MapMode::Continuous);
 
-    let requested_tiles = Rc::new(Cell::new(0));
+    let requested_tiles = Arc::new(AtomicI32::new(0));
     let is_volatile = true;
     {
-        let requested_tiles = Rc::clone(&requested_tiles);
+        let requested_tiles = Arc::clone(&requested_tiles);
         test.file_source.set_response(Kind::Tile, move |resource: &Resource| {
             let expected_policy = if is_volatile { StoragePolicy::Volatile } else { StoragePolicy::Permanent };
             assert_eq!(expected_policy, resource.storage_policy);
-            requested_tiles.set(requested_tiles.get() + 1);
+            requested_tiles.fetch_add(1, Ordering::SeqCst);
             Some(no_content())
         });
     }
@@ -2702,7 +2702,7 @@ fn volatile_source() {
     let run_loop = test.run_loop.clone();
     test.observer.did_finish_loading_map_callback.set(move |()| run_loop.stop());
     run_with_timeout(&test.run_loop, 60);
-    assert_eq!(8, requested_tiles.get());
+    assert_eq!(8, requested_tiles.load(Ordering::SeqCst));
 }
 
 // gtest: Map.GlobeDepthShaderIdFollowsTheExistingShaders
@@ -2791,13 +2791,13 @@ fn resource_error() {
 /// Answers each request of `kind` once, as a file source that doesn't retry
 /// does: with an error while the returned flag is set, then with `response`.
 /// Also returns the request count.
-fn fail_requests(test: &MapTest, kind: Kind, response: Response) -> (Rc<Cell<bool>>, Rc<Cell<usize>>) {
-    let failing = Rc::new(Cell::new(true));
-    let count = Rc::new(Cell::new(0));
-    let (f, c) = (Rc::clone(&failing), Rc::clone(&count));
+fn fail_requests(test: &MapTest, kind: Kind, response: Response) -> (Arc<AtomicBool>, Arc<AtomicUsize>) {
+    let failing = Arc::new(AtomicBool::new(true));
+    let count = Arc::new(AtomicUsize::new(0));
+    let (f, c) = (Arc::clone(&failing), Arc::clone(&count));
     test.file_source.set_response(kind, move |_| {
-        c.set(c.get() + 1);
-        if f.get() {
+        c.fetch_add(1, Ordering::SeqCst);
+        if f.load(Ordering::SeqCst) {
             let mut failed = Response::new();
             failed.error = Some(Box::new(ResourceError::new(Reason::Server, "failed")));
             Some(failed)
@@ -2816,15 +2816,15 @@ fn assert_still_image_retries_failed_tile(source: &str, layer: &str) {
     test.load_json(&format!(r#"{{"version": 8, "sources": {{"tiles": {source}}}, "layers": [{layer}]}}"#));
 
     assert_eq!(test.try_render().err().map(|e| e.message).as_deref(), Some("failed"));
-    assert_eq!(requests.get(), 1);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
 
-    failing.set(false);
+    failing.store(false, Ordering::SeqCst);
     assert!(test.try_render().is_ok());
-    assert_eq!(requests.get(), 2);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 
     // Nothing failed, so nothing is requested again.
     assert!(test.try_render().is_ok());
-    assert_eq!(requests.get(), 2);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
 // gtest: Map.StillImageRetriesFailedTile
@@ -2867,18 +2867,18 @@ fn still_image_retries_failed_glyph_range() {
     assert_eq!(test.try_render().err().map(|e| e.message).as_deref(), Some("failed"));
     // The renderer takes the failure in at its next update; the stub file
     // source may retry the request before then.
-    let failed = requests.get();
+    let failed = requests.load(Ordering::SeqCst);
     assert!(failed >= 1);
     assert_eq!(labels(&test), 0);
 
     // The tile laid out without the range lays out again with it.
-    failing.set(false);
+    failing.store(false, Ordering::SeqCst);
     assert!(test.try_render().is_ok());
-    assert_eq!(requests.get(), failed + 1);
+    assert_eq!(requests.load(Ordering::SeqCst), failed + 1);
     assert_eq!(labels(&test), 1);
 
     assert!(test.try_render().is_ok());
-    assert_eq!(requests.get(), failed + 1);
+    assert_eq!(requests.load(Ordering::SeqCst), failed + 1);
 }
 
 /// Answers every tile request with a server error.
@@ -2985,7 +2985,7 @@ fn stencil_overflow() {
     };
     let mut options = CustomGeometrySourceOptions { fetch_tile_function: Some(fetch), ..Default::default() };
     options.tile_options.tile_size = mln_util::constants::TILE_SIZE_I / 32;
-    let custom = custom_geometry_source::create("custom", options, test.run_loop.pool()).unwrap();
+    let custom = custom_geometry_source::create("custom", options, &test.pool).unwrap();
     handle.set(CustomGeometrySourceHandle::of(&custom).unwrap()).unwrap();
 
     test.map().add_source(custom).unwrap();
@@ -3016,7 +3016,7 @@ fn invalid_utf8_in_tile() {
 
     test.file_source
         .set_response(Kind::Tile, |_| Some(file_response("test/fixtures/map/invalid_utf8/invalidutf8feature.mvt")));
-    test.file_source.set_response(Kind::Glyphs, make_response("glyphs.pbf", Some(Rc::new(Cell::new(0)))));
+    test.file_source.set_response(Kind::Glyphs, make_response("glyphs.pbf", Some(Arc::default())));
 
     test.map().jump_to(&CameraOptions { zoom: Some(11.0), ..Default::default() });
     test.load_json(
@@ -3053,8 +3053,8 @@ fn invalid_utf8_in_tile() {
 fn continuous_map_finishes_loading_when_its_tiles_fail() {
     let _log = FixtureLog::new();
 
-    let run_loop = RunLoop::new();
-    let file_source = Arc::new(StubFileSource::new(&run_loop, ResponseType::Manual));
+    let run_loop = TestLoop::new();
+    let file_source = Arc::new(StubFileSource::new(ResponseType::Manual));
     let test = MapTest::create(run_loop, file_source, 1.0, MapMode::Continuous);
     test.file_source
         .set_response(Kind::Tile, |_| Some(file_response("test/fixtures/map/invalid_utf8/invalidutf8feature.mvt")));
@@ -3102,7 +3102,8 @@ fn continuous_map_finishes_loading_when_its_tiles_fail() {
 fn observe_tile_lifecycle() {
     use TileOperation::*;
 
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
 
     let tile_ops: Rc<RefCell<Vec<(OverscaledTileID, TileOperation)>>> = Rc::default();
     // We expect to see a valid lifecycle for every tile in this list.
@@ -3124,17 +3125,18 @@ fn observe_tile_lifecycle() {
         });
     }
 
-    let mut frontend = HeadlessFrontend::new(Size::new(512, 512), 1.0, &run_loop).expect("a headless frontend");
+    let mut frontend =
+        HeadlessFrontend::new(Size::new(512, 512), 1.0, run_loop.queue(), &pool).expect("a headless frontend");
     let mut map = Map::with_resource_options(
         MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() },
         &ResourceOptions {
             asset_path: cpp_root().join("test/fixtures/api/assets").to_str().unwrap().to_owned(),
             ..ResourceOptions::default()
         },
-        &run_loop,
+        &pool,
     )
     .unwrap();
-    frontend.attach(&map);
+    frontend.attach(&mut map);
     map.load_style_json(&read_file("test/fixtures/api/water.json"));
     let mut layer = Layer::new(Registry::with_builtins().style(), "fill", "landcover", "mapbox").unwrap();
     layer.set_source_layer("landcover");
@@ -3350,7 +3352,8 @@ fn style_update_zoom_dependency() {
 #[test]
 fn globe_hand_off_keeps_tiles() {
     // Crossing the globe's Mercator hand-off must not re-parse the tiles already on screen.
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
     // C++ guards `parsed` with `tileMutex`; the observer is called on this thread.
     let parsed: Rc<RefCell<Vec<OverscaledTileID>>> = Rc::new(RefCell::new(Vec::new()));
     let observer = Rc::new(StubMapObserver::default());
@@ -3364,16 +3367,20 @@ fn globe_hand_off_keeps_tiles() {
         });
     }
 
-    let mut frontend = HeadlessFrontend::new(Size::new(512, 512), 1.0, &run_loop).expect("a headless frontend");
+    let mut frontend =
+        HeadlessFrontend::new(Size::new(512, 512), 1.0, run_loop.queue(), &pool).expect("a headless frontend");
     // C++ runs from the checkout's root; the asset path is relative to it.
     let asset_path = cpp_root().join("test/fixtures/api/assets");
     let mut map = Map::with_file_source(
-        Arc::new(Loader::new(&ResourceOptions {
-            asset_path: asset_path.to_str().expect("asset path").to_owned(),
-            ..ResourceOptions::default()
-        })),
+        Arc::new(Loader::new(
+            &ResourceOptions {
+                asset_path: asset_path.to_str().expect("asset path").to_owned(),
+                ..ResourceOptions::default()
+            },
+            &pool,
+        )),
         MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() },
-        &run_loop,
+        &pool,
     )
     .unwrap();
 
@@ -3423,7 +3430,8 @@ fn water_layers_in(order: [&str; 2]) -> String {
 
 #[test]
 fn a_moved_layer_draws_in_its_new_place_without_a_relayout() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
     let parses = Rc::new(Cell::new(0));
     let observer = Rc::new(StubMapObserver::default());
     {
@@ -3434,12 +3442,16 @@ fn a_moved_layer_draws_in_its_new_place_without_a_relayout() {
             }
         });
     }
-    let mut frontend = HeadlessFrontend::new(Size::new(256, 256), 1.0, &run_loop).expect("a headless frontend");
+    let mut frontend =
+        HeadlessFrontend::new(Size::new(256, 256), 1.0, run_loop.queue(), &pool).expect("a headless frontend");
     let asset_path = cpp_root().join("test/fixtures/api/assets");
-    let file_source: Arc<dyn FileSource> = Arc::new(Loader::new(&ResourceOptions {
-        asset_path: asset_path.to_str().expect("asset path").to_owned(),
-        ..ResourceOptions::default()
-    }));
+    let file_source: Arc<dyn FileSource> = Arc::new(Loader::new(
+        &ResourceOptions {
+            asset_path: asset_path.to_str().expect("asset path").to_owned(),
+            ..ResourceOptions::default()
+        },
+        &pool,
+    ));
     let options = MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() };
     let camera = CameraOptions { center: Some(ll(37.8, -122.5)), zoom: Some(10.0), ..Default::default() };
     let mut render = |map: &mut Map| {
@@ -3448,7 +3460,7 @@ fn a_moved_layer_draws_in_its_new_place_without_a_relayout() {
         result.image
     };
 
-    let mut map = Map::with_file_source(Arc::clone(&file_source), options, &run_loop).unwrap();
+    let mut map = Map::with_file_source(Arc::clone(&file_source), options, &pool).unwrap();
     map.load_style_json(&water_layers_in(["fill", "line"]));
     map.jump_to(&camera);
     let before = render(&mut map);
@@ -3460,7 +3472,7 @@ fn a_moved_layer_draws_in_its_new_place_without_a_relayout() {
     assert_eq!(0, parses.get(), "moving a layer laid its tiles out again");
     assert_ne!(before, moved);
 
-    let mut reordered = Map::with_file_source(file_source, options, &run_loop).unwrap();
+    let mut reordered = Map::with_file_source(file_source, options, &pool).unwrap();
     reordered.load_style_json(&water_layers_in(["line", "fill"]));
     reordered.jump_to(&camera);
     assert_eq!(render(&mut reordered), moved);
@@ -3704,7 +3716,8 @@ fn set_bounds_lifts_the_zoom_to_a_minimum_above_the_maximum() {
 fn globe_bounded_source_loads_finer_tiles() {
     // Just below an integer zoom the globe cover asks for the next zoom's tiles nearest the camera; a source with
     // bounds must create them.
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
     // C++ guards `parsed` with `tileMutex`; the observer is called on this thread.
     let parsed: Rc<RefCell<Vec<OverscaledTileID>>> = Rc::new(RefCell::new(Vec::new()));
     let observer = Rc::new(StubMapObserver::default());
@@ -3718,16 +3731,20 @@ fn globe_bounded_source_loads_finer_tiles() {
         });
     }
 
-    let mut frontend = HeadlessFrontend::new(Size::new(512, 512), 1.0, &run_loop).expect("a headless frontend");
+    let mut frontend =
+        HeadlessFrontend::new(Size::new(512, 512), 1.0, run_loop.queue(), &pool).expect("a headless frontend");
     // C++ runs from the checkout's root; the asset path is relative to it.
     let asset_path = cpp_root().join("test/fixtures/api/assets");
     let mut map = Map::with_file_source(
-        Arc::new(Loader::new(&ResourceOptions {
-            asset_path: asset_path.to_str().expect("asset path").to_owned(),
-            ..ResourceOptions::default()
-        })),
+        Arc::new(Loader::new(
+            &ResourceOptions {
+                asset_path: asset_path.to_str().expect("asset path").to_owned(),
+                ..ResourceOptions::default()
+            },
+            &pool,
+        )),
         MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() },
-        &run_loop,
+        &pool,
     )
     .unwrap();
 
@@ -3839,15 +3856,15 @@ fn red_image(width: u32, height: u32) -> PremultipliedImage {
 /// The shared setup of the GeoJSON symbol tests: a 512x512 map with a white
 /// background, glyphs from test/fixtures/resources/glyphs.pbf, counting the
 /// glyph requests.
-fn geojson_symbol_map() -> (MapTest, Rc<Cell<u32>>) {
+fn geojson_symbol_map() -> (MapTest, Arc<AtomicU32>) {
     let test = MapTest::new();
     test.frontend().set_size(Size::new(512, 512));
     test.map().set_size(Size::new(512, 512)).unwrap();
 
-    let glyph_requests = Rc::new(Cell::new(0));
-    let counter = Rc::clone(&glyph_requests);
+    let glyph_requests = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&glyph_requests);
     test.file_source.set_response(Kind::Glyphs, move |_| {
-        counter.set(counter.get() + 1);
+        counter.fetch_add(1, Ordering::SeqCst);
         Some(file_response("test/fixtures/resources/glyphs.pbf"))
     });
     test.load_json(
@@ -3909,7 +3926,7 @@ fn retains_icons_and_text_across_zoom(synchronous: bool, with_text: bool) {
         assert!(red_pixels >= 5000, "zoom {zoom}: {red_pixels} red pixels");
         if with_text {
             assert!(black_pixels > 100, "zoom {zoom}: {black_pixels} black pixels");
-            assert_eq!(glyph_requests.get(), 1, "zoom {zoom}");
+            assert_eq!(glyph_requests.load(Ordering::SeqCst), 1, "zoom {zoom}");
         }
     }
 }
@@ -4547,11 +4564,12 @@ fn tile_selection_options_publish_updates() {
         }
     }
 
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
     let mut map = Map::with_file_source(
-        Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous)),
+        StubFileSource::on_queue(run_loop.queue(), ResponseType::Asynchronous),
         MapOptions { map_mode: MapMode::Continuous, ..Default::default() },
-        &run_loop,
+        &pool,
     )
     .unwrap();
     let updates = map.update_reader();
@@ -4664,10 +4682,10 @@ fn image_readded_before_relayout() {
 #[test]
 fn fallback_font_faces_cover_every_font_stack() {
     let test = MapTest::new();
-    let requested = Rc::new(RefCell::new(Vec::<String>::new()));
-    let r = Rc::clone(&requested);
+    let requested = Arc::new(Mutex::new(Vec::<String>::new()));
+    let r = Arc::clone(&requested);
     test.file_source.set_response(Kind::Glyphs, move |resource: &Resource| {
-        r.borrow_mut().push(resource.url.clone());
+        r.lock().push(resource.url.clone());
         let mut response = Response::new();
         response.error = Some(Box::new(ResourceError::new(Reason::NotFound, "not found")));
         Some(response)
@@ -4686,7 +4704,7 @@ fn fallback_font_faces_cover_every_font_stack() {
     );
     let _ = test.try_render();
 
-    assert!(requested.borrow().iter().any(|url| url == "fallback.ttf"));
+    assert!(requested.lock().iter().any(|url| url == "fallback.ttf"));
 }
 
 /// Checks that a color ramp renders the current global state after a change
@@ -4804,12 +4822,13 @@ fn color_ramp_renders_current_state_after_unrelated_state_change_color_relief() 
 // returns the error.
 #[test]
 fn empty_size_is_an_error() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
     for size in [Size::new(0, 0), Size::new(256, 0), Size::new(0, 256)] {
         let result = Map::with_file_source(
-            Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous)),
+            StubFileSource::on_queue(run_loop.queue(), ResponseType::Asynchronous),
             MapOptions { size, ..Default::default() },
-            &run_loop,
+            &pool,
         );
         assert_eq!(
             result.err().map(|e| (e.kind, e.message)),

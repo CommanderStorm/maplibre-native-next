@@ -5,13 +5,13 @@ use std::sync::{Arc, OnceLock};
 
 use feature::{Feature, PropertyMap, Value};
 use geojson::GeoJson;
-use mln_actor::scheduler::{self, Respond, SchedulerPtr};
 use mln_expression::expression::evaluate_accumulated;
 use mln_storage::{Data, Resource};
 use mln_tile_id::CanonicalTileID;
 use mln_util::constants;
 use mln_util::error::Error;
 use mln_util::logging::{Event, Log};
+use mln_util::pool::{Pool, Respond, TaskGroup};
 use mln_util::range::Range;
 use mln_vec_map::VecMap;
 use parking_lot::Mutex;
@@ -39,10 +39,15 @@ fn geojsonvt_tile_features(vt: &Mutex<geojson_vt::GeoJSONVT>, id: &CanonicalTile
     }
 }
 
+/// A `GeoJSONVT`'s tiles, which it cuts on the calling thread, or, given a
+/// pool, one at a time and in the order asked, so that one source never
+/// holds more than one of the pool's threads.
 struct GeoJSONVTData {
-    /// Accessed on worker thread.
-    impl_: Arc<Mutex<geojson_vt::GeoJSONVT>>,
-    sequenced_scheduler: SchedulerPtr,
+    vt: Arc<Mutex<geojson_vt::GeoJSONVT>>,
+    /// Where the tiles asked for with a pool are cut: a serial group on the
+    /// first pool given, kept while the data lives. The data is made when
+    /// the style is parsed, before any renderer gives it a pool.
+    slices: OnceLock<TaskGroup>,
 }
 
 impl std::fmt::Debug for GeoJSONVTData {
@@ -52,14 +57,15 @@ impl std::fmt::Debug for GeoJSONVTData {
 }
 
 impl GeoJSONData for GeoJSONVTData {
-    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures) + Send>, run_synchronously: bool) {
-        if run_synchronously {
-            callback(geojsonvt_tile_features(&self.impl_, id));
-        } else {
-            let id = *id;
-            let geojsonvt_impl = Arc::clone(&self.impl_);
-            self.sequenced_scheduler
-                .schedule(Box::new(move || callback(geojsonvt_tile_features(&geojsonvt_impl, &id))));
+    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures) + Send>, pool: Option<&Pool>) {
+        match pool {
+            Some(pool) => {
+                let (vt, id) = (Arc::clone(&self.vt), *id);
+                self.slices.get_or_init(|| TaskGroup::serial(pool)).spawn(move || {
+                    callback(geojsonvt_tile_features(&vt, &id));
+                });
+            }
+            None => callback(geojsonvt_tile_features(&self.vt, id)),
         }
     }
 
@@ -87,7 +93,7 @@ impl std::fmt::Debug for SuperclusterData {
 }
 
 impl GeoJSONData for SuperclusterData {
-    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures) + Send>, _run_synchronously: bool) {
+    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures) + Send>, _pool: Option<&Pool>) {
         callback(self.impl_.get_tile(id.z, id.x, id.y));
     }
 
@@ -115,12 +121,7 @@ fn evaluate_feature(f: &Feature<f64>, expression: &Arc<Expr>, accumulated: Optio
 
 /// The data of `features`. Only the features of a feature collection
 /// (`collection`) cluster.
-fn create(
-    features: Features,
-    collection: bool,
-    sequenced_scheduler: SchedulerPtr,
-    options: &Arc<GeoJSONOptions>,
-) -> Result<Arc<dyn GeoJSONData>, Error> {
+fn create(features: Features, collection: bool, options: &Arc<GeoJSONOptions>) -> Result<Arc<dyn GeoJSONData>, Error> {
     let scale: f64 = f64::from(constants::EXTENT) / constants::TILE_SIZE_D;
     if options.cluster && collection && !features.is_empty() {
         let mut cluster_options = supercluster::Options {
@@ -173,10 +174,8 @@ fn create(
         },
         ..Default::default()
     };
-    Ok(Arc::new(GeoJSONVTData {
-        impl_: Arc::new(Mutex::new(geojson_vt::GeoJSONVT::new(&features, vt_options))),
-        sequenced_scheduler,
-    }))
+    let vt = Arc::new(Mutex::new(geojson_vt::GeoJSONVT::new(&features, vt_options)));
+    Ok(Arc::new(GeoJSONVTData { vt, slices: OnceLock::new() }))
 }
 
 pub(crate) type ClusterExpression = (Arc<Expr>, Arc<Expr>);
@@ -260,9 +259,10 @@ pub type Features = Vec<Feature<f64>>;
 
 pub trait GeoJSONData: Send + Sync {
     /// Gets the features of tile `id`. `callback` runs either right away,
-    /// on the calling thread, or later on a thread of the data's own; with
-    /// `run_synchronously`, always right away.
-    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures) + Send>, run_synchronously: bool);
+    /// on the calling thread, or later on a pool, for data that cuts its
+    /// tiles there: the first `pool` it was given, which it keeps. Without a
+    /// pool, always right away.
+    fn get_tile(&self, id: &CanonicalTileID, callback: Box<dyn FnOnce(TileFeatures) + Send>, pool: Option<&Pool>);
 
     // SuperclusterData: data that isn't clustered has no clusters, and
     // gives empty results. A cluster ID the data doesn't have fails with
@@ -276,14 +276,10 @@ pub trait GeoJSONData: Send + Sync {
 /// hold (a position of fewer than two numbers), or that can't be clustered,
 /// such as a non-point feature, fails with
 /// [`ErrorKind::InvalidArgument`](mln_util::ErrorKind).
-pub fn create_geojson_data(
-    geojson: GeoJson,
-    sequenced_scheduler: SchedulerPtr,
-    options: &Arc<GeoJSONOptions>,
-) -> Result<Arc<dyn GeoJSONData>, Error> {
+pub fn create_geojson_data(geojson: GeoJson, options: &Arc<GeoJSONOptions>) -> Result<Arc<dyn GeoJSONData>, Error> {
     let collection = matches!(geojson, GeoJson::FeatureCollection(_));
     let features = feature::geojson::features(geojson).map_err(|e| Error::invalid_argument(e.to_string()))?;
-    create(features, collection, sequenced_scheduler, options)
+    create(features, collection, options)
 }
 
 /// Builds the data of a GeoJSON source with the source's options. It is
@@ -291,20 +287,18 @@ pub fn create_geojson_data(
 #[derive(Clone)]
 pub struct GeoJSONDataBuilder {
     options: Arc<GeoJSONOptions>,
-    sequenced_scheduler: SchedulerPtr,
 }
 
 impl GeoJSONDataBuilder {
-    /// A builder of data with `options`, whose tiles cut on a sequenced
-    /// scheduler of the thread pool.
+    /// A builder of data with `options`.
     #[must_use]
     pub fn new(options: Arc<GeoJSONOptions>) -> Self {
-        GeoJSONDataBuilder { options, sequenced_scheduler: scheduler::get_sequenced() }
+        GeoJSONDataBuilder { options }
     }
 
     /// Fails as [`create_geojson_data`] does.
     pub fn build(&self, geojson: GeoJson) -> Result<Arc<dyn GeoJSONData>, Error> {
-        create_geojson_data(geojson, Arc::clone(&self.sequenced_scheduler), &self.options)
+        create_geojson_data(geojson, &self.options)
     }
 }
 

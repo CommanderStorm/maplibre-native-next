@@ -4,7 +4,6 @@ mod support;
 use std::sync::{Arc, OnceLock};
 
 use geojson::{Feature, GeoJson, Geometry};
-use mln_actor::RunLoop;
 use mln_headless::HeadlessFrontend;
 use mln_map::{CameraOptions, Map, MapMode, MapOptions};
 use mln_renderer::Registry;
@@ -17,6 +16,7 @@ use mln_style::sources::CustomGeometrySourceHandle;
 use mln_style::sources::custom_geometry_source::{self, Options as CustomGeometrySourceOptions};
 use mln_style::sources::geojson::GeoJSONOptions;
 use mln_util::geo::{LatLng, LatLngBounds};
+use mln_util::pool::Pool;
 use serde_json::json;
 use support::*;
 
@@ -42,19 +42,20 @@ pub fn set(layer: &mut Layer, name: &str, value: &serde_json::Value) {
 // gtest: CustomGeometrySource.Grid
 #[test]
 fn grid() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
 
-    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
+    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, run_loop.queue(), &pool).expect("a headless frontend");
     let mut map = Map::with_resource_options(
         MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() },
         &ResourceOptions {
             asset_path: cpp_root().join("test/fixtures/api/assets").to_str().unwrap().to_owned(),
             ..ResourceOptions::default()
         },
-        &run_loop,
+        &pool,
     )
     .unwrap();
-    frontend.attach(&map);
+    frontend.attach(&mut map);
     map.load_style_json(&read_file("test/fixtures/api/water.json"));
     map.jump_to(&CameraOptions {
         center: Some(LatLng::new(37.8, -122.5).unwrap()),
@@ -86,7 +87,7 @@ fn grid() {
         ..Default::default()
     };
 
-    let source = custom_geometry_source::create("custom", options, run_loop.pool()).unwrap();
+    let source = custom_geometry_source::create("custom", options, &pool).unwrap();
     handle.set(CustomGeometrySourceHandle::of(&source).unwrap()).unwrap();
     map.add_source(source).unwrap();
 
@@ -110,16 +111,17 @@ fn grid() {
 // gtest: API.RecycleMapUpdateImages
 #[test]
 fn recycle_map_update_images() {
-    let run_loop = RunLoop::new();
+    let run_loop = TestLoop::new();
+    let pool = Pool::new(4);
 
-    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, &run_loop).expect("a headless frontend");
+    let mut frontend = HeadlessFrontend::with_pixel_ratio(1.0, run_loop.queue(), &pool).expect("a headless frontend");
     let mut map = Map::with_file_source(
-        Arc::new(StubFileSource::new(&run_loop, ResponseType::Asynchronous)),
+        StubFileSource::on_queue(run_loop.queue(), ResponseType::Asynchronous),
         MapOptions { map_mode: MapMode::Static, size: frontend.size(), ..Default::default() },
-        &run_loop,
+        &pool,
     )
     .unwrap();
-    frontend.attach(&map);
+    frontend.attach(&mut map);
 
     let load_style = |map: &mut Map, marker_name: &str, marker_path: &str| {
         let source = geojson_source_with_data(

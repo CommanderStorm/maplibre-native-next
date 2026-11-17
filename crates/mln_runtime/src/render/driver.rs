@@ -4,10 +4,10 @@ use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use mln_actor::RunLoop;
 use mln_util::error::Error;
 
 use super::session::{Abandoner, RenderSessionState, SessionShared};
+use super::target::SurfaceOverlay;
 use super::worker::{self, Worker};
 use crate::runtime::Outbox;
 
@@ -27,11 +27,11 @@ use crate::runtime::Outbox;
 /// go of the graphics objects on this thread.
 pub struct DriverWork {
     shared: Arc<SessionShared>,
-    /// The loop that the session's renderer runs its own work on, of the
-    /// session's own: a thread may service several sessions.
-    run_loop: RunLoop,
     /// The session's worker, once the first service built it.
     worker: RefCell<Option<Worker>>,
+    /// The overlay that [`set_overlay`](Self::set_overlay) gave, until a
+    /// service hands it to the worker.
+    overlay: Cell<Option<SurfaceOverlay>>,
     servicing: Cell<bool>,
     finished: Cell<bool>,
 }
@@ -48,17 +48,25 @@ fn ended() -> Error {
 
 impl DriverWork {
     pub(crate) fn new(shared: Arc<SessionShared>) -> DriverWork {
-        let run_loop = RunLoop::new();
-        // The renderer's work wakes the host as the session's does.
-        let queue = shared.queue.clone();
-        run_loop.set_waker(Some(Arc::new(move || queue.wake())));
         DriverWork {
             shared,
-            run_loop,
             worker: RefCell::new(None),
+            overlay: Cell::new(None),
             servicing: Cell::new(false),
             finished: Cell::new(false),
         }
+    }
+
+    /// Draws `overlay` over each frame presented to the next surface that
+    /// the session makes from the next service on: its first, which the
+    /// first service makes, or the one that a later
+    /// [`set_surface`](crate::RenderSession::set_surface) gives it. A
+    /// later call replaces an overlay that no surface took yet. Only the
+    /// backend whose overlay it is draws it: a surface of another backend's
+    /// fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind), as its
+    /// attach or `set_surface` reports.
+    pub fn set_overlay(&self, overlay: SurfaceOverlay) {
+        self.overlay.set(Some(overlay));
     }
 
     /// Runs the session's work that is ready, and returns once none is: the
@@ -97,15 +105,21 @@ impl DriverWork {
             let queue = &self.shared.queue;
             // The wake waits while the service runs, and the service runs
             // the work that comes meanwhile, so the wake never comes on this
-            // thread during a service. It's armed again only once the loop
+            // thread during a service. It's armed again only once the queue
             // is empty; work that came just before that runs here too.
             armed.store(false, Ordering::SeqCst);
             let mut worker = self.worker.borrow_mut();
-            worker::build(&self.shared, &mut worker, &self.run_loop);
+            let mut overlay = self.overlay.take();
+            worker::build(&self.shared, &mut worker, &mut overlay);
+            match worker.as_mut() {
+                Some(worker) if overlay.is_some() => worker.overlay = overlay,
+                Some(_) => {}
+                None => self.overlay.set(overlay),
+            }
             loop {
-                while self.run_loop.run_once() | queue.run_once(&mut worker) {}
+                while queue.run_once(&mut worker) {}
                 armed.store(true, Ordering::SeqCst);
-                if !self.run_loop.has_pending() && !queue.has_pending() {
+                if !queue.has_pending() {
                     break;
                 }
                 armed.store(false, Ordering::SeqCst);
@@ -138,9 +152,11 @@ impl DriverWork {
         }
         drop(gate);
         self.shared.queue.set_waker(None);
-        self.run_loop.set_waker(None);
         self.shared.wait_for_senders();
         outbox.deliver();
+        // The session's work that waits, and that comes from now on, drops,
+        // so tasks that hold the queue can't keep it alive.
+        self.shared.queue.close();
     }
 }
 

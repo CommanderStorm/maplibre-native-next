@@ -1,8 +1,7 @@
-use mln_actor::{RunLoop, TaggedScheduler, scheduler};
 use mln_map_types::MapMode;
 use mln_tile_id::OverscaledTileID;
 use mln_util::error::Error;
-use mln_util::identity::SimpleIdentity;
+use mln_util::pool::TaskGroup;
 
 use crate::query::SourceQueryOptions;
 use crate::tests::OneTile;
@@ -10,27 +9,23 @@ use crate::tile::tile::TileKind;
 use crate::tile::tile_workers::InlineWorkers;
 
 struct VectorTileTest {
-    run_loop: RunLoop,
-    thread_pool: TaggedScheduler,
+    thread_pool: TaskGroup,
 }
 
 impl VectorTileTest {
     fn new() -> Self {
-        VectorTileTest {
-            run_loop: RunLoop::new(),
-            thread_pool: TaggedScheduler::new(scheduler::get_background(), SimpleIdentity::new()),
-        }
+        VectorTileTest { thread_pool: TaskGroup::new(&crate::tests::pool()) }
     }
 
     fn mvt_tile(&self) -> OneTile {
-        let store = crate::tests::tile_store(&self.run_loop, &self.thread_pool, Box::new(InlineWorkers));
+        let store = crate::tests::tile_store(&self.thread_pool, Box::new(InlineWorkers));
         OneTile::new(store, TileKind::Geometry, OverscaledTileID::from_zxy(0, 0, 0), MapMode::Continuous)
     }
 }
 
 impl Drop for VectorTileTest {
     fn drop(&mut self) {
-        self.thread_pool.wait_for_empty();
+        self.thread_pool.wait();
     }
 }
 

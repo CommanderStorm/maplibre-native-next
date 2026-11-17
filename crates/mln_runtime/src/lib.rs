@@ -39,7 +39,6 @@ mod offline;
 #[cfg(target_family = "wasm")]
 #[path = "offline_web.rs"]
 mod offline;
-mod queue;
 pub mod registry;
 mod render;
 mod resources;
@@ -58,8 +57,6 @@ pub use mln_renderer::query::{RenderedQueryOptions, SourceQueryOptions};
 pub use mln_renderer::{ClipDepthRange, FrameProjection};
 pub use mln_util::{Error, ErrorKind};
 pub use offline::Offline;
-#[cfg(all(feature = "gl", target_family = "wasm"))]
-pub use render::WebGlContext;
 pub use render::{
     AcquiredFrame, Adapter, AttachOptions, BackendType, BorrowedRing, CanvasFormat, ConsumerSync, DemandMode,
     DepthStencilFormat, DepthStencilFormats, Device, DeviceOptions, DmaBufFormat, DmaBufPlane, Driver, DriverWork,

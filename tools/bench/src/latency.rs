@@ -5,16 +5,17 @@
 //! counts the tile requests that reach the files. Without a delay it passes
 //! everything on at once.
 
-use std::cell::RefCell;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
-use mln_actor::timer::Timer;
-use mln_actor::{ActorRef, RunLoop, Thread};
 use mln_storage::{FileSource, Kind, Request, Resource, Responder, Response};
 use mln_util::chrono::Timestamp;
 use mln_util::hash::HashMap;
+use mln_util::thread::Joined;
 use parking_lot::Mutex;
 
 /// How long a tile stays fresh: a tile server's `Cache-Control: max-age`.
@@ -37,47 +38,76 @@ pub(crate) fn take_tile_requests() -> usize {
 
 /// `inner`, with the tile latency.
 pub(crate) fn delayed(inner: Arc<dyn FileSource>) -> Arc<dyn FileSource> {
-    let timers = Thread::new("TileLatency", |self_ref, run_loop| Timers {
-        self_ref,
-        run_loop: run_loop.clone(),
-        waiting: RefCell::default(),
-    });
-    Arc::new(Delayed { inner, timers })
+    let (waits, received) = mpsc::channel();
+    let thread =
+        mln_util::thread::spawn("TileLatency", move || wait_out(&received)).expect("the tile latency's thread");
+    Arc::new(Delayed { inner, waits, next_wait: AtomicU64::new(0), _thread: Joined::new(thread) })
 }
-
-/// Names a tile's wait.
-static NEXT_WAIT: AtomicU64 = AtomicU64::new(0);
 
 struct Delayed {
     inner: Arc<dyn FileSource>,
-    /// The thread whose timers the tiles wait out their latency on.
-    timers: Thread<Timers>,
+    /// The thread where the tiles wait out their latency.
+    waits: mpsc::Sender<Wait>,
+    /// Names the next tile's wait.
+    next_wait: AtomicU64,
+    _thread: Joined,
 }
 
-/// The timers of the tiles that wait, on their thread.
-struct Timers {
-    self_ref: ActorRef<Timers>,
-    run_loop: RunLoop,
-    waiting: RefCell<HashMap<u64, Timer>>,
+impl Drop for Delayed {
+    fn drop(&mut self) {
+        let _ = self.waits.send(Wait::End);
+    }
 }
 
-impl Timers {
-    /// Runs `then` after `delay`, unless `stop(id)` comes first.
-    fn start(&self, id: u64, delay: Duration, then: impl FnOnce() + 'static) {
-        let timer = Timer::new(&self.run_loop);
-        let (mut then, actor) = (Some(then), self.self_ref.clone());
-        timer.start(delay, Duration::ZERO, move || {
-            if let Some(then) = then.take() {
+/// What the latency's thread takes, in the order sent.
+enum Wait {
+    /// Runs `then` at `deadline`, unless `Stop(id)` comes first.
+    Start {
+        id: u64,
+        deadline: Instant,
+        then: Box<dyn FnOnce() + Send>,
+    },
+    Stop(u64),
+    /// Ends the thread, dropping the waits that haven't ended.
+    End,
+}
+
+/// The latency's thread: runs each wait's `then` when its deadline passes.
+fn wait_out(received: &mpsc::Receiver<Wait>) {
+    let mut deadlines: BinaryHeap<Reverse<(Instant, u64)>> = BinaryHeap::new();
+    let mut waiting: HashMap<u64, Box<dyn FnOnce() + Send>> = HashMap::default();
+    loop {
+        let now = Instant::now();
+        while let Some(&Reverse((deadline, id))) = deadlines.peek()
+            && deadline <= now
+        {
+            deadlines.pop();
+            // A stopped wait leaves its deadline, which ends nothing.
+            if let Some(then) = waiting.remove(&id) {
                 then();
             }
-            actor.invoke(move |timers: &Timers| timers.stop(id));
-        });
-        self.waiting.borrow_mut().insert(id, timer);
-    }
-
-    fn stop(&self, id: u64) {
-        let timer = self.waiting.borrow_mut().remove(&id);
-        drop(timer);
+        }
+        let wait = match deadlines.peek() {
+            Some(&Reverse((deadline, _))) => {
+                match received.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(wait) => wait,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+            None => match received.recv() {
+                Ok(wait) => wait,
+                Err(_) => return,
+            },
+        };
+        match wait {
+            Wait::Start { id, deadline, then } => {
+                waiting.insert(id, then);
+                deadlines.push(Reverse((deadline, id)));
+            }
+            Wait::Stop(id) => drop(waiting.remove(&id)),
+            Wait::End => return,
+        }
     }
 }
 
@@ -98,7 +128,7 @@ impl FileSource for Delayed {
             return;
         }
         TILE_REQUESTS.fetch_add(1, Ordering::SeqCst);
-        // The tile waits out its latency on the timers' thread, then the
+        // The tile waits out its latency on the latency's thread, then the
         // inner request; cancelling stops either.
         let request: Arc<Mutex<Option<Request>>> = Arc::default();
         let (inner, resource, slot, outer) =
@@ -108,7 +138,7 @@ impl FileSource for Delayed {
                 return;
             }
             let answer = outer.clone();
-            let (fresh, inner_responder) = Request::direct(move |mut response: Response| {
+            let (fresh, inner_responder) = Request::new(move |mut response: Response| {
                 let expires = mln_util::chrono::now().secs_since_epoch() + FRESH_SECONDS;
                 response.expires = Some(Timestamp::from_secs(expires));
                 answer.send(response);
@@ -116,11 +146,12 @@ impl FileSource for Delayed {
             *slot.lock() = Some(fresh);
             inner.load(&resource, inner_responder);
         };
-        let (id, delay, timers) =
-            (NEXT_WAIT.fetch_add(1, Ordering::Relaxed), Duration::from_millis(latency), self.timers.actor());
-        timers.invoke(move |timers: &Timers| timers.start(id, delay, fire));
+        let id = self.next_wait.fetch_add(1, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_millis(latency);
+        let _ = self.waits.send(Wait::Start { id, deadline, then: Box::new(fire) });
+        let waits = self.waits.clone();
         responder.on_cancel(move || {
-            timers.invoke(move |timers: &Timers| timers.stop(id));
+            let _ = waits.send(Wait::Stop(id));
             drop(request.lock().take());
         });
     }
