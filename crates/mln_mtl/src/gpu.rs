@@ -3,7 +3,6 @@
 use std::any::Any;
 use std::collections::VecDeque;
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use block2::RcBlock;
@@ -106,7 +105,7 @@ struct Shader {
     source: &'static ShaderSource,
     vertex: MTLFunctionPtr,
     fragment: Option<MTLFunctionPtr>,
-    table: Option<Rc<ShaderTable>>,
+    table: Option<ShaderTable>,
 }
 
 /// Where a shader's functions read what they read, and what the checks
@@ -569,13 +568,14 @@ impl MetalGpu {
         self.textures.get(id).ok_or(GpuError::UnknownId("texture"))
     }
 
-    /// What `shader`'s functions read, which a pipeline of them reflected,
-    /// or else one of each of its attributes in a buffer of its own, drawing
-    /// into an `Rgba8Unorm` attachment.
-    fn shader_table(&mut self, shader: ShaderId) -> Result<Rc<ShaderTable>, GpuError> {
+    /// Gives `shader` its table of what its functions read, if no pipeline
+    /// of them has yet, by reflecting a pipeline of one of each of its
+    /// attributes in a buffer of its own, drawing into an `Rgba8Unorm`
+    /// attachment.
+    fn reflect(&mut self, shader: ShaderId) -> Result<(), GpuError> {
         let entry = self.shaders.get(shader).ok_or(GpuError::UnknownId("shader"))?;
-        if let Some(table) = &entry.table {
-            return Ok(Rc::clone(table));
+        if entry.table.is_some() {
+            return Ok(());
         }
         let source = entry.source;
         let layouts: Vec<VertexBufferLayout> =
@@ -600,8 +600,7 @@ impl MetalGpu {
         let targets = TargetFormats { color: Some(TextureFormat::Rgba8Unorm), depth_stencil: None };
         let desc = PipelineDesc { shader, vertex_buffers: &layouts, state, targets };
         autoreleasepool(|_| self.make_pipeline(&desc))?;
-        let entry = self.shaders.get(shader).ok_or(GpuError::UnknownId("shader"))?;
-        entry.table.clone().ok_or_else(|| GpuError::Invalid(format!("{}: no reflection", source.name)))
+        Ok(())
     }
 
     /// The depth-stencil state of `depth` and `stencil`, for attachments of
@@ -683,7 +682,7 @@ impl MetalGpu {
         if shader.table.is_none() {
             let (bindings, reads) = shader_bindings(&reflection, shader.source, &vertex_buffer_indices)?;
             if let Some(shader) = self.shaders.get_mut(desc.shader) {
-                shader.table = Some(Rc::new(ShaderTable { bindings, reads }));
+                shader.table = Some(ShaderTable { bindings, reads });
             }
         }
 
@@ -1327,7 +1326,10 @@ impl Gpu for MetalGpu {
     }
 
     fn create_bindings(&mut self, desc: &BindingsDesc<'_>) -> Result<BindingsId, GpuError> {
-        let table = self.shader_table(desc.shader)?;
+        self.reflect(desc.shader)?;
+        let shader = self.shaders.get(desc.shader).ok_or(GpuError::UnknownId("shader"))?;
+        let name = shader.source.name;
+        let table = shader.table.as_ref().ok_or_else(|| GpuError::Invalid(format!("{name}: no reflection")))?;
         let elements = {
             let buffer =
                 |id| self.buffers.get(id).map(|buffer: &Buffer| BufferInfo { usage: buffer.usage, size: buffer.size });
@@ -1336,7 +1338,6 @@ impl Gpu for MetalGpu {
             let lookup = Lookup { buffer: &buffer, texture: &texture, sampler: &sampler };
             validation::check_bindings(desc, &table.reads, self.caps.buffer_offset_alignment, &lookup)?
         };
-        let name = self.shaders.get(desc.shader).map_or("", |shader| shader.source.name);
         let missing =
             |what: &str, id: u32| GpuError::Invalid(format!("{name} reads {what} {id}, which no entry binds"));
         let texture_entry = |id: u32| {
