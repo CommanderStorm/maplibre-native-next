@@ -7,13 +7,14 @@ use std::sync::{Arc, Weak};
 use geojson::{GeoJson, GeometryValue};
 use mln_style::expression::Functions;
 use mln_style::image::Impl as StyleImage;
-use mln_style::source_type::SourceData;
+use mln_style::source_type::{SourceData, StyleSourceType};
 use mln_style::sources::custom_geometry_source::{self, TileOptions};
 use mln_style::sources::geojson::{GeoJSONData, GeoJSONDataBuilder};
 use mln_style::sources::image::ImageSourceOptions;
 use mln_style::sources::{
-    CustomGeometrySourceHandle, CustomVectorSourceHandle, GeoJSONOptions, GeoJsonSourceType, ImageSourceType,
-    TileDataFormat, custom_vector_source, geojson_source,
+    CustomGeometrySourceHandle, CustomGeometrySourceType, CustomVectorSourceHandle, CustomVectorSourceType,
+    GeoJSONOptions, GeoJsonSourceType, ImageSourceType, RasterDemSourceType, RasterSourceType, TileDataFormat,
+    VectorSourceType, custom_vector_source, geojson_source,
 };
 use mln_style::{Edit, Source, SourceInstance, TransitionOptions};
 use mln_tile_id::CanonicalTileID;
@@ -384,20 +385,23 @@ fn require_new_source(map: &mln_map::Map, id: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// The runtime's kind of a source of the type `name`, the one place that
-/// maps source types to [`SourceKind`]. `None` for a type the runtime
-/// doesn't name.
-fn source_kind(name: &str) -> Option<SourceKind> {
-    Some(match name {
-        "vector" => SourceKind::Vector,
-        "raster" => SourceKind::Raster,
-        "raster-dem" => SourceKind::RasterDem,
-        "geojson" => SourceKind::GeoJson,
-        "image" => SourceKind::Image,
-        "custom-geometry" => SourceKind::CustomGeometry,
-        "custom-vector" => SourceKind::CustomVector,
-        _ => return None,
-    })
+impl SourceKind {
+    /// The kind of `source`, from its type, the one place that maps source
+    /// types to kinds. `None` for a type the runtime doesn't name.
+    fn of(source: &Source) -> Option<SourceKind> {
+        let name = source.info().name;
+        [
+            (VectorSourceType::INFO, SourceKind::Vector),
+            (RasterSourceType::INFO, SourceKind::Raster),
+            (RasterDemSourceType::INFO, SourceKind::RasterDem),
+            (GeoJsonSourceType::INFO, SourceKind::GeoJson),
+            (ImageSourceType::INFO, SourceKind::Image),
+            (CustomGeometrySourceType::INFO, SourceKind::CustomGeometry),
+            (CustomVectorSourceType::INFO, SourceKind::CustomVector),
+        ]
+        .into_iter()
+        .find_map(|(info, kind)| (info.name == name).then_some(kind))
+    }
 }
 
 /// The `clusterProperties` of `options` as a JSON object.
@@ -419,7 +423,7 @@ fn cluster_properties_json(options: &GeoJSONOptions) -> Option<String> {
 /// What the API reports about `source`; `None` for a source of a type the
 /// runtime doesn't name.
 fn source_info(source: &Source) -> Option<SourceInfo> {
-    let kind = source_kind(source.info().name)?;
+    let kind = SourceKind::of(source)?;
     let summary = source.data().summary();
     Some(SourceInfo {
         id: source.id().to_owned(),
@@ -576,7 +580,7 @@ impl Map {
         self.send(
             move |entry, outbox| {
                 require_loaded(&entry.core)?;
-                let edit = Edit::SetGeoJsonUrl { id: source_id.clone(), url };
+                let edit = GeoJsonSourceType::set_url(source_id.clone(), url);
                 entry.core.edit_style(|style| style.apply(edit))?;
                 if let Some((_, resolver)) =
                     entry.geojson_updates.0.get_mut(&source_id).and_then(|update| update.waiting.take())
@@ -648,7 +652,7 @@ impl Map {
         let source_id = source_id.into();
         self.command(move |map| {
             require_loaded(map)?;
-            map.edit_style(|style| style.apply(Edit::SetGeoJsonSynchronous { id: source_id, synchronous: enabled }))
+            map.edit_style(|style| style.apply(GeoJsonSourceType::set_synchronous(source_id, enabled)))
         })
     }
 
@@ -882,7 +886,7 @@ impl Map {
         let (source_id, url) = (source_id.into(), url.into());
         self.command(move |map| {
             require_loaded(map)?;
-            map.edit_style(|style| style.apply(Edit::SetImageSourceUrl { id: source_id, url }))
+            map.edit_style(|style| style.apply(ImageSourceType::set_url(source_id, url)))
         })
     }
 
@@ -895,7 +899,7 @@ impl Map {
         let source_id = source_id.into();
         self.command(move |map| {
             require_loaded(map)?;
-            map.edit_style(|style| style.apply(Edit::SetImageSourceImage { id: source_id, image }))
+            map.edit_style(|style| style.apply(ImageSourceType::set_image(source_id, image)))
         })
     }
 
@@ -909,7 +913,7 @@ impl Map {
         let source_id = source_id.into();
         self.command(move |map| {
             require_loaded(map)?;
-            map.edit_style(|style| style.apply(Edit::SetImageSourceCoordinates { id: source_id, coordinates }))
+            map.edit_style(|style| style.apply(ImageSourceType::set_coordinates(source_id, coordinates)))
         })
     }
 
@@ -1024,7 +1028,7 @@ fn queue_geojson(
     if synchronous {
         return match builder.build(geojson) {
             Ok(data) => {
-                let edit = Edit::SetGeoJsonData { id: source_id.to_owned(), data: Some(data) };
+                let edit = GeoJsonSourceType::set_data(source_id, Some(data));
                 match entry.core.edit_style(|style| style.apply(edit)) {
                     Ok(()) => Ok(Some(resolver)),
                     Err(error) => Err((error, resolver)),
@@ -1103,7 +1107,7 @@ fn install_geojson(
             Err(Error::cancelled("the source's data was replaced before this data was ready"))
         }
         Ok(data) => {
-            let edit = Edit::SetGeoJsonData { id: source_id.to_owned(), data: Some(data) };
+            let edit = GeoJsonSourceType::set_data(source_id, Some(data));
             entry.core.edit_style(|style| style.apply(edit))
         }
     };
