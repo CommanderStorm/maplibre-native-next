@@ -29,7 +29,7 @@ use mln_text::shaping::{PositionedIcon, get_anchor_justification, get_shaping};
 use mln_text::tagged_string::SectionOptions;
 use mln_text::{BiDi, TaggedString, apply_arabic_shaping, starts_right_to_left};
 use mln_tile_id::CanonicalTileID;
-use mln_tile_id::geometry_tile_data::{GeometryCoordinates, GeometryTileFeature};
+use mln_tile_id::geometry_tile_data::{GeometryCoordinate, GeometryCoordinates, GeometryTileFeature};
 use mln_util::constants::{EXTENT, ONE_EM, TILE_SIZE_D};
 use mln_util::error::Error;
 use mln_util::geometry::FeatureType;
@@ -48,12 +48,15 @@ use crate::layout::clip_lines::clip_lines;
 use crate::layout::layout::{BuildParams, Layout, LayoutParameters, SourceLayer, layers_by_id};
 use crate::layout::merge_lines::merge_lines;
 use crate::layout::symbol_feature::SymbolFeature;
-use crate::layout::symbol_instance::{ShapedTextOrientations, SymbolContent, SymbolInstance, SymbolInstanceSharedData};
+use crate::layout::symbol_instance::{
+    ShapedTextOrientations, SymbolContent, SymbolInstance, SymbolInstancePools, SymbolInstanceSharedData,
+};
 use crate::layout::tile_layout::Resolved;
 use crate::text::collision_index::OverlapMode;
 use crate::text::get_anchors::{get_anchors, get_center_anchor};
 use crate::text::glyph_store::{HBShapeResult, HBShapeResults};
 use crate::text::quads::{SymbolQuad, SymbolQuads};
+use crate::util::pool::PoolRange;
 
 /// Whether `text-field` is set: a constant that is not empty, or an
 /// expression.
@@ -295,6 +298,7 @@ pub(crate) struct SymbolLayout {
     /// for each symbol it places.
     pub(crate) bucket_leader_id: Arc<str>,
     pub(crate) symbol_instances: Vec<SymbolInstance>,
+    symbol_instance_pools: SymbolInstancePools,
     pub(crate) sort_key_ranges: Vec<SortKeyRange>,
 
     compare_text: VecMap<Vec<u16>, Vec<Anchor>>,
@@ -359,6 +363,7 @@ impl SymbolLayout {
             layer_paint_properties: VecMap::new(),
             bucket_leader_id: Arc::from(leader.id.as_str()),
             symbol_instances: Vec::new(),
+            symbol_instance_pools: SymbolInstancePools::default(),
             sort_key_ranges: Vec::new(),
             compare_text: VecMap::new(),
             source_layer_name: Arc::from(source_layer.name.as_str()),
@@ -852,7 +857,7 @@ impl SymbolLayout {
             }
         }
 
-        let key: Vec<u16> = feature.formatted_text.as_ref().map(|t| t.raw_text().to_vec()).unwrap_or_default();
+        let key: &[u16] = feature.formatted_text.as_ref().map_or(&[], |text| text.raw_text());
 
         let allow_vertical_placement = self.allow_vertical_placement;
         let create_symbol_instance_shared_data = |line: GeometryCoordinates| {
@@ -905,7 +910,7 @@ impl SymbolLayout {
                         &indexed_feature,
                         layout_feature_index,
                         feature.index,
-                        key.clone(),
+                        key,
                         overscaling,
                         icon_rotation,
                         text_rotation,
@@ -913,6 +918,7 @@ impl SymbolLayout {
                         allow_vertical_placement,
                         icon_type,
                         height_offset,
+                        &mut this.symbol_instance_pools,
                     ));
 
                     if sort_features_by_key {
@@ -1033,11 +1039,12 @@ impl SymbolLayout {
         false
     }
 
-    /// The tile distances of `line`'s vertices from `anchor`, computed as GL
-    /// JS's `addToLineVertexArray` does, without building a line array.
-    #[must_use]
-    pub(crate) fn calculate_tile_distances(line: &GeometryCoordinates, anchor: &Anchor) -> Vec<f32> {
-        let mut tile_distances = vec![0.0_f32; line.len()];
+    /// Writes the tile distances of `line`'s vertices from `anchor` to
+    /// `tile_distances`, one for each vertex, computed as GL JS's
+    /// `addToLineVertexArray` does, without building a line array. A line
+    /// without an anchor segment leaves them as they are.
+    pub(crate) fn calculate_tile_distances(line: &[GeometryCoordinate], anchor: &Anchor, tile_distances: &mut [f32]) {
+        debug_assert_eq!(line.len(), tile_distances.len());
         if let Some(segment) = anchor.segment {
             debug_assert!(segment < line.len());
             let p = |i: usize| (f32::from(line[i].x), f32::from(line[i].y));
@@ -1070,7 +1077,6 @@ impl SymbolLayout {
                 }
             }
         }
-        tile_distances
     }
 
     fn update_paint_properties_for_section(
@@ -1113,6 +1119,7 @@ impl SymbolLayout {
         glyph_quads: &SymbolQuads,
         canonical: &CanonicalTileID,
         mut last_added_section: Option<usize>,
+        line: &mut Option<(PoolRange, PoolRange)>,
     ) -> (usize, usize) {
         let size_data = bucket.text_size_binder.get_vertex_size_data(feature);
         let has_format_section_overrides = bucket.has_format_section_overrides();
@@ -1122,6 +1129,19 @@ impl SymbolLayout {
             symbol_instance.placed_icon_index
         };
 
+        // The symbol's text variants share its line and its distances.
+        let pools = &mut state.text.pools;
+        let (line, tile_distances) = *line.get_or_insert_with(|| {
+            let line = symbol_instance.line();
+            let tile_distances = PoolRange::extend(&mut pools.tile_distances, std::iter::repeat_n(0.0, line.len()));
+            Self::calculate_tile_distances(
+                line,
+                symbol_instance.get_anchor(),
+                tile_distances.of_mut(&mut pools.tile_distances),
+            );
+            (PoolRange::extend(&mut pools.lines, line.iter().copied()), tile_distances)
+        });
+        let glyph_offsets = PoolRange::at_end(&pools.glyph_offsets);
         state.text.placed_symbols.push(PlacedSymbol::new(
             symbol_instance.get_anchor().point,
             symbol_instance.get_anchor().segment.unwrap_or(0),
@@ -1129,8 +1149,9 @@ impl SymbolLayout {
             size_data.max,
             symbol_instance.get_text_offset(),
             writing_mode,
-            symbol_instance.line().clone(),
-            Self::calculate_tile_distances(symbol_instance.line(), symbol_instance.get_anchor()),
+            line,
+            tile_distances,
+            glyph_offsets,
             placed_icon_index,
         ));
         let placed_index = state.text.placed_symbols.len() - 1;
@@ -1286,7 +1307,7 @@ impl SymbolLayout {
         segment.vertex_length += VERTEX_LENGTH;
         segment.index_length += 6;
 
-        buffer.placed_symbols[placed_symbol].glyph_offsets.push(symbol.glyph_offset.x);
+        buffer.placed_symbols[placed_symbol].glyph_offsets.push(&mut buffer.pools.glyph_offsets, symbol.glyph_offset.x);
 
         index as usize
     }
@@ -1317,6 +1338,7 @@ impl SymbolLayout {
         }
 
         let instances = std::mem::take(&mut state.symbol_instances);
+        let pools = std::mem::take(&mut state.symbol_instance_pools);
         for symbol_instance in &instances {
             let mut populate_collision_box = |feature: &crate::text::collision_feature::CollisionFeature,
                                               is_text: bool| {
@@ -1332,7 +1354,7 @@ impl SymbolLayout {
                     state.icon_collision_box.get_or_insert_with(Default::default)
                 };
 
-                for b in &feature.boxes {
+                for b in pools.boxes(feature) {
                     const VERTEX_LENGTH: usize = 4;
                     let anchor = b.anchor;
 
@@ -1396,6 +1418,7 @@ impl SymbolLayout {
             populate_collision_box(symbol_instance.get_icon_collision_feature(), false);
         }
         state.symbol_instances = instances;
+        state.symbol_instance_pools = pools;
     }
 
     fn has_symbol_instances_in(state: &SymbolBucketState) -> bool {
@@ -1810,6 +1833,7 @@ impl SymbolLayout {
             self.sort_features_by_y,
             self.bucket_leader_id.to_string(),
             std::mem::take(&mut self.symbol_instances),
+            std::mem::take(&mut self.symbol_instance_pools),
             std::mem::take(&mut self.sort_key_ranges),
             self.tile_pixel_ratio,
             self.allow_vertical_placement,
@@ -1843,6 +1867,9 @@ impl SymbolLayout {
                     let sdf = symbol_instance.has_sdf_icon();
                     let mut place_icon = |icon_quads: &SymbolQuads, writing_mode: WritingModeType| -> usize {
                         let icon_buffer = if sdf { &mut state.sdf_icon } else { &mut state.icon };
+                        let pools = &mut icon_buffer.pools;
+                        let line = PoolRange::extend(&mut pools.lines, symbol_instance.line().iter().copied());
+                        let glyph_offsets = PoolRange::at_end(&pools.glyph_offsets);
                         icon_buffer.placed_symbols.push(PlacedSymbol::new(
                             symbol_instance.get_anchor().point,
                             symbol_instance.get_anchor().segment.unwrap_or(0),
@@ -1850,8 +1877,9 @@ impl SymbolLayout {
                             size_data.max,
                             symbol_instance.get_icon_offset(),
                             writing_mode,
-                            symbol_instance.line().clone(),
-                            Vec::new(),
+                            line,
+                            PoolRange::default(),
+                            glyph_offsets,
                             None,
                         ));
                         let index = icon_buffer.placed_symbols.len() - 1;
@@ -1903,6 +1931,7 @@ impl SymbolLayout {
 
                 if has_text && feature.formatted_text.is_some() {
                     let mut last_added_section: Option<usize> = None;
+                    let mut text_line = None;
                     let writing_modes = symbol_instance.get_writing_modes();
                     if single_line {
                         let quads = symbol_instance.right_justified_glyph_quads().clone();
@@ -1915,6 +1944,7 @@ impl SymbolLayout {
                             &quads,
                             canonical,
                             last_added_section,
+                            &mut text_line,
                         );
                         last_added_section = Some(section);
                         symbol_instance.placed_right_text_index = Some(placed);
@@ -1932,6 +1962,7 @@ impl SymbolLayout {
                                 &quads,
                                 canonical,
                                 last_added_section,
+                                &mut text_line,
                             );
                             last_added_section = Some(section);
                             symbol_instance.placed_right_text_index = Some(placed);
@@ -1947,6 +1978,7 @@ impl SymbolLayout {
                                 &quads,
                                 canonical,
                                 last_added_section,
+                                &mut text_line,
                             );
                             last_added_section = Some(section);
                             symbol_instance.placed_center_text_index = Some(placed);
@@ -1962,6 +1994,7 @@ impl SymbolLayout {
                                 &quads,
                                 canonical,
                                 last_added_section,
+                                &mut text_line,
                             );
                             last_added_section = Some(section);
                             symbol_instance.placed_left_text_index = Some(placed);
@@ -1980,6 +2013,7 @@ impl SymbolLayout {
                             &quads,
                             canonical,
                             last_added_section,
+                            &mut text_line,
                         );
                         last_added_section = Some(section);
                         symbol_instance.placed_vertical_text_index = Some(placed);
