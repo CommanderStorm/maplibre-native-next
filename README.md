@@ -1,3 +1,7 @@
+> [!NOTE]
+> See the
+> [MapLibre onboarding discussion](https://github.com/maplibre/maplibre/issues/557).
+
 # mln-rs
 
 [![CI](https://github.com/louwers/mln-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/louwers/mln-rs/actions/workflows/ci.yml)
@@ -12,4 +16,19 @@ core.
 **[Browser demo](https://louwers.github.io/mln-rs/)** (uses WebGPU on supported
 browsers, otherwise WebGL2).
 
-MapLibre onboarding discussion: https://github.com/maplibre/maplibre/issues/557
+## Getting Started
+
+You need [rustup](https://rustup.rs) and [mise](https://mise.jdx.dev), which
+installs the other tools and runs the dev tasks:
+
+```sh
+mise install       # the tools that mise.toml pins
+mise run desktop   # run the desktop demo app
+mise run web:dev   # serve the browser demo at http://localhost:5173/
+mise run test      # every test, including the render suite
+```
+
+`mise run desktop` and `mise run web:dev` take `--profile release` for an
+optimized build.
+
+`mise tasks` lists every task.
