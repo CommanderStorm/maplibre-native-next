@@ -1,31 +1,65 @@
-//! `mln-bench`, the benchmarks' command (README.md):
-//!
-//! ```text
-//! mln-bench run [--filter <s>]... [--scale <x>] [--fixtures <dir>] [--frames <dir>] [--json]
-//! mln-bench compare <ref> [--rounds <n>] [--threshold <percent>] [--verbose]
-//!                         [--fail-on <metric>]... [--filter <s>]... [--scale <x>]
-//!                         [--fixtures <dir>]
-//! mln-bench list
-//! ```
-//!
-//! `--filter` keeps the cases whose name contains one of the strings;
-//! `--scale` multiplies every case's iteration count; `--fail-on` makes
-//! `compare` fail when the metric gets a worse verdict in any case.
+//! `mln-bench`, the benchmarks of mln-rs (README.md).
 
-use std::path::{Path, PathBuf};
+mod aslr;
+mod compare;
+mod environment;
+mod fixtures;
+mod host;
+mod meter;
+mod report;
+mod runner;
+mod scenario;
+mod scenarios;
+mod stats;
+mod support;
+
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mln_bench::meter::CountingAllocator;
-use mln_bench::scene::{Mode, Scene};
-use mln_bench::{CaseReport, Context, Environment, Report, cases, compare};
-use mln_util::size::Size;
+use meter::CountingAllocator;
+
+#[cfg(feature = "layout-probe")]
+mod layout_probe {
+    include!(concat!(env!("OUT_DIR"), "/layout_probe.rs"));
+}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+const USAGE: &str = "usage:
+  mln-bench list [--filter <s>]... [--json]
+  mln-bench run [--filter <s>]... [--images <dir>] [--json]
+  mln-bench compare <ref> [--filter <s>]... [--rounds <n>] [--max-load <n>] [--json]
+  mln-bench fixtures [--from <dir>]
+
+--filter keeps the scenarios whose names contain one of the strings.
+run and compare run each scenario in a process of its own (mln-bench exec).
+--images writes the last image each scenario drew to <dir>, as PNG files
+named after the scenarios.
+compare builds this checkout's harness against <ref> and compares the two
+(tools/bench/README.md): each metric's change, and its noise, how far it
+moves between runs, and for instructions between builds of the same code
+laid out differently; a change over twice its noise is marked. --rounds
+runs each side n times, and marks the wall time when a rank test finds it
+changed.
+Rounds run alone among the machine's benchmark runs,
+and not at all while its load average is over --max-load (a quarter of its
+cores by default).
+fixtures installs the snapshot that tools/bench/fixtures.json names, from its
+base URL or from a directory laid out as it is.";
+
 fn main() -> ExitCode {
+    // Kept in the binary, never called.
+    #[cfg(feature = "layout-probe")]
+    {
+        let probe: fn(u64) -> u64 = layout_probe::layout_probe;
+        std::hint::black_box(probe);
+    }
+    if std::env::args().nth(1).as_deref() == Some("exec") {
+        aslr::fix();
+    }
     // Before any thread starts, so that the counters count them all.
-    mln_bench::meter::start_counters();
+    meter::start_counters();
     match run(std::env::args().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -35,48 +69,43 @@ fn main() -> ExitCode {
     }
 }
 
-/// The options all commands share, and the rest.
 struct Options {
     filters: Vec<String>,
-    scale: Option<String>,
-    fixtures: PathBuf,
-    frames: Option<PathBuf>,
     json: bool,
-    rounds: usize,
-    threshold: f64,
-    /// `compare`'s metrics whose worse verdict fails it.
-    fail_on: Vec<String>,
-    verbose: bool,
+    rounds: Option<usize>,
+    max_load: Option<f64>,
+    from: Option<PathBuf>,
+    images: Option<PathBuf>,
+    /// exec's: the file the scenario writes its last image to.
+    image: Option<PathBuf>,
     positional: Vec<String>,
 }
 
 fn parse(args: Vec<String>) -> Result<Options, String> {
     let mut options = Options {
         filters: Vec::new(),
-        scale: None,
-        fixtures: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bench-fixtures"),
-        frames: None,
         json: false,
-        rounds: 6,
-        threshold: 5.0,
-        fail_on: Vec::new(),
-        verbose: false,
+        rounds: None,
+        max_load: None,
+        from: None,
+        images: None,
+        image: None,
         positional: Vec::new(),
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
+        let number = |value: String| value.parse::<f64>().map_err(|_| format!("{arg} needs a number"));
         match arg.as_str() {
             "--filter" => options.filters.push(value()?),
-            "--scale" => options.scale = Some(value()?),
-            "--fixtures" => options.fixtures = value()?.into(),
-            "--frames" => options.frames = Some(value()?.into()),
-            "--rounds" => options.rounds = value()?.parse().map_err(|_| "--rounds needs a number")?,
-            "--threshold" => options.threshold = value()?.parse().map_err(|_| "--threshold needs a number")?,
-            "--fail-on" => options.fail_on.push(value()?),
             "--json" => options.json = true,
-            "--verbose" => options.verbose = true,
-            _ if arg.starts_with("--") => return Err(format!("unknown option {arg}")),
+            "--rounds" => options.rounds = Some(value()?.parse().map_err(|_| "--rounds needs a number")?),
+            "--max-load" => options.max_load = Some(number(value()?)?),
+            "--from" => options.from = Some(PathBuf::from(value()?)),
+            "--images" => options.images = Some(PathBuf::from(value()?)),
+            "--image" => options.image = Some(PathBuf::from(value()?)),
+            "-h" | "--help" => return Err(USAGE.to_owned()),
+            _ if arg.starts_with('-') => return Err(format!("unknown option {arg}\n\n{USAGE}")),
             _ => options.positional.push(arg),
         }
     }
@@ -85,86 +114,88 @@ fn parse(args: Vec<String>) -> Result<Options, String> {
 
 fn run(args: Vec<String>) -> Result<(), String> {
     let options = parse(args)?;
-    let (command, rest) = options.positional.split_first().map_or(("run", &[][..]), |(c, r)| (c.as_str(), r));
-    match (command, rest) {
-        ("run", []) => run_cases(&options),
-        ("list", []) => {
-            for case in selected(&options) {
-                println!("{}", case.name);
+    let positional: Vec<&str> = options.positional.iter().map(String::as_str).collect();
+    match positional.as_slice() {
+        ["list"] => {
+            let selected = scenarios::select(&options.filters);
+            if options.json {
+                let list: Vec<serde_json::Value> = selected
+                    .iter()
+                    .map(|scenario| {
+                        serde_json::json!({
+                            "name": scenario.name,
+                            "kind": scenario.kind,
+                            "question": scenario.question,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::Value::Array(list));
+            } else {
+                for scenario in selected {
+                    println!("{}\n  {}", scenario.name, scenario.question);
+                }
             }
             Ok(())
         }
-        ("compare", [base]) => {
-            fixture_version(&options.fixtures)?;
-            let mut run_args = Vec::new();
-            for filter in &options.filters {
-                run_args.extend(["--filter".to_string(), filter.clone()]);
+        ["run"] => {
+            let selected = scenarios::select(&options.filters);
+            if selected.is_empty() {
+                return Err("no scenario matches the filters".to_owned());
             }
-            if let Some(scale) = &options.scale {
-                run_args.extend(["--scale".to_string(), scale.clone()]);
+            if cfg!(debug_assertions) {
+                eprintln!("mln-bench: this build isn't optimized; `mise run bench` builds the benchmark profile");
             }
-            let (report, worse) = compare::compare(&compare::Options {
-                base: base.clone(),
+            runner::check_build()?;
+            let binary = std::env::current_exe().map_err(|error| error.to_string())?;
+            if let Some(dir) = &options.images {
+                std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+            }
+            let _measuring = host::measuring(false)?;
+            runner::warm_up(&binary, &selected)?;
+            let mut runs = Vec::new();
+            for scenario in selected {
+                eprintln!("mln-bench: {}", scenario.name);
+                let image =
+                    options.images.as_ref().map(|dir| dir.join(format!("{}.png", scenario.name.replace('/', "-"))));
+                runs.push(runner::run_in_process(&binary, scenario.name, image.as_deref())?);
+            }
+            if options.json {
+                println!("{}", serde_json::to_string_pretty(&runs).map_err(|error| error.to_string())?);
+            } else {
+                print!("{}", report::runs_text(&runs));
+            }
+            Ok(())
+        }
+        ["compare", base] => {
+            let comparison = compare::compare(&compare::Options {
+                base: (*base).to_owned(),
+                filters: options.filters,
                 rounds: options.rounds,
-                threshold: options.threshold,
-                run_args,
-                fixtures: options.fixtures.clone(),
-                verbose: options.verbose,
+                max_load: options.max_load.unwrap_or_else(host::default_max_load),
             })?;
-            print!("{report}");
-            let failed: Vec<String> = worse
-                .into_iter()
-                .filter(|(_, metric)| options.fail_on.contains(metric))
-                .map(|(case, metric)| format!("{case} {metric}"))
-                .collect();
-            if failed.is_empty() { Ok(()) } else { Err(format!("worse: {}", failed.join(", "))) }
+            if options.json {
+                println!("{}", serde_json::to_string_pretty(&comparison).map_err(|error| error.to_string())?);
+            } else {
+                print!("{}", compare::text(&comparison));
+            }
+            Ok(())
         }
-        _ => Err("usage: mln-bench [run | list | compare <ref>] [options] (see tools/bench/README.md)".into()),
-    }
-}
-
-fn selected(options: &Options) -> Vec<cases::Case> {
-    cases::all()
-        .into_iter()
-        .filter(|case| options.filters.is_empty() || options.filters.iter().any(|f| case.name.contains(f.as_str())))
-        .collect()
-}
-
-fn fixture_version(fixtures: &Path) -> Result<String, String> {
-    std::fs::read_to_string(fixtures.join("version")).map(|v| v.trim().to_string()).map_err(|_| {
-        format!(
-            "no basemap fixture in {}; prepare it with `mise run bench:fixtures` (tools/bench/fixtures.py <dir>)",
-            fixtures.display()
-        )
-    })
-}
-
-fn run_cases(options: &Options) -> Result<(), String> {
-    let fixtures = fixture_version(&options.fixtures)?;
-    let cx = Context {
-        fixtures: options.fixtures.canonicalize().map_err(|e| format!("{}: {e}", options.fixtures.display()))?,
-        scale: options.scale.as_deref().map_or(Ok(1.0), str::parse).map_err(|_| "--scale needs a number")?,
-        frames: options.frames.clone(),
-    };
-    let (gpu, software_gpu) = Scene::new(Size::new(1, 1), Mode::Still).gpu();
-    let environment =
-        Environment { gpu, software_gpu, os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH), fixtures };
-    if software_gpu {
-        eprintln!("mln-bench: {} is a software rasterizer, which measures something else than a GPU", environment.gpu);
-    }
-    let mut reports = Vec::new();
-    for case in selected(options) {
-        eprintln!("mln-bench: {}", case.name);
-        let metrics = case.run(&cx);
-        if !options.json {
-            let values: Vec<String> = metrics.0.iter().map(|m| format!("{} {:.3}", m.name, m.value)).collect();
-            println!("{:<24} {}", case.name, values.join("  "));
+        ["fixtures"] => {
+            let origin = match &options.from {
+                Some(dir) => fixtures::Origin::Dir(dir),
+                None => fixtures::Origin::Url,
+            };
+            let manifest = fixtures::Manifest::current();
+            let dir = fixtures::install(manifest, &fixtures::cache_root()?, &origin)?;
+            // stderr, so that the JSON of a run that installs the fixtures
+            // first stays alone on stdout.
+            eprintln!("mln-bench: snapshot {} is installed in {}", manifest.snapshot, dir.display());
+            Ok(())
         }
-        reports.push(CaseReport { name: case.name, metrics });
+        ["exec", name, out] => {
+            let scenario = scenarios::find(name).ok_or_else(|| format!("no scenario {name}"))?;
+            runner::exec(scenario, &PathBuf::from(out), options.image)
+        }
+        _ => Err(USAGE.to_owned()),
     }
-    if options.json {
-        let report = Report { environment, cases: reports };
-        println!("{}", serde_json::to_string(&report).map_err(|e| e.to_string())?);
-    }
-    Ok(())
 }

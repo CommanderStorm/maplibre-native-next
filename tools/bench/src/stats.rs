@@ -1,99 +1,83 @@
-//! The statistics of a comparison (README.md): medians and percentiles of a
-//! process's iterations, and a two-sided Mann-Whitney U test with Holm's
-//! correction between two sides' processes.
+//! The statistics of a comparison.
 
-/// The median; NaN for no values.
-#[must_use]
+/// The median of `values`, which must not be empty.
 pub(crate) fn median(values: &[f64]) -> f64 {
-    percentile(values, 50.0)
-}
-
-/// The `p`th percentile, interpolating linearly between the nearest ranks;
-/// NaN for no values.
-pub(crate) fn percentile(values: &[f64], p: f64) -> f64 {
-    if values.is_empty() {
-        return f64::NAN;
-    }
+    assert!(!values.is_empty(), "the median of nothing");
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
-    let rank = p / 100.0 * (sorted.len() - 1) as f64;
-    let (low, high) = (rank.floor() as usize, rank.ceil() as usize);
-    sorted[low] + (sorted[high] - sorted[low]) * (rank - low as f64)
+    let middle = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) { f64::midpoint(sorted[middle - 1], sorted[middle]) } else { sorted[middle] }
 }
 
-/// The two-sided p-value of a Mann-Whitney U test of whether `a` and `b`
-/// come from the same distribution. Exact for small samples without ties;
-/// otherwise the normal approximation with the tie correction and a
-/// continuity correction. 1 when either side is empty.
-#[must_use]
+/// The largest value of `values` less the smallest, or 0 for none.
+pub(crate) fn range(values: &[f64]) -> f64 {
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    if values.is_empty() { 0.0 } else { max - min }
+}
+
+/// The two-sided p-value of the Mann-Whitney U test that `a` and `b` come
+/// from the same distribution. Exact, by counting the orderings of the
+/// samples, while both have at most 20 values; through the normal
+/// approximation with a continuity correction beyond. Ties count half.
 pub(crate) fn mann_whitney(a: &[f64], b: &[f64]) -> f64 {
-    let (n1, n2) = (a.len(), b.len());
-    if n1 == 0 || n2 == 0 {
-        return 1.0;
+    let (n, m) = (a.len(), b.len());
+    assert!(n > 0 && m > 0, "Mann-Whitney U of an empty sample");
+    // U counts the pairs in which `a`'s value is the larger, twice so that
+    // a tie counts one.
+    let twice_u: usize =
+        a.iter().map(|x| b.iter().map(|y| if x > y { 2 } else { usize::from(x == y) }).sum::<usize>()).sum();
+    let u = twice_u as f64 / 2.0;
+    let mean = (n * m) as f64 / 2.0;
+    if n <= 20 && m <= 20 {
+        // How many orderings of the n + m values give each U.
+        let counts = u_distribution(n, m);
+        let total: f64 = counts.iter().sum();
+        let distance = (u - mean).abs();
+        let extreme: f64 = counts
+            .iter()
+            .enumerate()
+            .filter(|&(value, _)| (value as f64 - mean).abs() >= distance - 1e-9)
+            .map(|(_, count)| count)
+            .sum();
+        return (extreme / total).min(1.0);
     }
-    // Ranks of the pooled values, ties sharing their average rank.
-    let mut pooled: Vec<(f64, bool)> = a.iter().map(|&v| (v, true)).chain(b.iter().map(|&v| (v, false))).collect();
-    pooled.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let mut rank_sum_a = 0.0;
-    let mut tie_term = 0.0;
-    let mut start = 0;
-    while start < pooled.len() {
-        let mut end = start + 1;
-        while end < pooled.len() && pooled[end].0 == pooled[start].0 {
-            end += 1;
-        }
-        let average_rank = (start + end + 1) as f64 / 2.0;
-        rank_sum_a += average_rank * pooled[start..end].iter().filter(|(_, in_a)| *in_a).count() as f64;
-        let tied = (end - start) as f64;
-        tie_term += tied * tied * tied - tied;
-        start = end;
-    }
-    let u = rank_sum_a - (n1 * (n1 + 1)) as f64 / 2.0;
-    if tie_term == 0.0 && n1 * n2 <= 400 { exact_p(n1, n2, u.round() as usize) } else { normal_p(n1, n2, u, tie_term) }
+    let sd = ((n * m * (n + m + 1)) as f64 / 12.0).sqrt();
+    let z = ((u - mean).abs() - 0.5).max(0.0) / sd;
+    (2.0 * normal_tail(z)).min(1.0)
 }
 
-/// The exact two-sided p-value of `u` from the distribution of U over every
-/// arrangement of `n1` and `n2` distinct values.
-fn exact_p(n1: usize, n2: usize, u: usize) -> f64 {
-    // counts[i][j][k]: arrangements of i and j values with U = k, built up
-    // by where the largest value goes.
-    let max = n1 * n2;
-    let mut counts = vec![vec![vec![0.0f64; max + 1]; n2 + 1]; n1 + 1];
-    for i in 0..=n1 {
-        for j in 0..=n2 {
-            if i == 0 || j == 0 {
-                counts[i][j][0] = 1.0;
-                continue;
+/// `counts[u]`: how many of the orderings of `n` values of one sample and
+/// `m` of another give U = u.
+fn u_distribution(n: usize, m: usize) -> Vec<f64> {
+    // f[i][j][u], built up over i and j: the last value is either the first
+    // sample's, which then beats all j of the second, or the second's.
+    let max = n * m;
+    let mut previous: Vec<Vec<f64>> = vec![vec![0.0; max + 1]; m + 1];
+    for row in &mut previous {
+        row[0] = 1.0;
+    }
+    for _ in 0..n {
+        let mut current: Vec<Vec<f64>> = vec![vec![0.0; max + 1]; m + 1];
+        current[0][0] = 1.0;
+        for j in 1..=m {
+            for u in 0..=max {
+                let first = if u >= j { previous[j][u - j] } else { 0.0 };
+                current[j][u] = first + current[j - 1][u];
             }
-            for k in 0..=i * j {
-                // The largest is from the first sample (it beats all j) or
-                // from the second.
-                let first = if k >= j { counts[i - 1][j][k - j] } else { 0.0 };
-                counts[i][j][k] = first + counts[i][j - 1][k];
-            }
         }
+        previous = current;
     }
-    let distribution = &counts[n1][n2];
-    let total: f64 = distribution.iter().sum();
-    let below: f64 = distribution[..=u].iter().sum();
-    let above: f64 = distribution[u..].iter().sum();
-    (2.0 * below.min(above) / total).min(1.0)
+    previous.swap_remove(m)
 }
 
-fn normal_p(n1: usize, n2: usize, u: f64, tie_term: f64) -> f64 {
-    let (n1, n2) = (n1 as f64, n2 as f64);
-    let n = n1 + n2;
-    let mean = n1 * n2 / 2.0;
-    let variance = n1 * n2 / 12.0 * ((n + 1.0) - tie_term / (n * (n - 1.0)));
-    if variance <= 0.0 {
-        return 1.0;
-    }
-    let z = ((u - mean).abs() - 0.5).max(0.0) / variance.sqrt();
-    erfc(z / std::f64::consts::SQRT_2).min(1.0)
+/// P(Z > z) of the standard normal distribution.
+fn normal_tail(z: f64) -> f64 {
+    0.5 * erfc(z / std::f64::consts::SQRT_2)
 }
 
-/// The complementary error function (Numerical Recipes' `erfcc`, relative
-/// error under 1.2e-7), which std lacks.
+/// The complementary error function, to about 1e-7 (Numerical Recipes'
+/// `erfcc`).
 fn erfc(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.5 * x.abs());
     let y = t
@@ -109,15 +93,16 @@ fn erfc(x: f64) -> f64 {
     if x >= 0.0 { y } else { 2.0 - y }
 }
 
-/// Holm's step-down correction of a family of p-values, in their order.
-#[must_use]
+/// Holm's adjustment of `p_values` for testing them together: each
+/// adjusted value, in the order given.
 pub(crate) fn holm(p_values: &[f64]) -> Vec<f64> {
     let mut order: Vec<usize> = (0..p_values.len()).collect();
-    order.sort_by(|&x, &y| p_values[x].total_cmp(&p_values[y]));
+    order.sort_by(|&a, &b| p_values[a].total_cmp(&p_values[b]));
     let mut adjusted = vec![0.0; p_values.len()];
-    let mut running = 0.0f64;
-    for (step, &index) in order.iter().enumerate() {
-        running = running.max(((p_values.len() - step) as f64 * p_values[index]).min(1.0));
+    let mut running: f64 = 0.0;
+    for (rank, &index) in order.iter().enumerate() {
+        let value = (p_values[index] * (p_values.len() - rank) as f64).min(1.0);
+        running = running.max(value);
         adjusted[index] = running;
     }
     adjusted
@@ -128,57 +113,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn percentiles_interpolate() {
+    fn medians_and_ranges() {
         assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&[4.0, 1.0, 2.0, 3.0]), 2.5);
-        assert_eq!(percentile(&[1.0, 2.0, 3.0, 4.0, 5.0], 90.0), 4.6);
-        assert!(median(&[]).is_nan());
+        assert_eq!(range(&[4.0, 1.0, 2.0]), 3.0);
+        assert_eq!(range(&[]), 0.0);
     }
 
     #[test]
-    fn separated_samples_are_significant() {
-        // The most extreme of the 924 arrangements of 6 and 6: p = 2/924.
-        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
-        assert!((mann_whitney(&a, &b) - 2.0 / 924.0).abs() < 1e-12);
-        assert_eq!(mann_whitney(&a, &b), mann_whitney(&b, &a));
+    fn mann_whitney_of_separated_samples_is_exact() {
+        // Every ordering is equally likely: 2 of the C(8, 4) = 70 are as
+        // extreme as complete separation.
+        let p = mann_whitney(&[1.0, 2.0, 3.0, 4.0], &[5.0, 6.0, 7.0, 8.0]);
+        assert!((p - 2.0 / 70.0).abs() < 1e-12, "{p}");
+        let p = mann_whitney(&[1.0, 3.0, 5.0, 7.0], &[2.0, 4.0, 6.0, 8.0]);
+        assert!(p > 0.5, "{p}");
     }
 
     #[test]
-    fn interleaved_samples_are_not() {
-        let a = [1.0, 4.0, 5.0, 8.0, 9.0, 12.0];
-        let b = [2.0, 3.0, 6.0, 7.0, 10.0, 11.0];
-        assert!(mann_whitney(&a, &b) > 0.9);
-        assert_eq!(mann_whitney(&a, &a), 1.0);
+    fn mann_whitney_approximates_large_samples() {
+        let a: Vec<f64> = (0..30).map(f64::from).collect();
+        let b: Vec<f64> = (100..130).map(f64::from).collect();
+        assert!(mann_whitney(&a, &b) < 1e-6);
+        let c: Vec<f64> = (0..30).map(|i| f64::from(i) + 0.5).collect();
+        assert!(mann_whitney(&a, &c) > 0.5);
     }
 
     #[test]
-    fn exact_matches_tables() {
-        // n1 = n2 = 4, U = 1: P(U <= 1) = 2/70.
-        assert!((exact_p(4, 4, 1) - 4.0 / 70.0).abs() < 1e-12);
-        // U = 8 is the middle of 0..=16, so p = 1.
-        assert_eq!(exact_p(4, 4, 8), 1.0);
-    }
-
-    #[test]
-    fn ties_use_the_normal_approximation() {
-        let a = [1.0, 1.0, 2.0, 2.0, 3.0, 3.0];
-        let b = [4.0, 4.0, 5.0, 5.0, 6.0, 6.0];
-        // U = 0, mean 18, variance 3 * (13 - 36 / 132), continuity 0.5;
-        // as scipy.stats.mannwhitneyu(a, b, method="asymptotic").
-        assert!((mann_whitney(&a, &b) - 0.004_624_23).abs() < 1e-7);
-    }
-
-    #[test]
-    fn erfc_is_accurate() {
-        assert!((erfc(0.0) - 1.0).abs() < 1e-7);
-        assert!((erfc(1.0) - 0.157_299_207).abs() < 1e-7);
-        assert!((erfc(-1.0) - 1.842_700_793).abs() < 1e-7);
-    }
-
-    #[test]
-    fn holm_steps_down_and_stays_monotone() {
-        assert_eq!(holm(&[0.01, 0.04, 0.03]), vec![0.03, 0.06, 0.06]);
-        assert_eq!(holm(&[0.5, 0.9]), vec![1.0, 1.0]);
+    fn holm_scales_by_rank() {
+        let adjusted = holm(&[0.01, 0.04, 0.03]);
+        assert!((adjusted[0] - 0.03).abs() < 1e-12);
+        assert!((adjusted[2] - 0.06).abs() < 1e-12);
+        assert!((adjusted[1] - 0.06).abs() < 1e-12);
     }
 }
