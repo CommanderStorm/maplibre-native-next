@@ -1,6 +1,7 @@
+use std::cell::RefMut;
 use std::rc::Rc;
 
-use mln_gfx::gpu::{ColorAttachment, DepthStencilAttachment, GpuError, LoadOp, TargetFormats};
+use mln_gfx::gpu::{ColorAttachment, DepthStencilAttachment, Gpu, GpuError, LoadOp, TargetFormats};
 use mln_gfx::scissor_rect::ScissorRect;
 use mln_gfx::texture2d::{SamplerState, texture_format};
 use mln_gfx::types::{TextureChannelDataType, TextureFilterType, TexturePixelType, TextureWrapType};
@@ -11,12 +12,11 @@ use mln_util::size::Size;
 use crate::gfx::attachment::Attachment;
 use crate::gfx::context::Context;
 use crate::gfx::texture2d::Texture2DPtr;
-use crate::layer_group::LayerGroup;
 use crate::paint_parameters::{OpenPass, PaintParameters};
 use crate::render_pass::RenderPass;
 
-/// A texture that a layer group draws into ahead of the frame, which other
-/// drawables sample, with the depth texture the backend draws it with
+/// A texture that a layer draws into ahead of the frame, which other draws
+/// sample, with the depth texture the backend draws it with
 /// (`Context::render_target_depth`). The layer that owns it draws it.
 pub(crate) struct RenderTarget {
     texture: Texture2DPtr,
@@ -24,15 +24,12 @@ pub(crate) struct RenderTarget {
     depth: Option<Attachment>,
     /// The channel type the texture was asked for.
     type_: TextureChannelDataType,
-    /// The drawables that draw into the texture.
-    pub(crate) layer_group: LayerGroup,
 }
 
 impl RenderTarget {
-    /// A render target of `size` with channel type `type_`, whose drawables
-    /// are those of `layer_group`.
-    pub(crate) fn new(context: &Context, size: Size, type_: TextureChannelDataType, layer_group: LayerGroup) -> Self {
-        RenderTarget { texture: texture(context, size, type_), depth: None, type_, layer_group }
+    /// A render target of `size` with channel type `type_`.
+    pub(crate) fn new(context: &Context, size: Size, type_: TextureChannelDataType) -> Self {
+        RenderTarget { texture: texture(context, size, type_), depth: None, type_ }
     }
 
     /// Get the render target texture
@@ -51,56 +48,26 @@ impl RenderTarget {
         }
     }
 
-    /// Uploads the drawables.
-    pub(crate) fn upload(&mut self, context: &Context) {
-        self.layer_group.upload(context);
-    }
-
-    /// Draws the drawables into the texture, after `tweak` sets up their
-    /// uniforms.
-    pub(crate) fn render(
-        &mut self,
-        parameters: &mut PaintParameters<'_>,
-        tweak: impl FnOnce(&mut LayerGroup, &PaintParameters<'_>),
-    ) {
-        let num_sublayers = PaintParameters::NUM_SUBLAYERS as usize;
-        let depth_epsilon = PaintParameters::DEPTH_EPSILON;
-
-        // Run layer tweakers to update any dynamic elements
-        parameters.current_layer = 0;
-        tweak(&mut self.layer_group, parameters);
-
+    /// Clears the texture and begins drawing into it, in the passes that
+    /// [`TargetPasses::next`] moves `parameters` to; [`TargetPasses::end`]
+    /// ends what this begins. `None` where the pass didn't begin.
+    pub(crate) fn begin<'a>(&mut self, parameters: &mut PaintParameters<'a>) -> Option<TargetPasses<'a>> {
         let pass = match self.pass(parameters.context) {
             Ok(pass) => pass,
             Err(error) => {
                 Log::error(Event::Render, format!("Beginning a render target's pass failed: {error}"));
-                return;
+                return None;
             }
         };
         let context = parameters.context;
         let mut gpu = context.gpu();
         if let Err(error) = parameters.begin_pass(&mut *gpu, pass) {
             Log::error(Event::Render, format!("Beginning a render target's pass failed: {error}"));
-            return;
+            return None;
         }
-
         let prev_scissor_rect = parameters.scissor_rect;
         parameters.scissor_rect = ScissorRect { x: 0, y: 0, width: pass.size.width, height: pass.size.height };
-
-        // The one layer group draws in the opaque pass, then the translucent
-        // one.
-        let depth_range_size = 1.0 - (3 * num_sublayers) as f32 * depth_epsilon;
-        for pass in [RenderPass::Opaque, RenderPass::Translucent] {
-            parameters.pass = pass;
-            parameters.depth_range_size = depth_range_size;
-            parameters.current_layer = 0;
-            self.layer_group.render(&mut *gpu, parameters);
-        }
-
-        if let Err(error) = parameters.end_pass(&mut *gpu) {
-            Log::error(Event::Render, format!("Ending a render target's pass failed: {error}"));
-        }
-        parameters.scissor_rect = prev_scissor_rect;
+        Some(TargetPasses { gpu, passes: [RenderPass::Opaque, RenderPass::Translucent].into_iter(), prev_scissor_rect })
     }
 
     /// The pass that clears the texture to opaque black and its depth to 1.
@@ -127,8 +94,8 @@ impl RenderTarget {
     }
 }
 
-/// The color texture of a render target of `size`, which drawables draw into
-/// and then sample, linear and clamped.
+/// The color texture of a render target of `size`, which draws draw into and
+/// then sample, linear and clamped.
 fn texture(context: &Context, size: Size, type_: TextureChannelDataType) -> Texture2DPtr {
     let texture = context.create_texture_2d();
     {
@@ -144,4 +111,37 @@ fn texture(context: &Context, size: Size, type_: TextureChannelDataType) -> Text
         });
     }
     texture
+}
+
+/// The passes of the draws into a [`RenderTarget`], from
+/// [`RenderTarget::begin`] to [`TargetPasses::end`], which every one that
+/// begins must reach.
+#[must_use = "the draws into a render target end with `TargetPasses::end`"]
+pub(crate) struct TargetPasses<'a> {
+    gpu: RefMut<'a, dyn Gpu>,
+    /// The passes not yet drawn.
+    passes: std::array::IntoIter<RenderPass, 2>,
+    /// The frame's scissor rect, which `end` restores.
+    prev_scissor_rect: ScissorRect,
+}
+
+impl TargetPasses<'_> {
+    /// Moves `parameters` to the next pass, the opaque one, then the
+    /// translucent one, both as the frame's first layer, and returns the
+    /// `Gpu` that draws it; `None` after the last.
+    pub(crate) fn next(&mut self, parameters: &mut PaintParameters<'_>) -> Option<&mut dyn Gpu> {
+        let num_sublayers = PaintParameters::NUM_SUBLAYERS as usize;
+        parameters.pass = self.passes.next()?;
+        parameters.depth_range_size = 1.0 - (3 * num_sublayers) as f32 * PaintParameters::DEPTH_EPSILON;
+        parameters.current_layer = 0;
+        Some(&mut *self.gpu)
+    }
+
+    /// Ends the draws into the render target.
+    pub(crate) fn end(mut self, parameters: &mut PaintParameters<'_>) {
+        if let Err(error) = parameters.end_pass(&mut *self.gpu) {
+            Log::error(Event::Render, format!("Ending a render target's pass failed: {error}"));
+        }
+        parameters.scissor_rect = self.prev_scissor_rect;
+    }
 }

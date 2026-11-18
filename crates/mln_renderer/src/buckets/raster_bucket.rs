@@ -1,15 +1,8 @@
-// The bucket is shared (`Arc<dyn Bucket>`) between the tile, which changes
-// its mask on the render thread (`RasterTile::setMask`), and the render
-// layers. The masked geometry (C++ `vertices`/`indices`/`segments`, mutated
-// by `setMask`) is therefore behind a mutex, and its modification time is
-// the C++ `vertices.updateModified()`.
-//
-// C++ also keeps the GPU texture in the bucket (`texture2d`); textures are
-// render-thread objects (`Rc`), so the render layer keeps them per bucket
-// id instead (see render_raster_layer.rs).
+// The bucket keeps no GPU texture: textures are render-thread objects
+// (`Rc`), so the render layer keeps them per bucket id (see
+// render_raster_layer.rs).
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use geometry::Point;
 use mln_gfx::shaders::segment::SegmentBase;
@@ -17,10 +10,9 @@ use mln_tile_id::CanonicalTileID;
 use mln_util::constants;
 use mln_util::image::PremultipliedImage;
 use mln_util::time::Instant;
-use parking_lot::{Mutex, MutexGuard};
 
-use crate::bucket::{Bucket, BucketBase};
-use crate::gfx::context::Context;
+use crate::bucket::{Bucket, BucketBase, UploadNeeds};
+use crate::bucket_geometry::BucketGeometry;
 use crate::tile_mask::TileMask;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -30,8 +22,8 @@ pub(crate) struct RasterLayoutVertex {
     pub(crate) a2: [u16; 2],
 }
 
-/// The masked geometry of a raster bucket (C++ `mask`, `vertices`,
-/// `indices`, `segments`).
+/// The masked geometry of a raster bucket, with when it last changed.
+#[derive(Clone)]
 pub(crate) struct RasterBucketGeometry {
     pub(crate) mask: TileMask,
     pub(crate) vertices: Vec<RasterLayoutVertex>,
@@ -60,14 +52,11 @@ fn full_mask() -> TileMask {
 
 /// A raster tile's image and the geometry that draws it, which the tile
 /// masks (`set_mask`).
+#[derive(Clone)]
 pub(crate) struct RasterBucket {
     pub(crate) base: BucketBase,
     pub(crate) image: Option<Arc<PremultipliedImage>>,
-    geometry: Mutex<RasterBucketGeometry>,
-}
-
-fn unmasked() -> Mutex<RasterBucketGeometry> {
-    Mutex::new(RasterBucketGeometry::new())
+    geometry: RasterBucketGeometry,
 }
 
 impl RasterBucket {
@@ -78,7 +67,7 @@ impl RasterBucket {
 
     #[must_use]
     pub(crate) fn with_shared_image(image: Option<Arc<PremultipliedImage>>) -> Self {
-        RasterBucket { base: BucketBase::default(), image, geometry: unmasked() }
+        RasterBucket { base: BucketBase::default(), image, geometry: RasterBucketGeometry::new() }
     }
 
     #[must_use]
@@ -86,15 +75,14 @@ impl RasterBucket {
         RasterLayoutVertex { a1: [p.x, p.y], a2: [t.x, t.y] }
     }
 
-    /// The masked geometry (C++ reads the members directly).
-    pub(crate) fn geometry(&self) -> MutexGuard<'_, RasterBucketGeometry> {
-        self.geometry.lock()
+    /// The masked geometry.
+    pub(crate) fn geometry(&self) -> &RasterBucketGeometry {
+        &self.geometry
     }
 
-    pub(crate) fn clear(&self) {
-        let mut geometry = self.geometry();
-        Self::clear_geometry(&mut geometry);
-        self.base.uploaded.store(false, Ordering::SeqCst);
+    pub(crate) fn clear(&mut self) {
+        Self::clear_geometry(&mut self.geometry);
+        self.base.uploaded = false;
     }
 
     fn clear_geometry(geometry: &mut RasterBucketGeometry) {
@@ -107,29 +95,29 @@ impl RasterBucket {
 
     /// Image sources fill the geometry themselves (`bucket->vertices.emplace_back`).
     pub(crate) fn set_geometry(
-        &self,
+        &mut self,
         vertices: Vec<RasterLayoutVertex>,
         indices: Vec<u16>,
         segments: Vec<SegmentBase>,
     ) {
-        let mut geometry = self.geometry();
+        let geometry = &mut self.geometry;
         geometry.vertices = vertices;
         geometry.indices = indices;
         geometry.segments = segments;
         geometry.last_modified = Instant::now();
     }
 
-    pub(crate) fn set_mask(&self, mask: TileMask) {
+    pub(crate) fn set_mask(&mut self, mask: TileMask) {
         const VERTEX_LENGTH: usize = 4;
 
-        let mut geometry = self.geometry();
+        let geometry = &mut self.geometry;
         if geometry.mask == mask {
             return;
         }
 
         geometry.mask = mask;
-        Self::clear_geometry(&mut geometry);
-        self.base.uploaded.store(false, Ordering::SeqCst);
+        Self::clear_geometry(geometry);
+        self.base.uploaded = false;
 
         if geometry.mask == full_mask() {
             // We want to render the full tile, and keeping the
@@ -158,7 +146,6 @@ impl RasterBucket {
                 (i32::from(tl_vertex.y) + vertex_extent) as i16,
             );
 
-            let geometry = &mut *geometry;
             let (v, i) = (geometry.vertices.len(), geometry.indices.len());
             let segment = match geometry.segments.last_mut() {
                 Some(segment) if u16::try_from(segment.vertex_length + VERTEX_LENGTH).is_ok() => segment,
@@ -198,6 +185,14 @@ impl RasterBucket {
 
         geometry.last_modified = Instant::now();
     }
+
+    /// Marks the bucket uploaded, if it has an image: its geometry draws as
+    /// it is, and the layer makes the image's texture.
+    pub(crate) fn upload_image(&mut self) {
+        if self.has_data() {
+            self.base.uploaded = true;
+        }
+    }
 }
 
 impl Bucket for RasterBucket {
@@ -205,11 +200,8 @@ impl Bucket for RasterBucket {
         &self.base
     }
 
-    fn upload(&self, _context: &Context) {
-        if !self.has_data() {
-            return;
-        }
-        self.base.uploaded.store(true, Ordering::SeqCst);
+    fn upload(&mut self, _geometry: &mut BucketGeometry, _needs: UploadNeeds) {
+        self.upload_image();
     }
 
     fn has_data(&self) -> bool {
@@ -229,7 +221,7 @@ mod tests {
 
     #[test]
     fn full_mask_uses_the_static_geometry() {
-        let bucket = RasterBucket::new(PremultipliedImage::new(Size::new(1, 1)));
+        let mut bucket = RasterBucket::new(PremultipliedImage::new(Size::new(1, 1)));
         assert!(bucket.has_data());
         bucket.set_mask(full_mask());
         let geometry = bucket.geometry();
@@ -238,7 +230,7 @@ mod tests {
 
     #[test]
     fn partial_mask_builds_quads() {
-        let bucket = RasterBucket::new(PremultipliedImage::new(Size::new(1, 1)));
+        let mut bucket = RasterBucket::new(PremultipliedImage::new(Size::new(1, 1)));
         let mut mask = TileMask::new();
         mask.insert(CanonicalTileID::new(1, 0, 0));
         mask.insert(CanonicalTileID::new(1, 1, 1));

@@ -11,7 +11,7 @@ use crate::buffer::BufferPtr;
 #[derive(Default)]
 pub struct IndexVectorBase {
     v: Vec<u16>,
-    /// Port-only: the indexes while they are in a JS array; `v` is empty
+    /// The indexes while they are in a JS array; `v` is empty
     /// then.
     #[cfg(target_family = "wasm")]
     host: Option<HostBytes>,
@@ -49,7 +49,7 @@ impl IndexVectorBase {
         result
     }
 
-    /// Port-only: a released vector of the indexes in a JS array, which the
+    /// A released vector of the indexes in a JS array, which the
     /// upload writes to the GPU from there. Released, it frees them once
     /// it is uploaded, so no buffer is ever updated from them.
     #[cfg(target_family = "wasm")]
@@ -62,7 +62,7 @@ impl IndexVectorBase {
         result
     }
 
-    /// Port-only: the indexes while they are in a JS array rather than in
+    /// The indexes while they are in a JS array rather than in
     /// wasm memory (`data` is empty then), until they are freed after upload.
     #[cfg(target_family = "wasm")]
     #[must_use]
@@ -100,11 +100,6 @@ impl IndexVectorBase {
         if !self.dirty && self.released && self.buffer.is_some() {
             self.free_raw_data();
         }
-    }
-    pub fn at_mut(&mut self, n: usize) -> &mut u16 {
-        debug_assert!(!self.released);
-        self.dirty = true;
-        &mut self.v[n]
     }
     /// The element count, which stays when the CPU copy is freed.
     #[must_use]

@@ -1,14 +1,12 @@
-// C++ `Bucket` is an abstract class with data members: the data is
-// `BucketBase`, the virtual interface is the `Bucket` trait. Buckets are
-// built on the worker thread and then shared with the render thread
-// (`std::shared_ptr<Bucket>` in `LayerRenderData`): `BucketPtr = Arc<dyn
-// Bucket>`, `Bucket: Send + Sync`. The render thread only reads them, except
-// `upload` (an atomic flag, as in C++) and the geometry it moves out to draw
-// (bucket_geometry.rs).
+// A bucket is what a tile's layout makes of a layer's features for the
+// layer's draws: their vertices, indices and paint values. Workers build
+// buckets and send them to the render thread, which owns each one once, in
+// its tile's contents, and changes it only where it has the contents
+// mutably: feature state and symbol placement in a frame's prepare, the
+// upload that moves its geometry to the draws in the frame's encode. What
+// every bucket has is `BucketBase`; what each type does, the `Bucket` trait.
 
 use std::any::Any;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mln_style_types::image::ImagePositions;
 use mln_tile::TileLayer;
@@ -18,34 +16,28 @@ use mln_util::error::Error;
 use mln_util::identity::SimpleIdentity;
 use mln_wire::{Reader, Wire, Writer};
 
-use crate::gfx::context::Context;
+use crate::bucket_geometry::BucketGeometry;
 use crate::layout::pattern_layout::PatternLayerMap;
-
-pub(crate) type BucketPtr = Arc<dyn Bucket>;
 
 pub(crate) type FeatureStates = mln_util::hash::HashMap<String, mln_style::expression::expression::FeatureState>;
 pub type LayerFeatureStates = mln_util::hash::HashMap<String, FeatureStates>;
 
-/// The data members of `Bucket`.
+/// What every bucket has, whatever its type.
 ///
-/// Port-only: the codec writes what a worker sets (`tile/worker_codec`); the
-/// upload flag, the id and the version are the side's that has the bucket.
-#[derive(Debug, mln_wire::Wire)]
+/// The codec writes what a worker sets (`tile/worker_codec`); the upload flag
+/// and the id are the side's that has the bucket. A copy keeps the id: its
+/// draws are the same.
+#[derive(Clone, Debug, mln_wire::Wire)]
 pub(crate) struct BucketBase {
     #[wire(skip)]
-    pub(crate) uploaded: AtomicBool,
+    pub(crate) uploaded: bool,
     #[wire(skip, default = "SimpleIdentity::new")]
     pub(crate) bucket_id: SimpleIdentity,
-    /// Bumped by `update` (feature state); the render layers compare it to
-    /// refresh their drawables' copies of the vertex data. C++ updates the
-    /// shared vertex vectors in place instead.
-    #[wire(skip)]
-    pub(crate) version: AtomicU64,
 }
 
 impl Default for BucketBase {
     fn default() -> Self {
-        BucketBase { version: AtomicU64::new(0), uploaded: AtomicBool::new(false), bucket_id: SimpleIdentity::new() }
+        BucketBase { uploaded: false, bucket_id: SimpleIdentity::new() }
     }
 }
 
@@ -56,7 +48,20 @@ pub(crate) fn geometry_too_long() -> Error {
     Error::native("a polygon has more vertices than a 16-bit index can address")
 }
 
-pub(crate) trait Bucket: Any + Send + Sync {
+/// What the frame's draws read of the buckets apart from their own
+/// geometry, which depends on the device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UploadNeeds {
+    /// Whether fill outlines draw as instanced quads, which read the fill
+    /// buckets' outline ends.
+    pub(crate) fill_outline_ends: bool,
+    /// Whether fill-extrusion walls draw as quads of their own, which their
+    /// buckets make of their vertices, rather than as instances of a static
+    /// quad.
+    pub(crate) wall_quads: bool,
+}
+
+pub(crate) trait Bucket: Any + Send + CloneBucket {
     fn base(&self) -> &BucketBase;
 
     /// Feature geometries are also used to populate the feature index.
@@ -77,16 +82,16 @@ pub(crate) trait Bucket: Any + Send + Sync {
         Ok(())
     }
 
-    /// Re-evaluates the feature-state dependent attribute values. Takes
-    /// `&self` because the bucket is shared (see the file comment);
-    /// implementations lock their binders.
+    /// Re-evaluates the feature-state dependent attribute values of the
+    /// layer `layer_id`, and returns whether the bucket has any.
     fn update(
-        &self,
+        &mut self,
         _states: &FeatureStates,
         _layer: &TileLayer<'_>,
         _layer_id: &str,
         _image_positions: &ImagePositions,
-    ) {
+    ) -> bool {
+        false
     }
 
     /// How far above the ground the bucket's highest content is raised,
@@ -95,20 +100,17 @@ pub(crate) trait Bucket: Any + Send + Sync {
         0.0
     }
 
-    /// The `version` counter (see `BucketBase::version`).
-    fn get_version(&self) -> u64 {
-        self.base().version.load(Ordering::SeqCst)
-    }
-
     fn record_sdf_pattern(&mut self, _layer_id: &str, _sdf: bool) {}
     fn is_sdf_pattern(&self, _layer_id: &str) -> bool {
         false
     }
 
-    /// As long as this bucket has a Prepare render pass, this function is
-    /// getting called. Typically, this only happens once when the bucket is
-    /// being rendered for the first time.
-    fn upload(&self, context: &Context);
+    /// Readies the bucket for its tile's draws, once it has data and until
+    /// it changes again: moves its vertices and indices into `geometry`,
+    /// the gfx vectors the draws share, all but the values that feature
+    /// state rewrites, which stay with the bucket. What else the draws
+    /// read, `needs` says.
+    fn upload(&mut self, geometry: &mut BucketGeometry, needs: UploadNeeds);
 
     fn has_data(&self) -> bool;
 
@@ -118,7 +120,7 @@ pub(crate) trait Bucket: Any + Send + Sync {
     fn write_wire(&self, w: &mut Writer);
 
     fn needs_upload(&self) -> bool {
-        self.has_data() && !self.base().uploaded.load(Ordering::SeqCst)
+        !self.base().uploaded && self.has_data()
     }
 
     fn get_id(&self) -> SimpleIdentity {
@@ -126,7 +128,21 @@ pub(crate) trait Bucket: Any + Send + Sync {
     }
 }
 
+/// A bucket's copy, for the tile in another world copy, which draws the
+/// same geometry: what the bucket moved to its tile's geometry, the copy
+/// finds in a copy of that.
+pub(crate) trait CloneBucket {
+    fn clone_bucket(&self) -> Box<dyn Bucket>;
+}
+
+impl<B: Bucket + Clone> CloneBucket for B {
+    fn clone_bucket(&self) -> Box<dyn Bucket> {
+        Box::new(self.clone())
+    }
+}
+
 /// The bucket of a layer type that doesn't lay out: there is no value.
+#[derive(Clone)]
 pub(crate) enum NoBucket {}
 
 impl Bucket for NoBucket {
@@ -134,7 +150,7 @@ impl Bucket for NoBucket {
         match *self {}
     }
 
-    fn upload(&self, _context: &Context) {
+    fn upload(&mut self, _geometry: &mut BucketGeometry, _needs: UploadNeeds) {
         match *self {}
     }
 
@@ -163,10 +179,15 @@ impl dyn Bucket {
         let any: &dyn Any = self;
         any.downcast_ref()
     }
+
+    /// Downcasts to the bucket type `B`; `None` if it is another type.
+    pub(crate) fn downcast_mut<B: Bucket>(&mut self) -> Option<&mut B> {
+        let any: &mut dyn Any = self;
+        any.downcast_mut()
+    }
 }
 
-/// `bucket` as a `B`, the same allocation, or `None` if it is another type.
-pub(crate) fn recover<B: Bucket>(bucket: &BucketPtr) -> Option<Arc<B>> {
-    let any: Arc<dyn Any + Send + Sync> = Arc::<dyn Bucket>::clone(bucket);
-    any.downcast().ok()
-}
+// bench: `bench.rs` reaches the bucket a benchmark's layer places by this
+// path, which other commits' `bench.rs` builds against too.
+#[cfg(feature = "bench")]
+pub(crate) use crate::render_layer::hold_symbol_bucket as recover;

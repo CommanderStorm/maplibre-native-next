@@ -1,17 +1,5 @@
-//! The render layers and their layer tweakers.
+//! The render layers.
 
-pub(crate) mod background_layer_tweaker;
-pub(crate) mod circle_layer_tweaker;
-pub(crate) mod collision_layer_tweaker;
-pub(crate) mod color_relief_layer_tweaker; // dem-heatmap
-pub(crate) mod fill_extrusion_layer_tweaker;
-pub(crate) mod fill_layer_tweaker;
-pub(crate) mod heatmap_layer_tweaker; // dem-heatmap
-pub(crate) mod heatmap_texture_layer_tweaker; // dem-heatmap
-pub(crate) mod hillshade_layer_tweaker; // dem-heatmap
-pub(crate) mod hillshade_prepare_layer_tweaker; // dem-heatmap
-pub(crate) mod line_layer_tweaker;
-pub(crate) mod raster_layer_tweaker;
 pub(crate) mod render_background_layer;
 pub(crate) mod render_circle_layer;
 pub(crate) mod render_color_relief_layer; // dem-heatmap
@@ -23,99 +11,36 @@ pub(crate) mod render_hillshade_layer; // dem-heatmap
 pub(crate) mod render_line_layer;
 pub(crate) mod render_raster_layer;
 pub(crate) mod render_symbol_layer;
-pub(crate) mod symbol_layer_tweaker;
-
-use std::rc::Rc;
-use std::sync::Arc;
 
 use mln_gfx::vertex_vector::VertexVectorBasePtr;
-use mln_style::CrossfadeParameters;
 use mln_style::layer_type::ErasedLayerStyle;
-use mln_style::layers::{Background, BackgroundPaintProperties};
 
-use crate::bucket::{Bucket, BucketPtr};
-use crate::drawable::Drawable;
-use crate::layer_type::{ErasedEvaluatedLayer, evaluated};
-use crate::render_tile::RenderTile;
+use crate::bucket::UploadNeeds;
+use crate::draw::DrawObjects;
+use crate::layer_drawing::BucketChanges;
+use crate::render_tile::FrameTile;
 
-pub(crate) fn background_layer_properties(
-    properties: &Arc<dyn ErasedEvaluatedLayer>,
-) -> &BackgroundPaintProperties::PossiblyEvaluated {
-    &evaluated::<Background>(properties).paint
-}
-
-pub(crate) fn background_crossfade(properties: &Arc<dyn ErasedEvaluatedLayer>) -> &CrossfadeParameters {
-    &evaluated::<Background>(properties).crossfade
-}
-
-/// The bucket a drawable's data comes from, kept alive by the drawable, and
-/// the id of the layer whose binders in it the drawable uses.
-pub(crate) struct DrawableBinders {
-    pub(crate) bucket: BucketPtr,
-    pub(crate) layer_id: String,
-    /// The bucket's version when the drawable's attribute data was copied;
-    /// see `refresh_if_bucket_updated`.
-    pub(crate) version: std::cell::Cell<u64>,
-}
-
-impl DrawableBinders {
-    #[must_use]
-    pub(crate) fn new(bucket: &BucketPtr, layer_id: &str) -> Rc<Self> {
-        Rc::new(DrawableBinders {
-            bucket: Arc::clone(bucket),
-            layer_id: layer_id.to_owned(),
-            version: std::cell::Cell::new(bucket.get_version()),
-        })
+/// What the layers' draws read of the buckets on the device of `context`.
+pub(crate) fn upload_needs(context: &crate::gfx::context::Context) -> UploadNeeds {
+    UploadNeeds {
+        fill_outline_ends: render_fill_layer::draws_outline_quads(context),
+        wall_quads: !render_fill_extrusion_layer::instanced_walls(context),
     }
 }
 
-/// Refreshes the drawable's copies of the bucket's data-driven attributes
-/// when the bucket's version moved since the copy: `refresh(attrs)` re-reads
-/// them into the drawable's attribute array, its instance attributes where
-/// it has them, and new attributes are uploaded again.
-pub(crate) fn refresh_if_bucket_updated(
-    drawable: &mut Drawable,
+/// Copies the bucket's data-driven attributes into a draw again where
+/// `changes` says their values changed: `refresh(attrs)` reads them into its
+/// instance attributes where it has them, else into its vertex attributes,
+/// which then upload again.
+pub(crate) fn refresh_paint_attributes(
+    objects: &mut DrawObjects,
+    changes: BucketChanges,
     refresh: impl FnOnce(&mut mln_gfx::vertex_attribute::VertexAttributeArray),
 ) {
-    let Some(binders) = &drawable.binders else {
-        return;
-    };
-    let version = binders.bucket.get_version();
-    if binders.version.get() == version {
+    if !changes.paint {
         return;
     }
-    binders.version.set(version);
-    if let Some(attrs) = drawable.instance_attributes.as_ref().or(drawable.vertex_attributes.as_ref()) {
-        refresh(&mut attrs.borrow_mut());
-    }
-}
-
-/// The bucket of `binders`, as the type the layer created, and the id of the
-/// layer.
-pub(crate) fn slot_bucket<B: Bucket>(binders: &DrawableBinders) -> Option<(&B, &str)> {
-    let bucket = (*binders.bucket).downcast_ref::<B>()?;
-    Some((bucket, binders.layer_id.as_str()))
-}
-
-/// The tile a drawable draws: the shared tiles of the frame, and the tile's
-/// index in them.
-pub(crate) struct DrawableRenderTile {
-    pub(crate) owner: Rc<Vec<RenderTile>>,
-    pub(crate) index: usize,
-}
-
-impl DrawableRenderTile {
-    /// `tile` of `owner`, or `None` where `owner` doesn't hold it.
-    #[must_use]
-    pub(crate) fn new(owner: &Rc<Vec<RenderTile>>, tile: &RenderTile) -> Option<Self> {
-        let index = owner.iter().position(|t| std::ptr::eq(t, tile))?;
-        Some(DrawableRenderTile { owner: Rc::clone(owner), index })
-    }
-
-    #[must_use]
-    pub(crate) fn tile(&self) -> &RenderTile {
-        &self.owner[self.index]
-    }
+    refresh(objects.paint_attributes_mut());
 }
 
 /// A shared gfx vertex vector holding a copy of `vertices`, for data that
@@ -125,47 +50,18 @@ pub(crate) fn shared_vertices<V: bytemuck::Pod>(vertices: &[V]) -> VertexVectorB
     crate::bucket_geometry::released_vertices(vertices)
 }
 
-/// The tile's render data for `pass`. A free function, so that the result
-/// borrows only the tile (the layers mutate themselves while they hold it).
-pub(crate) fn render_data_for_pass<'a>(
-    tile: &'a RenderTile,
+/// The tile's bucket of the layer `style`, if it was laid out to draw in
+/// `pass`.
+pub(crate) fn layer_bucket_for_pass<'a>(
+    tile: FrameTile<'a>,
     style: &dyn ErasedLayerStyle,
     pass: crate::render_pass::RenderPass,
-) -> Option<&'a crate::render_layer::LayerRenderData> {
-    let render_data = tile.get_layer_render_data(style)?;
+) -> Option<crate::render_layer::LayerBucket<'a>> {
+    let render_data = tile.layer_bucket(style)?;
     if (render_data.layer.render_passes() & pass.underlying_type()) != 0 { Some(render_data) } else { None }
 }
 
 #[must_use]
 pub(crate) fn cast_matrix(m: &[f64; 16]) -> [f32; 16] {
     std::array::from_fn(|i| m[i] as f32)
-}
-
-/// Updates the drawables of a tile in `pass` of `layer_group`. `update`
-/// returns true if it updated the drawable, false if it skipped it because
-/// it's for a previous style. Returns true if drawables were updated.
-pub(crate) fn update_tile(
-    layer_group: &mut crate::layer_group::LayerGroup,
-    render_pass: crate::render_pass::RenderPass,
-    tile_id: &mln_tile_id::OverscaledTileID,
-    mut update: impl FnMut(&mut Drawable) -> bool,
-) -> bool {
-    let mut any_updated = false;
-    let mut un_updated_drawables = false;
-    layer_group.visit_drawables_for(render_pass, tile_id, |drawable| {
-        if update(drawable) {
-            any_updated = true;
-        } else {
-            un_updated_drawables = true;
-        }
-    });
-
-    // If any are updated, the caller shouldn't add new ones. If none are
-    // updated and some were skipped, remove those. This is to handle the
-    // case that the style layer changes but the bucket is not re-created.
-    if !any_updated && un_updated_drawables {
-        layer_group.remove_drawables(render_pass, tile_id);
-    }
-
-    any_updated
 }

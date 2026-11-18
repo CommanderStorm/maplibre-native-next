@@ -110,6 +110,17 @@ impl<K, V> VecMap<K, V> {
         self.values.iter()
     }
 
+    /// The entry at `index` in key order.
+    #[must_use]
+    pub fn get_index(&self, index: usize) -> Option<(&K, &V)> {
+        Some((self.keys.get(index)?, self.values.get(index)?))
+    }
+
+    /// The entry at `index` in key order.
+    pub fn get_index_mut(&mut self, index: usize) -> Option<(&K, &mut V)> {
+        Some((self.keys.get(index)?, self.values.get_mut(index)?))
+    }
+
     pub fn values_mut(&mut self) -> std::slice::IterMut<'_, V> {
         self.values.iter_mut()
     }
@@ -164,6 +175,16 @@ impl<K: Ord, V> VecMap<K, V> {
         self.search(key).ok().map(|i| &mut self.values[i])
     }
 
+    /// The position of `key`'s entry in key order, which stays its position
+    /// until an entry is inserted or removed.
+    #[must_use]
+    pub fn index_of<Q: Ord + ?Sized>(&self, key: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+    {
+        self.search(key).ok()
+    }
+
     pub fn contains_key<Q: Ord + ?Sized>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -206,6 +227,24 @@ impl<K: Ord, V> VecMap<K, V> {
     {
         let i = self.search(key).ok()?;
         Some((self.keys.remove(i), self.values.remove(i)))
+    }
+
+    /// The value of `key`, which is `value()`, under `key.to_owned()`, where
+    /// the map has none. Unlike [`entry`](Self::entry), it makes an owned
+    /// key only for an entry it inserts.
+    pub fn get_or_insert_with<Q>(&mut self, key: &Q, value: impl FnOnce() -> V) -> &mut V
+    where
+        K: Borrow<Q>,
+        Q: Ord + ToOwned<Owned = K> + ?Sized,
+    {
+        let i = match self.search(key) {
+            Ok(i) => i,
+            Err(i) => {
+                self.insert_at(i, key.to_owned(), value());
+                i
+            }
+        };
+        &mut self.values[i]
     }
 
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
@@ -643,6 +682,14 @@ mod tests {
         let map: VecMap<String, u32> = [("b".to_owned(), 2), ("a".to_owned(), 1)].into();
         assert_eq!(map["a"], 1);
         assert_eq!(map["b"], 2);
+    }
+
+    #[test]
+    fn get_or_insert_with_inserts_only_a_missing_key() {
+        let mut map: VecMap<String, u32> = [("b".to_owned(), 2)].into();
+        *map.get_or_insert_with("b", || unreachable!()) += 1;
+        *map.get_or_insert_with("a", || 10) += 1;
+        assert!(map.iter().eq([(&"a".to_owned(), &11), (&"b".to_owned(), &3)]));
     }
 
     #[test]

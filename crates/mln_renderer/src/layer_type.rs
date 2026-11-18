@@ -22,10 +22,10 @@ use mln_vec_map::VecSet;
 use mln_wire::{Reader, Wire, Writer};
 use smallvec::SmallVec;
 
-use crate::bucket::{Bucket, BucketPtr};
+use crate::bucket::Bucket;
 use crate::layout::layout::{BuildParams, Layout, LayoutParameters, SourceLayer};
 use crate::layout::tile_layout::{Built, Resolved};
-use crate::render_layer::{LayerRenderData, RenderLayer};
+use crate::render_layer::RenderLayer;
 
 /// A layer type that the renderer draws.
 pub(crate) trait LayerType: StyleLayerType {
@@ -183,19 +183,6 @@ impl std::fmt::Debug for dyn ErasedEvaluatedLayer {
     }
 }
 
-/// `layer` as a `T` layer's values.
-///
-/// # Panics
-///
-/// If `layer` is another type's.
-pub(crate) fn evaluated<T: LayerType>(layer: &Arc<dyn ErasedEvaluatedLayer>) -> &EvaluatedLayer<T> {
-    let any: &dyn Any = &**layer;
-    match any.downcast_ref() {
-        Some(layer) => layer,
-        None => panic!("the evaluated values of a {} layer, not a {} layer", layer.style().info().name, T::INFO.name),
-    }
-}
-
 /// A layer type that the renderer draws, whichever it is.
 pub(crate) trait ErasedLayerType: ErasedStyleLayerType {
     /// The render layer that draws the layer `style`, or `None` if `style`
@@ -222,7 +209,7 @@ pub(crate) trait ErasedLayerType: ErasedStyleLayerType {
     fn read_evaluated(&self, r: &mut Reader<'_>) -> Option<Arc<dyn ErasedEvaluatedLayer>>;
 
     /// Reads a bucket of the type, which [`Bucket::write_wire`] wrote.
-    fn read_bucket(&self, r: &mut Reader<'_>) -> Option<BucketPtr>;
+    fn read_bucket(&self, r: &mut Reader<'_>) -> Option<Box<dyn Bucket>>;
 }
 
 impl<T: LayerType> ErasedLayerType for LayerTypeEntry<T> {
@@ -265,8 +252,8 @@ impl<T: LayerType> ErasedLayerType for LayerTypeEntry<T> {
         }))
     }
 
-    fn read_bucket(&self, r: &mut Reader<'_>) -> Option<BucketPtr> {
-        Some(Arc::new(T::Bucket::read(r)?))
+    fn read_bucket(&self, r: &mut Reader<'_>) -> Option<Box<dyn Bucket>> {
+        Some(Box::new(T::Bucket::read(r)?))
     }
 }
 
@@ -318,13 +305,10 @@ impl<T: LayerType> ErasedLayout for TypedLayout<T> {
         if !bucket.has_data() {
             return Ok(());
         }
-        let bucket: BucketPtr = Arc::new(bucket);
-        for (id, layer) in self.0.layers() {
-            built.render_data.entry(id.clone()).or_insert_with(|| LayerRenderData {
-                bucket: Arc::clone(&bucket),
-                layer: Arc::<EvaluatedLayer<T>>::clone(layer),
-            });
-        }
+        let layers = self.0.layers().iter().map(|(id, layer)| -> (String, Arc<dyn ErasedEvaluatedLayer>) {
+            (id.clone(), Arc::<EvaluatedLayer<T>>::clone(layer))
+        });
+        built.buckets.add(Box::new(bucket), layers);
         Ok(())
     }
 }
@@ -357,26 +341,13 @@ mod tests {
     }
 
     #[test]
-    fn evaluated_gets_the_values_of_their_type() {
-        let layer = background();
-        let layer = evaluated::<Background>(&layer);
-        assert_eq!(*layer.paint.background_color.uniform(), Color::new(0.25, 0.5, 0.75, 1.0));
-        assert_eq!(*layer.paint.background_opacity.uniform(), 0.5);
-        assert_eq!(layer.crossfade.t, 0.25);
-    }
-
-    #[test]
-    #[should_panic(expected = "background layer, not a circle layer")]
-    fn evaluated_panics_for_another_type() {
-        let layer = background();
-        let _ = evaluated::<Circle>(&layer);
-    }
-
-    #[test]
     fn recover_keeps_the_allocation() {
         let layer = background();
         let recovered = EvaluatedLayer::<Background>::recover(&layer).unwrap();
         assert!(std::ptr::addr_eq(Arc::as_ptr(&recovered), Arc::as_ptr(&layer)));
+        assert_eq!(*recovered.paint.background_color.uniform(), Color::new(0.25, 0.5, 0.75, 1.0));
+        assert_eq!(*recovered.paint.background_opacity.uniform(), 0.5);
+        assert_eq!(recovered.crossfade.t, 0.25);
         assert!(EvaluatedLayer::<Circle>::recover(&layer).is_none());
     }
 

@@ -7,12 +7,11 @@ use mln_map_types::{MapDebugOptions, TransformState};
 use mln_util::Color;
 use mln_vec_map::VecMap;
 
-use crate::gfx::context::Context; // layers: debug
-use crate::layer_group::LayerGroup;
-use crate::paint_parameters::{PaintParameters, TransformParameters};
-use crate::sources::render_tile_source::{PolylineLayerTweaker, debug_line_properties};
+use crate::paint_parameters::TransformParameters;
+use crate::render_source::TileOrder;
+use crate::sources::render_tile_source::DebugLayer;
 
-/// The kinds of debug drawables (layers: debug).
+/// The kinds of debug overlays (layers: debug).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum DebugType {
     TextOutline,
@@ -20,35 +19,13 @@ pub(crate) enum DebugType {
     Border,
 }
 
-/// A debug overlay's layer group, with the tweaker that sets its uniforms
-/// (layers: debug).
-pub(crate) struct DebugLayer {
-    pub(crate) group: LayerGroup,
-    pub(crate) tweaker: PolylineLayerTweaker,
-}
-
-impl DebugLayer {
-    pub(crate) fn new(type_: DebugType) -> Self {
-        DebugLayer { group: LayerGroup::tiles(), tweaker: PolylineLayerTweaker::new(debug_line_properties(type_)) }
-    }
-}
-
 /// The debug overlays, by debug type (layers: debug).
-pub(crate) type DebugLayerGroupMap = VecMap<DebugType, DebugLayer>;
+pub(crate) type DebugLayers = VecMap<DebugType, DebugLayer>;
 
-/// The layer group of the debug overlay `type_` in `debug_layer_groups`,
-/// made if it isn't there (layers: debug).
-pub(crate) fn debug_layer_group(debug_layer_groups: &mut DebugLayerGroupMap, type_: DebugType) -> &mut LayerGroup {
-    &mut debug_layer_groups.entry(type_).or_insert_with(|| DebugLayer::new(type_)).group
-}
-
-/// The render item of a source. The layer render items are the concrete
-/// `LayerRenderItem`.
-pub(crate) trait RenderItem {
-    fn upload(&self, context: &Context);
-    /// Updates the item's debug drawables; a no-op for the items that have
-    /// none (the image source) (layers: debug).
-    fn update_debug_drawables(&self, _debug_layer_groups: &mut DebugLayerGroupMap, _parameters: &PaintParameters<'_>) {}
+/// The debug overlay `type_` in `debug_layers`, made if it isn't there
+/// (layers: debug).
+pub(crate) fn debug_layer(debug_layers: &mut DebugLayers, type_: DebugType) -> &mut DebugLayer {
+    debug_layers.entry(type_).or_insert_with(|| DebugLayer::new(type_))
 }
 
 /// A layer the frame draws, by its index in the orchestrator's layers.
@@ -57,6 +34,9 @@ pub(crate) struct LayerRenderItem {
     /// The id of the orchestrator's render source, `None` for layers without
     /// a source.
     pub(crate) source: Option<String>,
+    /// The order the layer draws its source's tiles in, which the layer's
+    /// prepare returns; `None` for a layer without tiles.
+    pub(crate) tile_order: Option<TileOrder>,
 }
 
 pub(crate) struct RenderTreeParameters {
@@ -97,7 +77,6 @@ impl RenderTreeParameters {
 pub(crate) struct RenderTree {
     parameters: Box<RenderTreeParameters>,
     layer_render_items: VecMap<u32, LayerRenderItem>,
-    source_render_items: Vec<Box<dyn RenderItem>>,
     /// When the frame's update started.
     start_time: mln_util::time::Instant,
     /// When the frame started placing symbols.
@@ -108,11 +87,10 @@ impl RenderTree {
     pub(crate) fn new(
         parameters: Box<RenderTreeParameters>,
         layer_render_items: VecMap<u32, LayerRenderItem>,
-        source_render_items: Vec<Box<dyn RenderItem>>,
         start_time: mln_util::time::Instant,
         symbols_start: mln_util::time::Instant,
     ) -> Self {
-        RenderTree { parameters, layer_render_items, source_render_items, start_time, symbols_start }
+        RenderTree { parameters, layer_render_items, start_time, symbols_start }
     }
 
     /// When the frame started placing symbols.
@@ -124,11 +102,6 @@ impl RenderTree {
     #[must_use]
     pub(crate) fn get_layer_render_item_map(&self) -> &VecMap<u32, LayerRenderItem> {
         &self.layer_render_items
-    }
-
-    #[must_use]
-    pub(crate) fn get_source_render_items(&self) -> &[Box<dyn RenderItem>] {
-        &self.source_render_items
     }
 
     #[must_use]
