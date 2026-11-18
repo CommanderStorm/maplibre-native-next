@@ -81,8 +81,6 @@ pub type mln_render_session = u64;
 pub type mln_acquired_frame = u64;
 /// The frame results that mln_render_session_drain_frame_results() took.
 pub type mln_render_frame_batch = u64;
-/// Demands render sessions' frames at a display's refreshes.
-pub type mln_frame_pacer = u64;
 /// A queue that holds callback calls until the caller dispatches them.
 pub type mln_delivery_queue = u64;
 /** A range of bytes, such as UTF-8 text.
@@ -3903,25 +3901,27 @@ pub struct mln_render_abandon_result {
     pub quarantined_resource_count: u32,
     pub reserved: u32,
 }
-pub const MLN_FRAME_PACER_OPTION_MAXIMUM_FRAMES_PER_SECOND: mln_frame_pacer_option_field = 1;
-/** Removes the frame rate limit, so the pacer can demand frames at every
- display refresh, as it does by default. It can't be combined with
- MLN_FRAME_PACER_OPTION_MAXIMUM_FRAMES_PER_SECOND.*/
-pub const MLN_FRAME_PACER_OPTION_UNLIMITED_FRAMES_PER_SECOND: mln_frame_pacer_option_field = 2;
-/// The optional settings of a frame pacer.
-pub type mln_frame_pacer_option_field = u32;
-/// A set of mln_frame_pacer_option_field bits.
-pub type mln_frame_pacer_option_fields = u32;
-/// Options for creating a frame pacer, or for mln_frame_pacer_set_options().
+pub const MLN_FRAME_PACING_OPTION_MAXIMUM_FRAMES_PER_SECOND: mln_frame_pacing_option_field = 1;
+pub const MLN_FRAME_PACING_OPTION_VIEW: mln_frame_pacing_option_field = 2;
+/// The optional settings of a render session's frame pacing.
+pub type mln_frame_pacing_option_field = u32;
+/// A set of mln_frame_pacing_option_field bits.
+pub type mln_frame_pacing_option_fields = u32;
+/// Options for mln_render_session_set_frame_pacing().
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct mln_frame_pacer_options {
+pub struct mln_frame_pacing_options {
     pub size: u32,
-    pub fields: mln_frame_pacer_option_fields,
-    /** The most frames per second that the pacer demands, greater than zero. The
- pacer skips display refreshes to stay within it. By default, it can demand
- frames at every refresh.*/
+    pub fields: mln_frame_pacing_option_fields,
+    /** The most frames per second that the library demands, greater than zero.
+ It skips display refreshes to stay within it. By default, it can demand a
+ frame at every refresh.*/
     pub maximum_frames_per_second: u32,
+    /** The `NSView*` on macOS, or the `UIView*` on iOS and tvOS, that shows the
+ session's frames, to pace them to its window's display rather than the
+ main one. On iOS and tvOS, set the pacing again when the scene moves to
+ another screen, as `windowScene:didUpdateEffectiveGeometry:` reports.*/
+    pub view: *mut ::core::ffi::c_void,
 }
 /// Any type.
 pub const MLN_STYLE_EXPRESSION_TYPE_VALUE: mln_style_expression_type_kind = 0;
