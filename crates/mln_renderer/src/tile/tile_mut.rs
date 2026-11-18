@@ -119,8 +119,9 @@ impl<'a> TileMut<'a> {
         }
     }
 
-    /// A required tile loads from the network or its custom loader; an
-    /// optional one stops, unless it is a custom tile that is renderable.
+    /// A required tile loads from the network, unless it has fresh data from
+    /// there, or from its custom loader; an optional one stops, unless it is
+    /// a custom tile that is renderable.
     pub(crate) fn set_necessity(&mut self, necessity: TileNecessity) {
         let unchanged = std::mem::replace(&mut self.tile.load.necessity, necessity) == necessity;
         let required = necessity == TileNecessity::Required;
@@ -128,7 +129,7 @@ impl<'a> TileMut<'a> {
         match &mut self.tile.load.origin {
             OriginLoad::Tileset(tileset) if !unchanged => {
                 if required {
-                    if tileset.is_idle() {
+                    if tileset.is_idle() && !tileset.is_fresh(mln_util::chrono::now()) {
                         self.request(Method::Network);
                     }
                 } else if matches!(tileset.fetch, Fetch::Network { .. }) {
@@ -298,6 +299,11 @@ impl<'a> TileMut<'a> {
     /// The tile couldn't load or lay out: it keeps what it shows.
     pub(crate) fn fail(&mut self, error: Error) {
         self.tile.settled = true;
+        // Data that failed isn't fresh: the tile requests it again when
+        // required again.
+        if let OriginLoad::Tileset(tileset) = &mut self.tile.load.origin {
+            tileset.from_network = false;
+        }
         self.action(TileOperation::Error);
         self.store.error(&self.source.id, self.tile.id, error);
     }
@@ -699,6 +705,7 @@ impl<'a> TileMut<'a> {
         }
         resource.prior_expires = res.expires;
         (tileset.modified, tileset.expires) = (res.modified, res.expires);
+        tileset.from_network = method == Method::Network;
         self.action(match method {
             Method::Network => TileOperation::LoadFromNetwork,
             Method::Cache => TileOperation::LoadFromCache,
