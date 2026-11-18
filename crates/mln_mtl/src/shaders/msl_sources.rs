@@ -541,12 +541,19 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 #endif
 
     const float2 texsize = paintParamsUBO.pattern_atlas_texsize;
-    const float2 imagecoord = glMod(float2(in.pos_a), 1.0);
-    const float2 pos = atlas_pos(props.pattern_tl_a / texsize, (props.pattern_br_a - props.pattern_tl_a) / texsize * imagecoord);
-    const float4 color1 = image.sample(image_sampler, pos);
-    const float2 imagecoord_b = glMod(float2(in.pos_b), 1.0);
-    const float2 pos2 = atlas_pos(props.pattern_tl_b / texsize, (props.pattern_br_b - props.pattern_tl_b) / texsize * imagecoord_b);
-    const float4 color2 = image.sample(image_sampler, pos2);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    float4 color1 = float4(0.0);
+    if (props.mix < 1.0) {
+        const float2 imagecoord = glMod(float2(in.pos_a), 1.0);
+        const float2 pos = atlas_pos(props.pattern_tl_a / texsize, (props.pattern_br_a - props.pattern_tl_a) / texsize * imagecoord);
+        color1 = image.sample(image_sampler, pos);
+    }
+    float4 color2 = float4(0.0);
+    if (props.mix > 0.0) {
+        const float2 imagecoord_b = glMod(float2(in.pos_b), 1.0);
+        const float2 pos2 = atlas_pos(props.pattern_tl_b / texsize, (props.pattern_br_b - props.pattern_tl_b) / texsize * imagecoord_b);
+        color2 = image.sample(image_sampler, pos2);
+    }
 
     return half4(mix(color1, color2, props.mix) * props.opacity);
 }
@@ -1300,6 +1307,9 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     // 2. Binary search to find surrounding elevation stops (l and r indices)
     int r = tileProps.color_ramp_size - 1;
     int l = 0;
+    // The elevations at l and r, as the search reads them.
+    float el_l = 0.0;
+    float el_r = 0.0;
 
     // Perform binary search
     while (r - l > 1) {
@@ -1308,14 +1318,21 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 
         if (el < el_m) {
             r = m;
+            el_r = el_m;
         } else {
             l = m;
+            el_l = el_m;
         }
     }
 
-    // 3. Get the elevation values and colors at the stops
-    float el_l = getElevationStop(l, tileProps.color_ramp_size, elevationStops, elevation_stops_sampler);
-    float el_r = getElevationStop(r, tileProps.color_ramp_size, elevationStops, elevation_stops_sampler);
+    // The search never reads the ramp's ends, so read an end that l or r
+    // still is.
+    if (l == 0) {
+        el_l = getElevationStop(0, tileProps.color_ramp_size, elevationStops, elevation_stops_sampler);
+    }
+    if (r == tileProps.color_ramp_size - 1) {
+        el_r = getElevationStop(r, tileProps.color_ramp_size, elevationStops, elevation_stops_sampler);
+    }
 
     float4 color_l = getColorStop(l, tileProps.color_ramp_size, colorStops, color_stops_sampler);
     float4 color_r = getColorStop(r, tileProps.color_ramp_size, colorStops, color_stops_sampler);
@@ -1833,13 +1850,19 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     const float2 pattern_tl_b = pattern_to.xy;
     const float2 pattern_br_b = pattern_to.zw;
 
-    const float2 imagecoord = glMod(in.pos_a, 1.0);
-    const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
-    const float4 color1 = image0.sample(image0_sampler, pos);
-
-    const float2 imagecoord_b = glMod(in.pos_b, 1.0);
-    const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    const float4 color2 = image0.sample(image0_sampler, pos2);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    float4 color1 = float4(0.0);
+    if (props.fade < 1.0) {
+        const float2 imagecoord = glMod(in.pos_a, 1.0);
+        const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
+        color1 = image0.sample(image0_sampler, pos);
+    }
+    float4 color2 = float4(0.0);
+    if (props.fade > 0.0) {
+        const float2 imagecoord_b = glMod(in.pos_b, 1.0);
+        const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color2 = image0.sample(image0_sampler, pos2);
+    }
 
     return {half4(mix(color1, color2, props.fade) * in.lighting)/*, in.position.z*/};
 }
@@ -2072,13 +2095,19 @@ fragment FragmentOutput fragmentMain(FragmentStage in [[stage_in]],
     const float2 pattern_tl_b = pattern_to.xy;
     const float2 pattern_br_b = pattern_to.zw;
 
-    const float2 imagecoord = glMod(in.pos_a, 1.0);
-    const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
-    const float4 color1 = image0.sample(image0_sampler, pos);
-
-    const float2 imagecoord_b = glMod(in.pos_b, 1.0);
-    const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    const float4 color2 = image0.sample(image0_sampler, pos2);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    float4 color1 = float4(0.0);
+    if (props.fade < 1.0) {
+        const float2 imagecoord = glMod(in.pos_a, 1.0);
+        const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
+        color1 = image0.sample(image0_sampler, pos);
+    }
+    float4 color2 = float4(0.0);
+    if (props.fade > 0.0) {
+        const float2 imagecoord_b = glMod(in.pos_b, 1.0);
+        const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color2 = image0.sample(image0_sampler, pos2);
+    }
 
     return {half4(mix(color1, color2, props.fade) * in.lighting)/*, in.position.z*/};
 }
@@ -2616,13 +2645,19 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     const float2 pattern_tl_b = pattern_to.xy;
     const float2 pattern_br_b = pattern_to.zw;
 
-    const float2 imagecoord = glMod(in.v_pos_a, 1.0);
-    const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
-    const float4 color1 = image0.sample(image0_sampler, pos);
-
-    const float2 imagecoord_b = glMod(in.v_pos_b, 1.0);
-    const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    const float4 color2 = image0.sample(image0_sampler, pos2);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    float4 color1 = float4(0.0);
+    if (props.fade < 1.0) {
+        const float2 imagecoord = glMod(in.v_pos_a, 1.0);
+        const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
+        color1 = image0.sample(image0_sampler, pos);
+    }
+    float4 color2 = float4(0.0);
+    if (props.fade > 0.0) {
+        const float2 imagecoord_b = glMod(in.v_pos_b, 1.0);
+        const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color2 = image0.sample(image0_sampler, pos2);
+    }
 
     // TODO: Should triangate the lines into triangles to support thick line and edge antialiased.
     const float dist = length(in.v_pos - in.position.xy);
@@ -3363,13 +3398,19 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     const float2 pattern_tl_b = pattern_to.xy;
     const float2 pattern_br_b = pattern_to.zw;
 
-    const float2 imagecoord = glMod(in.v_pos_a, 1.0);
-    const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
-    const float4 color1 = image0.sample(image0_sampler, pos);
-
-    const float2 imagecoord_b = glMod(in.v_pos_b, 1.0);
-    const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    const float4 color2 = image0.sample(image0_sampler, pos2);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    float4 color1 = float4(0.0);
+    if (props.fade < 1.0) {
+        const float2 imagecoord = glMod(in.v_pos_a, 1.0);
+        const float2 pos = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord);
+        color1 = image0.sample(image0_sampler, pos);
+    }
+    float4 color2 = float4(0.0);
+    if (props.fade > 0.0) {
+        const float2 imagecoord_b = glMod(in.v_pos_b, 1.0);
+        const float2 pos2 = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color2 = image0.sample(image0_sampler, pos2);
+    }
 
     if (tileProps.sdf > 0.5) {
         const float sdf_edge = (256.0 - 64.0) / 256.0;
@@ -5396,19 +5437,27 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     const float blur2 = (blur + 1.0 / DEVICE_PIXEL_RATIO) * in.gamma_scale;
     const float alpha = clamp(min(dist - (in.width2.y - blur2), in.width2.x - dist) / blur2, 0.0, 1.0);
 
-    const float x_a = glMod(in.linesofar / pattern_size_a.x * aspect_a, 1.0);
-    const float x_b = glMod(in.linesofar / pattern_size_b.x * aspect_b, 1.0);
-
     const float y = 0.5 * in.normal.y + 0.5;
 
     const float2 texel_size = 1.0 / tileProps.texsize;
     const float2 half_texel = 0.5 * texel_size;
-    float2 pos_a = atlas_pos((pattern_tl_a - 1.0) * texel_size, (pattern_br_a - pattern_tl_a + 2.0) * texel_size * float2(x_a, y));
-    pos_a = clamp(pos_a, (pattern_tl_a - 1.0) * texel_size + half_texel, (pattern_br_a + 1.0) * texel_size - half_texel);
-    float2 pos_b = atlas_pos((pattern_tl_b - 1.0) * texel_size, (pattern_br_b - pattern_tl_b + 2.0) * texel_size * float2(x_b, y));
-    pos_b = clamp(pos_b, (pattern_tl_b - 1.0) * texel_size + half_texel, (pattern_br_b + 1.0) * texel_size - half_texel);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    float4 color_a = float4(0.0);
+    if (tileProps.fade < 1.0) {
+        const float x_a = glMod(in.linesofar / pattern_size_a.x * aspect_a, 1.0);
+        float2 pos_a = atlas_pos((pattern_tl_a - 1.0) * texel_size, (pattern_br_a - pattern_tl_a + 2.0) * texel_size * float2(x_a, y));
+        pos_a = clamp(pos_a, (pattern_tl_a - 1.0) * texel_size + half_texel, (pattern_br_a + 1.0) * texel_size - half_texel);
+        color_a = image0.sample(image0_sampler, pos_a);
+    }
+    float4 color_b = float4(0.0);
+    if (tileProps.fade > 0.0) {
+        const float x_b = glMod(in.linesofar / pattern_size_b.x * aspect_b, 1.0);
+        float2 pos_b = atlas_pos((pattern_tl_b - 1.0) * texel_size, (pattern_br_b - pattern_tl_b + 2.0) * texel_size * float2(x_b, y));
+        pos_b = clamp(pos_b, (pattern_tl_b - 1.0) * texel_size + half_texel, (pattern_br_b + 1.0) * texel_size - half_texel);
+        color_b = image0.sample(image0_sampler, pos_b);
+    }
 
-    const float4 color = mix(image0.sample(image0_sampler, pos_a), image0.sample(image0_sampler, pos_b), tileProps.fade);
+    const float4 color = mix(color_a, color_b, tileProps.fade);
 
     return half4(color * alpha * opacity);
 }
@@ -6221,14 +6270,21 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     return half4(1.0);
 #endif
 
-    // read and cross-fade colors from the main and parent tiles
-    float4 color0 = image0.sample(image0_sampler, in.pos0);
-    float4 color1 = image1.sample(image1_sampler, in.pos1);
-    if (color0.a > 0.0) {
-        color0.rgb = color0.rgb / color0.a;
+    // read and cross-fade colors from the main and parent tiles, skipping
+    // the one the fade leaves out
+    float4 color0 = float4(0.0);
+    if (props.fade_t < 1.0) {
+        color0 = image0.sample(image0_sampler, in.pos0);
+        if (color0.a > 0.0) {
+            color0.rgb = color0.rgb / color0.a;
+        }
     }
-    if (color1.a > 0.0) {
-        color1.rgb = color1.rgb / color1.a;
+    float4 color1 = float4(0.0);
+    if (props.fade_t > 0.0) {
+        color1 = image1.sample(image1_sampler, in.pos1);
+        if (color1.a > 0.0) {
+            color1.rgb = color1.rgb / color1.a;
+        }
     }
     float4 color = mix(color0, color1, props.fade_t);
     color.a *= props.opacity;

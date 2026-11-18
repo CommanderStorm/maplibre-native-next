@@ -263,15 +263,19 @@ struct GlobalPaintParamsUBO {
 fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let texsize = paintParams.pattern_atlas_texsize;
 
-    // Sample pattern A
-    let imagecoord_a = gl_mod(in.pos_a, vec2<f32>(1.0));
-    let pos_a = atlas_pos(props.pattern_tl_a / texsize, (props.pattern_br_a - props.pattern_tl_a) / texsize * imagecoord_a);
-    let color_a = textureSample(pattern_texture, texture_sampler, pos_a);
-
-    // Sample pattern B
-    let imagecoord_b = gl_mod(in.pos_b, vec2<f32>(1.0));
-    let pos_b = atlas_pos(props.pattern_tl_b / texsize, (props.pattern_br_b - props.pattern_tl_b) / texsize * imagecoord_b);
-    let color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    var color_a = vec4<f32>(0.0);
+    if (props.mix < 1.0) {
+        let imagecoord_a = gl_mod(in.pos_a, vec2<f32>(1.0));
+        let pos_a = atlas_pos(props.pattern_tl_a / texsize, (props.pattern_br_a - props.pattern_tl_a) / texsize * imagecoord_a);
+        color_a = textureSample(pattern_texture, texture_sampler, pos_a);
+    }
+    var color_b = vec4<f32>(0.0);
+    if (props.mix > 0.0) {
+        let imagecoord_b = gl_mod(in.pos_b, vec2<f32>(1.0));
+        let pos_b = atlas_pos(props.pattern_tl_b / texsize, (props.pattern_br_b - props.pattern_tl_b) / texsize * imagecoord_b);
+        color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    }
 
     // Mix patterns and apply opacity
     return mix(color_a, color_b, props.mix) * props.opacity;
@@ -362,6 +366,9 @@ pub(crate) const CIRCLE_SHADER: WgslShaderSource = WgslShaderSource {
     name: r"CircleShader",
     vertex: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct VertexInput {
     @location(0) position: vec2<i32>,
 #ifndef HAS_UNIFORM_u_color
@@ -506,7 +513,7 @@ fn main(in: VertexInput) -> VertexOutput {
         position = vec4<f32>(position.x + delta.x, position.y + delta.y, position.z, position.w);
     }
 
-    let antialiasblur = 1.0 / max(paintParams.pixel_ratio * radius_with_stroke, 1e-6);
+    let antialiasblur = 1.0 / max(DEVICE_PIXEL_RATIO * radius_with_stroke, 1e-6);
 
     out.position = position;
     out.extrude = extrude;
@@ -1070,6 +1077,9 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     // Binary search to find surrounding elevation stops
     var r: i32 = tileProps.color_ramp_size - 1;
     var l: i32 = 0;
+    // The elevations at l and r, as the search reads them.
+    var el_l: f32 = 0.0;
+    var el_r: f32 = 0.0;
 
     loop {
         if (r - l <= 1) { break; }
@@ -1077,14 +1087,21 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
         let el_m = getElevationStop(m, tileProps.color_ramp_size);
         if (el < el_m) {
             r = m;
+            el_r = el_m;
         } else {
             l = m;
+            el_l = el_m;
         }
     }
 
-    // Get elevation values and colors at the stops
-    let el_l = getElevationStop(l, tileProps.color_ramp_size);
-    let el_r = getElevationStop(r, tileProps.color_ramp_size);
+    // The search never reads the ramp's ends, so read an end that l or r
+    // still is.
+    if (l == 0) {
+        el_l = getElevationStop(0, tileProps.color_ramp_size);
+    }
+    if (r == tileProps.color_ramp_size - 1) {
+        el_r = getElevationStop(r, tileProps.color_ramp_size);
+    }
 
     let color_l = getColorStop(l, tileProps.color_ramp_size);
     let color_r = getColorStop(r, tileProps.color_ramp_size);
@@ -1441,13 +1458,19 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let pattern_tl_b = pattern_to.xy;
     let pattern_br_b = pattern_to.zw;
 
-    let imagecoord_a = gl_mod(in.pos_a, vec2<f32>(1.0));
-    let pos_a = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord_a);
-    let color_a = textureSample(pattern_texture, texture_sampler, pos_a);
-
-    let imagecoord_b = gl_mod(in.pos_b, vec2<f32>(1.0));
-    let pos_b = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    let color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    var color_a = vec4<f32>(0.0);
+    if (props.fade < 1.0) {
+        let imagecoord_a = gl_mod(in.pos_a, vec2<f32>(1.0));
+        let pos_a = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord_a);
+        color_a = textureSample(pattern_texture, texture_sampler, pos_a);
+    }
+    var color_b = vec4<f32>(0.0);
+    if (props.fade > 0.0) {
+        let imagecoord_b = gl_mod(in.pos_b, vec2<f32>(1.0));
+        let pos_b = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    }
 
     let pattern_color = mix(color_a, color_b, props.fade);
     return pattern_color * in.lighting;
@@ -1842,15 +1865,19 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let pattern_tl_b = pattern_to.xy;
     let pattern_br_b = pattern_to.zw;
 
-    // Sample pattern A
-    let imagecoord_a = gl_mod(in.v_pos_a, vec2<f32>(1.0));
-    let pos_a = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord_a);
-    let color_a = textureSample(pattern_texture, texture_sampler, pos_a);
-
-    // Sample pattern B
-    let imagecoord_b = gl_mod(in.v_pos_b, vec2<f32>(1.0));
-    let pos_b = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    let color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    var color_a = vec4<f32>(0.0);
+    if (props.fade < 1.0) {
+        let imagecoord_a = gl_mod(in.v_pos_a, vec2<f32>(1.0));
+        let pos_a = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord_a);
+        color_a = textureSample(pattern_texture, texture_sampler, pos_a);
+    }
+    var color_b = vec4<f32>(0.0);
+    if (props.fade > 0.0) {
+        let imagecoord_b = gl_mod(in.v_pos_b, vec2<f32>(1.0));
+        let pos_b = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    }
 
     // Mix patterns and apply opacity
     let opacity =
@@ -2411,15 +2438,19 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let pattern_tl_b = pattern_to.xy;
     let pattern_br_b = pattern_to.zw;
 
-    // Sample pattern A
-    let imagecoord_a = gl_mod(in.v_pos_a, vec2<f32>(1.0));
-    let pos_a = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord_a);
-    let color_a = textureSample(pattern_texture, texture_sampler, pos_a);
-
-    // Sample pattern B
-    let imagecoord_b = gl_mod(in.v_pos_b, vec2<f32>(1.0));
-    let pos_b = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
-    let color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    var color_a = vec4<f32>(0.0);
+    if (props.fade < 1.0) {
+        let imagecoord_a = gl_mod(in.v_pos_a, vec2<f32>(1.0));
+        let pos_a = atlas_pos(pattern_tl_a / tileProps.texsize, (pattern_br_a - pattern_tl_a) / tileProps.texsize * imagecoord_a);
+        color_a = textureSample(pattern_texture, texture_sampler, pos_a);
+    }
+    var color_b = vec4<f32>(0.0);
+    if (props.fade > 0.0) {
+        let imagecoord_b = gl_mod(in.v_pos_b, vec2<f32>(1.0));
+        let pos_b = atlas_pos(pattern_tl_b / tileProps.texsize, (pattern_br_b - pattern_tl_b) / tileProps.texsize * imagecoord_b);
+        color_b = textureSample(pattern_texture, texture_sampler, pos_b);
+    }
 
     // Mix patterns and apply opacity
     let opacity =
@@ -3267,6 +3298,9 @@ pub(crate) const LINE_GRADIENT_SDF_SHADER: WgslShaderSource = WgslShaderSource {
     name: r"LineGradientSDFShader",
     vertex: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct VertexInput {
     @location(4) pos_normal: vec2<i32>,
     @location(5) data: vec4<u32>,
@@ -3425,7 +3459,7 @@ fn main(in: VertexInput) -> VertexOutput {
     out.v_floorwidth = floorwidth;
 #endif
 
-    let pixel_ratio = max(paintParams.pixel_ratio, 1e-6);
+    let pixel_ratio = max(DEVICE_PIXEL_RATIO, 1e-6);
     let antialiasing = 0.5 / pixel_ratio;
 
     let halfwidth = width / 2.0;
@@ -3494,6 +3528,9 @@ fn main(in: VertexInput) -> VertexOutput {
     ),
     fragment: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct FragmentInput {
     @location(0) v_width2: vec2<f32>,
     @location(1) v_normal: vec2<f32>,
@@ -3598,7 +3635,7 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let dist = length(in.v_normal) * in.v_width2.x;
 
     // Calculate the antialiasing fade factor
-    let pixel_ratio = max(paintParams.pixel_ratio, 1e-6);
+    let pixel_ratio = max(DEVICE_PIXEL_RATIO, 1e-6);
     let blur2 = (blur + 1.0 / pixel_ratio) * in.v_gamma_scale;
     let alpha = clamp(min(dist - (in.v_width2.y - blur2), in.v_width2.x - dist) / blur2, 0.0, 1.0);
 
@@ -3629,6 +3666,9 @@ pub(crate) const LINE_GRADIENT_SHADER: WgslShaderSource = WgslShaderSource {
     name: r"LineGradientShader",
     vertex: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct VertexInput {
     @location(4) pos_normal: vec2<i32>,
     @location(5) data: vec4<u32>,
@@ -3725,7 +3765,7 @@ fn main(in: VertexInput) -> VertexOutput {
     let drawable = drawableVector[globalIndex.value].data;
 
     // Constants
-    let pixel_ratio = max(paintParams.pixel_ratio, 1e-6);
+    let pixel_ratio = max(DEVICE_PIXEL_RATIO, 1e-6);
     let antialiasing = 0.5 / pixel_ratio;
     let MAX_LINE_DISTANCE = 32767.0;
 
@@ -3804,6 +3844,9 @@ fn main(in: VertexInput) -> VertexOutput {
     ),
     fragment: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct FragmentInput {
     @location(0) v_width2: vec2<f32>,
     @location(1) v_normal: vec2<f32>,
@@ -3871,7 +3914,7 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let dist = length(in.v_normal) * in.v_width2.x;
 
     // Calculate the antialiasing fade factor
-    let pixel_ratio = max(paintParams.pixel_ratio, 1e-6);
+    let pixel_ratio = max(DEVICE_PIXEL_RATIO, 1e-6);
     let blur2 = (blur + 1.0 / pixel_ratio) * in.v_gamma_scale;
     let alpha = clamp(min(dist - (in.v_width2.y - blur2), in.v_width2.x - dist) / blur2, 0.0, 1.0);
 
@@ -3890,6 +3933,9 @@ pub(crate) const LINE_PATTERN_SHADER: WgslShaderSource = WgslShaderSource {
     name: r"LinePatternShader",
     vertex: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct VertexInput {
     @location(4) pos_normal: vec2<i32>,
     @location(5) data: vec4<u32>,
@@ -4020,7 +4066,7 @@ fn main(in: VertexInput) -> VertexOutput {
     let tileProps = tilePropsVector[index].data;
 
     let ratio = max(drawable.ratio, 1e-6);
-    let antialiasing = 0.5 / paintParams.pixel_ratio;
+    let antialiasing = 0.5 / DEVICE_PIXEL_RATIO;
     let lineDistanceScale = 2.0;
 
     let a_extrude = vec2<f32>(f32(in.data.x), f32(in.data.y)) - 128.0;
@@ -4101,6 +4147,9 @@ fn main(in: VertexInput) -> VertexOutput {
     ),
     fragment: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct FragmentInput {
     @location(0) v_width2: vec2<f32>,
     @location(1) v_normal: vec2<f32>,
@@ -4232,27 +4281,32 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let aspect_b = display_size_b.y / floorwidth;
 
     let dist = length(in.v_normal) * in.v_width2.x;
-    let invPixelRatio = 1.0 / max(paintParams.pixel_ratio, 1e-6);
+    let invPixelRatio = 1.0 / max(DEVICE_PIXEL_RATIO, 1e-6);
     let blur2 = (blur + invPixelRatio) * in.v_gamma_scale;
     let alpha = clamp(min(dist - (in.v_width2.y - blur2), in.v_width2.x - dist) / blur2, 0.0, 1.0);
 
     let patternSizeAX = max(pattern_size_a.x, 1e-6);
     let patternSizeBX = max(pattern_size_b.x, 1e-6);
 
-    let x_a = glMod(in.v_linesofar / patternSizeAX * aspect_a, 1.0);
-    let x_b = glMod(in.v_linesofar / patternSizeBX * aspect_b, 1.0);
-
     let y = 0.5 * in.v_normal.y + 0.5;
 
     let texel_size = 1.0 / tileProps.texsize;
     let half_texel = 0.5 * texel_size;
-    var pos_a = atlas_pos((pattern_tl_a - 1.0) * texel_size, (pattern_br_a - pattern_tl_a + 2.0) * texel_size * vec2<f32>(x_a, y));
-    pos_a = clamp(pos_a, (pattern_tl_a - 1.0) * texel_size + half_texel, (pattern_br_a + 1.0) * texel_size - half_texel);
-    var pos_b = atlas_pos((pattern_tl_b - 1.0) * texel_size, (pattern_br_b - pattern_tl_b + 2.0) * texel_size * vec2<f32>(x_b, y));
-    pos_b = clamp(pos_b, (pattern_tl_b - 1.0) * texel_size + half_texel, (pattern_br_b + 1.0) * texel_size - half_texel);
-
-    let color_a = textureSample(pattern_texture, pattern_sampler, pos_a);
-    let color_b = textureSample(pattern_texture, pattern_sampler, pos_b);
+    // A crossfade at 0 or 1 shows one pattern, so skip the other.
+    var color_a = vec4<f32>(0.0);
+    if (tileProps.fade < 1.0) {
+        let x_a = glMod(in.v_linesofar / patternSizeAX * aspect_a, 1.0);
+        var pos_a = atlas_pos((pattern_tl_a - 1.0) * texel_size, (pattern_br_a - pattern_tl_a + 2.0) * texel_size * vec2<f32>(x_a, y));
+        pos_a = clamp(pos_a, (pattern_tl_a - 1.0) * texel_size + half_texel, (pattern_br_a + 1.0) * texel_size - half_texel);
+        color_a = textureSample(pattern_texture, pattern_sampler, pos_a);
+    }
+    var color_b = vec4<f32>(0.0);
+    if (tileProps.fade > 0.0) {
+        let x_b = glMod(in.v_linesofar / patternSizeBX * aspect_b, 1.0);
+        var pos_b = atlas_pos((pattern_tl_b - 1.0) * texel_size, (pattern_br_b - pattern_tl_b + 2.0) * texel_size * vec2<f32>(x_b, y));
+        pos_b = clamp(pos_b, (pattern_tl_b - 1.0) * texel_size + half_texel, (pattern_br_b + 1.0) * texel_size - half_texel);
+        color_b = textureSample(pattern_texture, pattern_sampler, pos_b);
+    }
 
     let pattern_color = mix(color_a, color_b, tileProps.fade);
 
@@ -4268,6 +4322,9 @@ pub(crate) const LINE_SDF_SHADER: WgslShaderSource = WgslShaderSource {
     name: r"LineSDFShader",
     vertex: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct VertexInput {
     @location(4) pos_normal: vec2<i32>,
     @location(5) data: vec4<u32>,
@@ -4448,7 +4505,7 @@ fn main(in: VertexInput) -> VertexOutput {
     out.v_floorwidth = floorwidth;
 #endif
 
-    let pixel_ratio = max(paintParams.pixel_ratio, 1e-6);
+    let pixel_ratio = max(DEVICE_PIXEL_RATIO, 1e-6);
     let antialiasing = 0.5 / pixel_ratio;
 
     let halfwidth = width / 2.0;
@@ -4516,6 +4573,9 @@ fn main(in: VertexInput) -> VertexOutput {
     ),
     fragment: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct FragmentInput {
     @location(0) v_width2: vec2<f32>,
     @location(1) v_normal: vec2<f32>,
@@ -4625,7 +4685,7 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let dist = length(in.v_normal) * in.v_width2.x;
 
     // Calculate the antialiasing fade factor
-    let pixel_ratio = max(paintParams.pixel_ratio, 1e-6);
+    let pixel_ratio = max(DEVICE_PIXEL_RATIO, 1e-6);
     let blur2 = (blur + 1.0 / pixel_ratio) * in.v_gamma_scale;
     let alpha = clamp(min(dist - (in.v_width2.y - blur2), in.v_width2.x - dist) / blur2, 0.0, 1.0);
 
@@ -4653,6 +4713,9 @@ pub(crate) const LINE_SHADER: WgslShaderSource = WgslShaderSource {
     name: r"LineShader",
     vertex: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct VertexInput {
     @location(4) pos_normal: vec2<i32>,  // packed position and normal
     @location(5) data: vec4<u32>,        // extrude, direction, linesofar
@@ -4753,7 +4816,7 @@ fn main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     let drawable = drawableVector[globalIndex.value].data;
     let ratio = max(drawable.ratio, 1e-6);
-    let pixel_ratio = paintParams.pixel_ratio;
+    let pixel_ratio = DEVICE_PIXEL_RATIO;
     let antialiasing = (1.0 / pixel_ratio) * 0.5;
 
     // Unpack vertex data
@@ -4833,6 +4896,9 @@ fn main(in: VertexInput) -> VertexOutput {
     ),
     fragment: Some(
         r"
+// The key's DEVICE_PIXEL_RATIO, which the pipeline sets.
+override DEVICE_PIXEL_RATIO: f32 = 1.0;
+
 struct FragmentInput {
     @location(0) v_width2: vec2<f32>,
     @location(1) v_normal: vec2<f32>,
@@ -4905,8 +4971,8 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     let dist = length(in.v_normal) * in.v_width2.x;
 
     // Calculate the antialiasing fade factor
-    let antialiasing = 0.5 / paintParams.pixel_ratio;
-    let blur2 = (blur + (1.0 / paintParams.pixel_ratio)) * in.v_gamma_scale;
+    let antialiasing = 0.5 / DEVICE_PIXEL_RATIO;
+    let blur2 = (blur + (1.0 / DEVICE_PIXEL_RATIO)) * in.v_gamma_scale;
     let denom = max(blur2, 1e-6);
     let alpha = clamp(min(dist - (in.v_width2.y - blur2), in.v_width2.x - dist) / denom, 0.0, 1.0);
 
@@ -5255,14 +5321,20 @@ struct RasterEvaluatedPropsUBO {
 
 @fragment
 fn main(in: FragmentInput) -> @location(0) vec4<f32> {
-    var color0 = textureSample(image0, texture_sampler, in.pos0);
-    var color1 = textureSample(image1, texture_sampler, in.pos1);
-
-    if (color0.a > 0.0) {
-        color0 = vec4<f32>(color0.rgb / color0.a, color0.a);
+    // Skip the tile the fade leaves out.
+    var color0 = vec4<f32>(0.0);
+    if (props.fade_t < 1.0) {
+        color0 = textureSample(image0, texture_sampler, in.pos0);
+        if (color0.a > 0.0) {
+            color0 = vec4<f32>(color0.rgb / color0.a, color0.a);
+        }
     }
-    if (color1.a > 0.0) {
-        color1 = vec4<f32>(color1.rgb / color1.a, color1.a);
+    var color1 = vec4<f32>(0.0);
+    if (props.fade_t > 0.0) {
+        color1 = textureSample(image1, texture_sampler, in.pos1);
+        if (color1.a > 0.0) {
+            color1 = vec4<f32>(color1.rgb / color1.a, color1.a);
+        }
     }
 
     var color = mix(color0, color1, props.fade_t);
