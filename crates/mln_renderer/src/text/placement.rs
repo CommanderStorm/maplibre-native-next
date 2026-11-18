@@ -1,21 +1,15 @@
-// The C++ class hierarchy `Placement` <- `StaticPlacement` <- `TilePlacement`
-// is one struct; `PlacementKind` holds the subclass and its data, and the
-// virtual methods dispatch on it.
+// Symbol placement: which of the frame's symbols show, where each collides
+// with none placed before it, and how they fade. One `Placement` places for
+// every map mode; `PlacementKind` holds what the continuous, static and tile
+// modes differ in.
 //
-// C++ `PlacementContext` keeps references to the bucket, the render tile and
-// the transform state; here it borrows the bucket, from the frame's tiles,
-// for the placement, and copies the tile. Symbol instances are addressed by
-// their index in the bucket's `symbol_instances`.
-//
-// `collisionCircles` is keyed by the C++ `const CollisionFeature*`: the
-// feature's bucket instance id, symbol instance index and whether it is the
-// text (or icon) feature.
-//
-// Not ported: the MLN_SYMBOL_GUARDS checks (`check`, `checkIndexes`,
-// `forceFail`; always true without guards). `TilePlacement::locationCache`
-// is unused in C++ and left out.
+// A `PlacementContext` borrows a bucket, from the frame's tiles, for the
+// placement, and copies its tile. Symbol instances are addressed by their
+// index in the bucket's `symbol_instances`, and a collision feature by its
+// bucket instance id, symbol instance index and whether it is the text (or
+// icon) feature.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -44,14 +38,14 @@ use mln_vec_map::VecMap;
 
 use crate::buckets::symbol_bucket::{
     Buffer, CollisionBoxDynamicVertex, PlacedSymbol, PlacedSymbolPools, SortKeyRange, SymbolBucket, SymbolBucketState,
-    ZoomEvaluatedSize, get_sorted_symbols,
+    ZoomEvaluatedSize, symbols_by_viewport_y,
 };
 use crate::geometry::feature_index::{FeatureIndex, IndexedSubfeature};
 use crate::layer_drawing::{BucketChanges, ChangedBuckets};
 use crate::layout::symbol_instance::{SymbolInstance, SymbolInstancePools};
 use crate::layout::symbol_projection::{
-    LabelPlaneProjector, add_dynamic_attributes, evaluate_size_for_feature, get_tile_skew_vectors, hide_glyphs,
-    reproject_line_labels,
+    LabelPlaneProjector, add_dynamic_attributes, evaluate_size_for_feature, hide_glyphs, reproject_line_labels,
+    tile_skew_vectors,
 };
 use crate::render_layer::{BucketKey, BucketPlacementData, PlacedTile, RenderLayer, SymbolBuckets, SymbolTranslate};
 use crate::render_tile::RenderTile;
@@ -138,10 +132,10 @@ pub(crate) struct VariableOffset {
 pub(crate) struct JointPlacement {
     pub(crate) text: bool,
     pub(crate) icon: bool,
-    /// skipFade = outside viewport, but within `CollisionIndex::viewportPadding`
-    /// px of the edge Because these symbols aren't onscreen yet, we can skip
-    /// the "fade in" animation, and if a subsequent viewport change brings
-    /// them into view, they'll be fully visible right away.
+    /// Outside the viewport, but within the collision index's viewport
+    /// padding of its edge. Because these symbols aren't onscreen yet, we can
+    /// skip the "fade in" animation, and if a subsequent viewport change
+    /// brings them into view, they'll be fully visible right away.
     pub(crate) skip_fade: bool,
 }
 
@@ -162,7 +156,9 @@ pub(crate) struct RetainedQueryData {
     pub(crate) bucket_instance_id: u32,
     pub(crate) feature_index: Option<Arc<FeatureIndex>>,
     pub(crate) tile_id: OverscaledTileID,
-    pub(crate) feature_sort_order: RefCell<Option<Arc<Vec<usize>>>>,
+    /// The order of the bucket's features as the last opacity update
+    /// sorted them, for a bucket whose symbols sort by their position.
+    pub(crate) feature_sort_order: Option<Arc<Vec<usize>>>,
 }
 
 impl RetainedQueryData {
@@ -172,7 +168,7 @@ impl RetainedQueryData {
         feature_index: Option<Arc<FeatureIndex>>,
         tile_id: OverscaledTileID,
     ) -> Self {
-        RetainedQueryData { bucket_instance_id, feature_index, tile_id, feature_sort_order: RefCell::new(None) }
+        RetainedQueryData { bucket_instance_id, feature_index, tile_id, feature_sort_order: None }
     }
 }
 
@@ -192,9 +188,9 @@ impl CollisionGroups {
     }
 
     pub(crate) fn get(&mut self, source_id: &str) -> CollisionGroup {
-        // The predicate/groupID mechanism allows for arbitrary grouping,
-        // but the current interface defines one source == one group when
-        // crossSourceCollisions == true.
+        // Groups could group symbols any way, but the map's options make
+        // one group of all sources with cross-source collisions, and one of
+        // each source without.
         if self.cross_source_collisions {
             (0, None)
         } else {
@@ -224,8 +220,8 @@ pub struct PlacedSymbolData {
     pub icon_placed: bool,
     /// Symbol text or icon collision box intersects tile borders
     pub intersects_tile_border: bool,
-    /// Viewport padding ({viewportPadding, viewportPadding} is a coordinate
-    /// of the tile's top-left corner)
+    /// The viewport padding, which is where the tile's top-left corner is,
+    /// in x and in y.
     pub viewport_padding: f32,
     /// Layer id (leader of the symbol layout group)
     pub layer: String,
@@ -253,11 +249,11 @@ fn without_horizon(mut data: ProjectionData) -> ProjectionData {
     data
 }
 
-/// The C++ context's `tileProjector`, `textLabelPlane` and `iconLabelPlane`.
+/// The projectors of a context's tile and its text and icon label planes.
 /// They borrow a transform state, and placing a symbol borrows the
-/// placement (and its collision index's state) mutably, so the port builds
-/// them over a copy of the state for each pass over a context's symbols
-/// (`PlacementContext::projectors`) instead of keeping them in it.
+/// placement (and its collision index's state) mutably, so they're built
+/// over a copy of the state for each pass over a context's symbols
+/// (`PlacementContext::projectors`) instead of kept in the context.
 pub(crate) struct PlacementProjectors<'a> {
     pub(crate) tile_projector: TileProjector<'a>,
     pub(crate) text_label_plane: LabelPlaneProjector<'a>,
@@ -282,7 +278,8 @@ pub(crate) struct PlacementContext<'a> {
     pub(crate) pitch_icon_with_map: bool,
     pub(crate) placement_type: SymbolPlacementType,
 
-    /// The tile's projection for `tileProjector`. Screen-space symbols are
+    /// The tile's projection, which its tile projector projects with.
+    /// Screen-space symbols are
     /// drawn over the view, so the planet does not hide them: no horizon
     /// plane.
     tile_projection: ProjectionData,
@@ -297,8 +294,8 @@ pub(crate) struct PlacementContext<'a> {
 
     pub(crate) text_overlap_mode: OverlapMode,
     pub(crate) icon_overlap_mode: OverlapMode,
-    // This logic is similar to the "defaultOpacityState" logic below in
-    // updateBucketOpacities If we know a symbol is always supposed to show,
+    // As with the default opacity state of the buckets' opacities below: if
+    // we know a symbol is always supposed to show,
     // force it to be marked visible even if it wasn't placed into the collision
     // index (because some or all of it was outside the range of the collision
     // grid). There is a subtle edge case here we're accepting:
@@ -335,7 +332,7 @@ impl<'a> PlacementContext<'a> {
         let render_tile = &params.tile;
         let overscaled_id = render_tile.overscaled_id;
         let pixels_to_tile_units = render_tile.id.pixels_to_tile_units(1.0, placement_zoom);
-        // `std::pow(2, placementZoom - overscaledZ)`: a double pow.
+        // In doubles, where the tile's overscaled zoom sits far below.
         let scale = 2f64.powf(f64::from(placement_zoom - f32::from(overscaled_id.overscaled_z))) as f32;
         let pixel_ratio = (TILE_SIZE_D * f64::from(overscaled_id.overscale_factor()) / f64::from(EXTENT)) as f32;
 
@@ -421,13 +418,13 @@ impl<'a> PlacementContext<'a> {
     }
 
     #[must_use]
-    pub(crate) fn get_bucket(&self) -> &'a SymbolBucket {
+    pub(crate) fn bucket(&self) -> &'a SymbolBucket {
         self.bucket
     }
 
     #[must_use]
-    pub(crate) fn get_layout(&self) -> &SymbolLayoutProperties::PossiblyEvaluated {
-        &self.get_bucket().layout
+    pub(crate) fn layout(&self) -> &SymbolLayoutProperties::PossiblyEvaluated {
+        &self.bucket().layout
     }
 
     #[must_use]
@@ -436,7 +433,7 @@ impl<'a> PlacementContext<'a> {
     }
 
     #[must_use]
-    pub(crate) fn get_overscaled_id(&self) -> &OverscaledTileID {
+    pub(crate) fn overscaled_id(&self) -> &OverscaledTileID {
         &self.tile.overscaled_id
     }
 
@@ -485,8 +482,12 @@ impl PlacementController {
     }
 
     #[must_use]
-    pub(crate) fn get_placement(&self) -> &Placement {
+    pub(crate) fn placement(&self) -> &Placement {
         &self.placement
+    }
+
+    pub(crate) fn placement_mut(&mut self) -> &mut Placement {
+        &mut self.placement
     }
 
     pub(crate) fn set_placement_stale(&mut self) {
@@ -506,10 +507,10 @@ impl PlacementController {
 
         let update_period = match period_override {
             Some(period) => period,
-            None => self.placement.get_update_period(zoom),
+            None => self.placement.update_period(zoom),
         };
 
-        elapsed(now, self.placement.get_commit_time()) < update_period
+        elapsed(now, self.placement.commit_time()) < update_period
     }
 
     #[must_use]
@@ -553,7 +554,7 @@ struct TilePlacementState {
 
 /// The subclass of a `Placement`.
 enum PlacementKind {
-    /// `Placement` (continuous map mode).
+    /// Continuous map mode.
     Continuous,
     /// Static map mode.
     Static,
@@ -561,7 +562,8 @@ enum PlacementKind {
     Tile(Box<TilePlacementState>),
 }
 
-/// Key of `collisionCircles` (C++: the `CollisionFeature*`).
+/// A collision feature: its bucket instance id, its symbol instance's index
+/// and whether it is the text feature.
 type CollisionFeatureKey = (u32, usize, bool);
 
 /// How long after `since` `now` is: zero if it is before, and
@@ -604,16 +606,16 @@ pub(crate) struct Placement {
     spare_collision_index: Option<CollisionIndex>,
     show_collision_boxes: bool,
 
-    // Cache being used by placeSymbol()
+    // The boxes of the symbol being placed, kept between symbols.
     text_boxes: Vec<ProjectedCollisionBox>,
     icon_boxes: Vec<ProjectedCollisionBox>,
     // Used for debug purposes.
     collision_circles: HashMap<CollisionFeatureKey, Vec<ProjectedCollisionBox>>,
 }
 
-/// The `calculateVariableLayoutOffset(anchor, width, height, offset,
-/// textBoxScale)` overload: the shift along the label's own axes; collision
-/// projects it the way the label is aligned.
+/// The shift of a label of `width` and `height` at the variable anchor
+/// `anchor`, along the label's own axes; collision projects it the way the
+/// label is aligned.
 fn calculate_variable_layout_offset_unrotated(
     anchor: SymbolAnchorType,
     width: f32,
@@ -670,19 +672,19 @@ fn calculate_variable_render_shift(
 
 /// Returns indices into the bucket's symbol instances in `sort_key_range`, in
 /// the order to place them.
-fn get_bucket_symbols(
+fn bucket_symbols(
     bucket: &SymbolBucket,
     state: &SymbolBucketState,
     sort_key_range: Option<&SortKeyRange>,
     bearing: f64,
 ) -> Vec<usize> {
     if *bucket.layout.symbol_z_order.uniform() == SymbolZOrderType::ViewportY {
-        let mut sorted_symbols = get_sorted_symbols(&state.symbol_instances, bearing as f32);
+        let mut sorted_symbols = symbols_by_viewport_y(&state.symbol_instances, bearing as f32);
         // Place in the reverse order than draw i.e., starting from the foreground elements.
         sorted_symbols.reverse();
         return sorted_symbols;
     }
-    bucket.get_symbols(sort_key_range, state.symbol_instances.len()).collect()
+    bucket.symbols_in(sort_key_range, state.symbol_instances.len()).collect()
 }
 
 /// Whether `bucket`, `key`'s, has yet to be placed since its tile showed
@@ -775,13 +777,13 @@ fn mark_used_orientation(
     }
 
     if let Some(i) = symbol_instance.placed_center_text_index
-        && !symbol_instance.get_single_line()
+        && !symbol_instance.single_line()
     {
         text.placed_symbols[i].placed_orientation = horizontal;
     }
 
     if let Some(i) = symbol_instance.placed_left_text_index
-        && !symbol_instance.get_single_line()
+        && !symbol_instance.single_line()
     {
         text.placed_symbols[i].placed_orientation = horizontal;
     }
@@ -805,8 +807,8 @@ fn extend<T: Copy>(v: &mut Vec<T>, n: usize, value: T) {
     v.extend(std::iter::repeat_n(value, n));
 }
 
-/// The text placement attempts of `placeSymbol`
-/// (`placeTextForPlacementModes`).
+/// Places a symbol's text in each of its placement modes in turn, until
+/// one places it.
 fn place_text_for_placement_modes(
     this: &mut Placement,
     bucket: &SymbolBucket,
@@ -817,7 +819,7 @@ fn place_text_for_placement_modes(
     place_vertical_fn: &mut dyn FnMut(&mut Placement, PlacedFeatureResult) -> PlacedFeatureResult,
 ) {
     if bucket.allow_vertical_placement
-        && (symbol_instance.get_writing_modes() & WritingModeType::Vertical) != WritingModeType::None
+        && (symbol_instance.writing_modes() & WritingModeType::Vertical) != WritingModeType::None
     {
         debug_assert_ne!(bucket.placement_modes.as_slice(), []);
         for placement_mode in &bucket.placement_modes {
@@ -909,19 +911,24 @@ impl Placement {
         }
     }
 
-    fn get_prev_placement(&self) -> Option<&Placement> {
+    fn prev_placement(&self) -> Option<&Placement> {
         self.prev_placement.as_deref()
     }
 
     fn is_tilted_view(&self) -> bool {
-        self.update_parameters.as_ref().expect("updateParameters").transform_state.get_pitch() != 0.0
+        self.update_parameters
+            .as_ref()
+            .expect("placement runs with its update's parameters")
+            .transform_state
+            .get_pitch()
+            != 0.0
     }
 
-    pub(crate) fn get_collision_index(&self) -> &CollisionIndex {
+    pub(crate) fn collision_index(&self) -> &CollisionIndex {
         &self.collision_index
     }
 
-    pub(crate) fn get_commit_time(&self) -> Option<Instant> {
+    pub(crate) fn commit_time(&self) -> Option<Instant> {
         self.commit_time
     }
 
@@ -945,8 +952,8 @@ impl Placement {
         }
     }
 
-    /// bench: [`place`](Self::place) of the buckets that `HeldBuckets`
-    /// holds.
+    /// [`place`](Self::place) of the buckets that `HeldBuckets` holds, for
+    /// the benchmarks.
     #[cfg(feature = "bench")]
     pub(crate) fn place_layers(&mut self, layers: &[&dyn RenderLayer]) {
         let mut buckets = crate::render_layer::HeldBuckets::take();
@@ -969,7 +976,7 @@ impl Placement {
         }
         for layer in layers.iter().rev() {
             let mut seen_cross_tile_ids = BTreeSet::new();
-            for data in layer.get_placement_data() {
+            for data in layer.placement_data() {
                 if let Some(bucket) = buckets.get(&data.bucket) {
                     self.base_place_symbol_bucket(data, bucket, &mut seen_cross_tile_ids, reloaded_placed);
                 }
@@ -988,20 +995,20 @@ impl Placement {
         debug_assert!(self.update_parameters.is_some());
         let render_tile = &params.tile;
         let collision_group = self.collision_groups.get(&params.source_id);
-        let avoid_edges = self.get_avoid_edges(symbol_bucket, &render_tile.matrix);
+        let avoid_edges = self.avoid_edges(symbol_bucket, &render_tile.matrix);
         let ctx = PlacementContext::new(
             params,
             symbol_bucket,
             just_reloaded(reloaded_placed, &params.bucket, symbol_bucket),
-            self.collision_index.get_transform_state(),
+            self.collision_index.transform_state(),
             self.placement_zoom,
             collision_group,
             avoid_edges,
         );
-        let transform_state = self.collision_index.get_transform_state().clone();
+        let transform_state = self.collision_index.transform_state().clone();
         let projectors = ctx.projectors(&transform_state);
         let state = &symbol_bucket.state;
-        for symbol_index in self.get_sorted_symbols(params, symbol_bucket, state, ctx.pixel_ratio) {
+        for symbol_index in self.placement_order(params, symbol_bucket, state, ctx.pixel_ratio) {
             let symbol = &state.symbol_instances[symbol_index];
             if symbol.cross_tile_id().is_some_and(|id| seen_cross_tile_ids.contains(&id)) {
                 continue;
@@ -1024,11 +1031,7 @@ impl Placement {
         // As long as this placement lives, we have to hold onto this bucket's
         // matching FeatureIndex/data for querying purposes
         self.retained_query_data.entry(symbol_bucket.bucket_instance_id).or_insert_with(|| {
-            RetainedQueryData::new(
-                symbol_bucket.bucket_instance_id,
-                params.feature_index.clone(),
-                *ctx.get_overscaled_id(),
-            )
+            RetainedQueryData::new(symbol_bucket.bucket_instance_id, params.feature_index.clone(), *ctx.overscaled_id())
         });
     }
 
@@ -1048,15 +1051,15 @@ impl Placement {
         };
 
         if ctx.tile().hold_for_fade {
-            // Mark all symbols from this tile as "not placed", but don't add to
-            // seenCrossTileIDs, because we don't know yet if we have a duplicate in
-            // a parent tile that _should_ be placed.
+            // Mark all symbols from this tile as "not placed", but don't add
+            // them to the seen cross-tile ids, because we don't know yet if
+            // we have a duplicate in a parent tile that _should_ be placed.
             return k_unplaced;
         }
-        let bucket = ctx.get_bucket();
+        let bucket = ctx.bucket();
         let pos_matrix = ctx.tile().matrix;
         let tile_projector = &projectors.tile_projector;
-        let mut variable_text_anchors = symbol_instance.get_text_anchors();
+        let mut variable_text_anchors = symbol_instance.text_anchors();
         self.text_boxes.clear();
         self.icon_boxes.clear();
 
@@ -1068,7 +1071,7 @@ impl Placement {
         let mut placed_vertical_text = PlacedFeatureResult::default();
         let mut placed_vertical_icon = PlacedFeatureResult::default();
         let shift: Cell<Vec2> = Cell::new(Vec2::ZERO);
-        if let Some(horizontal_text_index) = symbol_instance.get_default_horizontal_placed_text_index() {
+        if let Some(horizontal_text_index) = symbol_instance.default_horizontal_placed_text_index() {
             let placed_symbol: &PlacedSymbol = &state.text.placed_symbols[horizontal_text_index];
             let font_size = evaluate_size_for_feature(&ctx.partially_evaluated_text_size, placed_symbol);
 
@@ -1076,7 +1079,7 @@ impl Placement {
                 if bucket.allow_vertical_placement
                     && !is_placed
                     && let Some(prev_orientation) =
-                        this.get_prev_placement().and_then(|prev| prev.placed_orientations.get(&cross_tile_id)).copied()
+                        this.prev_placement().and_then(|prev| prev.placed_orientations.get(&cross_tile_id)).copied()
                 {
                     this.placed_orientations.insert(cross_tile_id, prev_orientation);
                 }
@@ -1114,12 +1117,12 @@ impl Placement {
                     };
 
                 let mut place_horizontal = |this: &mut Placement| {
-                    place_feature(this, symbol_instance.get_text_collision_feature(), TextWritingModeType::Horizontal)
+                    place_feature(this, symbol_instance.text_collision_feature(), TextWritingModeType::Horizontal)
                 };
 
                 let mut place_vertical = |this: &mut Placement, _placed: PlacedFeatureResult| {
                     if bucket.allow_vertical_placement
-                        && let Some(vertical) = symbol_instance.get_vertical_text_collision_feature()
+                        && let Some(vertical) = symbol_instance.vertical_text_collision_feature()
                     {
                         return place_feature(this, vertical, TextWritingModeType::Vertical);
                     }
@@ -1139,13 +1142,13 @@ impl Placement {
 
                 place_text = placed.placed;
                 offscreen &= placed.offscreen;
-            } else if !symbol_instance.get_text_collision_feature().along_line
-                && !symbol_instance.get_text_collision_feature().boxes.is_empty()
+            } else if !symbol_instance.text_collision_feature().along_line
+                && !symbol_instance.text_collision_feature().boxes.is_empty()
             {
                 // If this symbol was in the last placement, shift the previously
                 // used anchor to the front of the anchor list, only if the previous
                 // anchor is still in the anchor list.
-                if let Some(prev) = self.get_prev_placement()
+                if let Some(prev) = self.prev_placement()
                     && let Some(prev_offset) = prev.variable_offsets.get(&cross_tile_id)
                 {
                     let prev_anchor = prev_offset.anchor;
@@ -1196,19 +1199,19 @@ impl Placement {
                 let mut place_horizontal = |this: &mut Placement| {
                     place_feature_for_variable_anchors(
                         this,
-                        symbol_instance.get_text_collision_feature(),
+                        symbol_instance.text_collision_feature(),
                         TextWritingModeType::Horizontal,
-                        symbol_instance.get_icon_collision_feature(),
+                        symbol_instance.icon_collision_feature(),
                     )
                 };
 
                 let mut place_vertical = |this: &mut Placement, placed: PlacedFeatureResult| {
                     if bucket.allow_vertical_placement
                         && !placed.placed
-                        && let Some(vertical) = symbol_instance.get_vertical_text_collision_feature()
+                        && let Some(vertical) = symbol_instance.vertical_text_collision_feature()
                     {
-                        // C++ passes the vertical text feature as the
-                        // icon feature too (its `? :` always picks it).
+                        // The vertical text feature stands for the icon
+                        // feature too.
                         return place_feature_for_variable_anchors(
                             this,
                             vertical,
@@ -1238,7 +1241,7 @@ impl Placement {
                 // the last placement for fade animations
                 if !place_text
                     && let Some(prev_offset) =
-                        self.get_prev_placement().and_then(|prev| prev.variable_offsets.get(&cross_tile_id)).copied()
+                        self.prev_placement().and_then(|prev| prev.variable_offsets.get(&cross_tile_id)).copied()
                 {
                     self.variable_offsets.insert(cross_tile_id, prev_offset);
                 }
@@ -1280,20 +1283,20 @@ impl Placement {
                 )
             };
 
-            let placed_icon = match symbol_instance.get_vertical_icon_collision_feature() {
+            let placed_icon = match symbol_instance.vertical_icon_collision_feature() {
                 Some(vertical) if placed_vertical_text.placed => {
                     placed_vertical_icon = place_icon_feature(self, vertical);
                     placed_vertical_icon
                 }
-                _ => place_icon_feature(self, symbol_instance.get_icon_collision_feature()),
+                _ => place_icon_feature(self, symbol_instance.icon_collision_feature()),
             };
             place_icon = placed_icon.placed;
             icon_occluded = placed_icon.occluded;
             offscreen &= placed_icon.offscreen;
         }
 
-        let icon_without_text = !symbol_instance.has_text() || *ctx.get_layout().text_optional.uniform();
-        let text_without_icon = !symbol_instance.has_icon() || *ctx.get_layout().icon_optional.uniform();
+        let icon_without_text = !symbol_instance.has_text() || *ctx.layout().text_optional.uniform();
+        let text_without_icon = !symbol_instance.has_icon() || *ctx.layout().icon_optional.uniform();
 
         // combine placements for icon and text
         if !icon_without_text && !text_without_icon {
@@ -1306,30 +1309,30 @@ impl Placement {
         }
 
         if place_text {
-            let feature = match symbol_instance.get_vertical_text_collision_feature() {
+            let feature = match symbol_instance.vertical_text_collision_feature() {
                 Some(vertical) if placed_vertical_text.placed => vertical,
-                _ => symbol_instance.get_text_collision_feature(),
+                _ => symbol_instance.text_collision_feature(),
             };
             self.collision_index.insert_feature(
                 feature,
                 &self.text_boxes,
                 ctx.text_overlap_mode,
-                *ctx.get_layout().text_ignore_placement.uniform(),
+                *ctx.layout().text_ignore_placement.uniform(),
                 bucket.bucket_instance_id,
                 ctx.collision_group.0,
             );
         }
 
         if place_icon {
-            let feature = match symbol_instance.get_vertical_icon_collision_feature() {
+            let feature = match symbol_instance.vertical_icon_collision_feature() {
                 Some(vertical) if placed_vertical_icon.placed => vertical,
-                _ => symbol_instance.get_icon_collision_feature(),
+                _ => symbol_instance.icon_collision_feature(),
             };
             self.collision_index.insert_feature(
                 feature,
                 &self.icon_boxes,
                 ctx.icon_overlap_mode,
-                *ctx.get_layout().icon_ignore_placement.uniform(),
+                *ctx.layout().icon_ignore_placement.uniform(),
                 bucket.bucket_instance_id,
                 ctx.collision_group.0,
             );
@@ -1339,13 +1342,13 @@ impl Placement {
         let has_text_collision_circle_data = has_text_collision_circle_data(state);
 
         if has_icon_collision_circle_data
-            && symbol_instance.get_icon_collision_feature().along_line
+            && symbol_instance.icon_collision_feature().along_line
             && !self.icon_boxes.is_empty()
         {
             self.collision_circles.insert((bucket.bucket_instance_id, symbol_index, false), self.icon_boxes.clone());
         }
         if has_text_collision_circle_data
-            && symbol_instance.get_text_collision_feature().along_line
+            && symbol_instance.text_collision_feature().along_line
             && !self.text_boxes.is_empty()
         {
             self.collision_circles.insert((bucket.bucket_instance_id, symbol_index, true), self.text_boxes.clone());
@@ -1379,7 +1382,9 @@ impl Placement {
         result
     }
 
-    /// The `placeFeatureForVariableAnchors` lambda of `placeSymbol`.
+    /// Places a symbol's text, and its icon with it, at the first of
+    /// `variable_text_anchors` where it fits: first where it overlaps
+    /// nothing, then where its overlap mode lets it overlap.
     #[expect(
         clippy::too_many_arguments,
         reason = "the text and icon features, the symbol and the placement context, projectors and anchors that place them"
@@ -1401,11 +1406,11 @@ impl Placement {
         do_variable_icon_placement: bool,
         shift: &Cell<Vec2>,
     ) -> PlacedFeatureResult {
-        let bucket = ctx.get_bucket();
+        let bucket = ctx.bucket();
         let text_box = &instance_pools.boxes(text_collision_feature)[0];
         let width = text_box.x2 - text_box.x1;
         let height = text_box.y2 - text_box.y1;
-        let text_box_scale = symbol_instance.get_text_box_scale();
+        let text_box_scale = symbol_instance.text_box_scale();
         let mut placed_feature = PlacedFeatureResult::default();
         let anchors_size = variable_text_anchors.len();
         // The first pass places the text where it overlaps nothing; a second
@@ -1414,13 +1419,12 @@ impl Placement {
         let placement_attempts =
             if ctx.text_overlap_mode == OverlapMode::Never { anchors_size } else { anchors_size * 2 };
         for i in 0..placement_attempts {
-            // when anchorsSize is 0, placementAttempts is also 0,
-            // so this code would not be reached
+            // Without anchors there are no attempts, so this isn't reached.
             let anchor = variable_text_anchors[i % anchors_size];
             let variable_text_offset = symbol_instance
-                .get_text_variable_anchor_offset()
+                .text_variable_anchor_offset()
                 .as_ref()
-                .expect("textVariableAnchorOffset")
+                .expect("a symbol placed at variable anchors has their offsets")
                 .get_offset_by_anchor(&anchor);
             let overlap_mode = if i >= anchors_size { ctx.text_overlap_mode } else { OverlapMode::Never };
             shift.set(calculate_variable_layout_offset_unrotated(
@@ -1487,7 +1491,8 @@ impl Placement {
                     ctx.scale,
                     font_size,
                     ctx.icon_overlap_mode,
-                    ctx.pitch_text_with_map, // TODO: shall it be pitchIconWithMap?
+                    // TODO: should this be whether icons pitch with the map?
+                    ctx.pitch_text_with_map,
                     ctx.rotate_text_with_map,
                     self.show_collision_boxes,
                     ctx.avoid_edges.as_ref(),
@@ -1508,13 +1513,14 @@ impl Placement {
                 // If this label was placed in the previous
                 // placement, record the anchor position to allow us
                 // to animate the transition
-                if let Some(prev) = self.get_prev_placement() {
+                if let Some(prev) = self.prev_placement() {
                     let prev_offset = prev.variable_offsets.get(&cross_tile_id);
                     let prev_placements = prev.placements.get(&cross_tile_id);
                     if let (Some(prev_offset), Some(prev_placements)) = (prev_offset, prev_placements)
                         && prev_placements.text
                     {
-                        // TODO: The prevAnchor seems to be unused, needs to be fixed.
+                        // TODO: `prev_anchor` is never read; the transition
+                        // from the previous anchor isn't animated.
                         prev_anchor = Some(prev_offset.anchor);
                     }
                 }
@@ -1540,26 +1546,26 @@ impl Placement {
 
     /// Returns indices into the bucket's symbol instances, in the order to
     /// place them.
-    fn get_sorted_symbols(
+    fn placement_order(
         &self,
         params: &BucketPlacementData,
         bucket: &SymbolBucket,
         state: &SymbolBucketState,
         _pixel_ratio: f32,
     ) -> Vec<usize> {
-        let mut sorted_symbols = get_bucket_symbols(
+        let mut sorted_symbols = bucket_symbols(
             bucket,
             state,
             params.sort_key_range.as_ref(),
-            self.collision_index.get_transform_state().get_bearing(),
+            self.collision_index.transform_state().get_bearing(),
         );
-        if let Some(previous_placement) = self.get_prev_placement()
+        if let Some(previous_placement) = self.prev_placement()
             && self.is_tilted_view()
         {
             let symbols = &state.symbol_instances;
             // The symbols shown before first, then the new ones, then the
             // ones hidden before.
-            sorted_symbols.sort_by_key(|&i| match previous_placement.get_symbol_placement(&symbols[i]) {
+            sorted_symbols.sort_by_key(|&i| match previous_placement.symbol_placement(&symbols[i]) {
                 Some(placement) if placement.placed() => 0,
                 None => 1,
                 Some(_) => 2,
@@ -1568,7 +1574,8 @@ impl Placement {
         sorted_symbols
     }
 
-    /// The virtual `commit()`.
+    /// Makes the placement's opacities the symbols', fading them from the
+    /// previous placement's in continuous mode.
     fn commit(&mut self) {
         match self.kind {
             PlacementKind::Continuous => self.continuous_commit(),
@@ -1654,7 +1661,7 @@ impl Placement {
     /// Brings the vertices of the buckets `layer` places up to date with
     /// the placement, and adds what changed of them to `changed`.
     pub(crate) fn update_layer_buckets(
-        &self,
+        &mut self,
         layer: &dyn RenderLayer,
         state: &TransformState,
         update_opacities: bool,
@@ -1662,13 +1669,18 @@ impl Placement {
         buckets: &mut impl SymbolBuckets,
     ) {
         let mut seen_cross_tile_ids: BTreeSet<NonZeroU32> = BTreeSet::new();
-        for item in layer.get_placement_data() {
-            // `sortKeyRange->isFirstRange()`: `start == 0u`.
+        for item in layer.placement_data() {
+            // A bucket split by sort key updates once, from its first range.
             if item.sort_key_range.is_none_or(|range| range.start == 0)
                 && let Some(bucket) = buckets.get_mut(&item.bucket)
             {
                 let changes = bucket.update_vertices(self, update_opacities, state, item, &mut seen_cross_tile_ids);
                 changed.mark(bucket.base.bucket_id, changes);
+                if update_opacities
+                    && let Some(retained_data) = self.retained_query_data.get_mut(&bucket.bucket_instance_id)
+                {
+                    retained_data.feature_sort_order.clone_from(&bucket.state.feature_sort_order);
+                }
             }
         }
     }
@@ -1683,11 +1695,11 @@ impl Placement {
         changed: &mut ChangedBuckets,
         buckets: &mut impl SymbolBuckets,
     ) {
-        for item in layer.get_follower_data() {
+        for item in layer.follower_data() {
             let Some(bucket) = buckets.get_mut(&item.bucket) else {
                 continue;
             };
-            if bucket.update_layer_vertices(self, state, item, layer.get_id()) {
+            if bucket.update_layer_vertices(self, state, item, layer.id()) {
                 changed.mark(bucket.base.bucket_id, BucketChanges { dynamic: true, ..BucketChanges::default() });
             }
         }
@@ -1736,8 +1748,8 @@ impl Placement {
                 }
             }
         }
-        // GL JS rewrites a shared bucket's positions for each layer it draws;
-        // one at another translation keeps its own (`positions_and_symbols`).
+        // A layer that shares the bucket at another translation keeps
+        // positions of its own (`positions_and_symbols`).
 
         if along_line {
             if *layout.icon_rotation_alignment.uniform() == AlignmentType::Map {
@@ -1822,7 +1834,7 @@ impl Placement {
             let mut vec_east = Vec2::new(1.0f32, 0.0);
             let mut vec_south = Vec2::new(0.0f32, 1.0);
             if pitch_with_map && !rotate_with_map {
-                let (east, south) = get_tile_skew_vectors(state);
+                let (east, south) = tile_skew_vectors(state);
                 vec_east = Vec2::new(east[0] as f32, east[1] as f32);
                 vec_south = Vec2::new(south[0] as f32, south[1] as f32);
             }
@@ -2075,23 +2087,23 @@ impl Placement {
                 let opacity_attributes =
                     SymbolBucket::opacity_attributes(opacity_state.text.placed, opacity_state.text.opacity);
                 if let Some(i) = symbol_instance.placed_right_text_index {
-                    text_opacity_vertices_size += symbol_instance.get_right_justified_glyph_quads_size() * count;
+                    text_opacity_vertices_size += symbol_instance.right_justified_glyph_quads_size() * count;
                     text.placed_symbols[i].hidden = opacity_state.is_hidden();
                 }
                 if let Some(i) = symbol_instance.placed_center_text_index
-                    && !symbol_instance.get_single_line()
+                    && !symbol_instance.single_line()
                 {
-                    text_opacity_vertices_size += symbol_instance.get_center_justified_glyph_quads_size() * count;
+                    text_opacity_vertices_size += symbol_instance.center_justified_glyph_quads_size() * count;
                     text.placed_symbols[i].hidden = opacity_state.is_hidden();
                 }
                 if let Some(i) = symbol_instance.placed_left_text_index
-                    && !symbol_instance.get_single_line()
+                    && !symbol_instance.single_line()
                 {
-                    text_opacity_vertices_size += symbol_instance.get_left_justified_glyph_quads_size() * count;
+                    text_opacity_vertices_size += symbol_instance.left_justified_glyph_quads_size() * count;
                     text.placed_symbols[i].hidden = opacity_state.is_hidden();
                 }
                 if let Some(i) = symbol_instance.placed_vertical_text_index {
-                    text_opacity_vertices_size += symbol_instance.get_vertical_glyph_quads_size() * count;
+                    text_opacity_vertices_size += symbol_instance.vertical_glyph_quads_size() * count;
                     text.placed_symbols[i].hidden = opacity_state.is_hidden();
                 }
 
@@ -2116,12 +2128,12 @@ impl Placement {
                 let icon_buffer: &mut Buffer = if symbol_instance.has_sdf_icon() { &mut *sdf_icon } else { &mut *icon };
 
                 if let Some(i) = symbol_instance.placed_icon_index {
-                    icon_opacity_vertices_size += symbol_instance.get_icon_quads_size() * count;
+                    icon_opacity_vertices_size += symbol_instance.icon_quads_size() * count;
                     icon_buffer.placed_symbols[i].hidden = opacity_state.is_hidden();
                 }
 
                 if let Some(i) = symbol_instance.placed_vertical_icon_index {
-                    icon_opacity_vertices_size += symbol_instance.get_icon_quads_size() * count;
+                    icon_opacity_vertices_size += symbol_instance.icon_quads_size() * count;
                     icon_buffer.placed_symbols[i].hidden = opacity_state.is_hidden();
                 }
 
@@ -2201,8 +2213,8 @@ impl Placement {
                 } else {
                     // This feature was not placed, because it was not loaded or
                     // from a fading tile. Apply default values.
-                    // C++ quirk: a function-local `static`, so the
-                    // vertex of the first call is used from then on.
+                    // The vertex of the first such feature, which every
+                    // later one shares.
                     static DYNAMIC_VERTEX: OnceLock<CollisionBoxDynamicVertex> = OnceLock::new();
                     let dynamic_vertex = *DYNAMIC_VERTEX.get_or_init(|| {
                         SymbolBucket::collision_dynamic_vertex(placed, false /*not used*/, Vec2::ZERO)
@@ -2216,11 +2228,11 @@ impl Placement {
             if has_text_collision_box {
                 text_shift = update_text_collision_box(
                     text_collision_box,
-                    symbol_instance.get_text_collision_feature(),
+                    symbol_instance.text_collision_feature(),
                     opacity_state.text.placed,
                 );
                 if bucket.allow_vertical_placement
-                    && let Some(vertical) = symbol_instance.get_vertical_text_collision_feature()
+                    && let Some(vertical) = symbol_instance.vertical_text_collision_feature()
                 {
                     vertical_text_shift =
                         update_text_collision_box(text_collision_box, vertical, opacity_state.text.placed);
@@ -2229,12 +2241,12 @@ impl Placement {
             if has_icon_collision_box {
                 update_icon_collision_box(
                     icon_collision_box,
-                    symbol_instance.get_icon_collision_feature(),
+                    symbol_instance.icon_collision_feature(),
                     opacity_state.icon.placed,
                     if has_icon_text_fit { text_shift } else { Vec2::ZERO },
                 );
                 if bucket.allow_vertical_placement
-                    && let Some(vertical) = symbol_instance.get_vertical_icon_collision_feature()
+                    && let Some(vertical) = symbol_instance.vertical_icon_collision_feature()
                 {
                     update_icon_collision_box(
                         icon_collision_box,
@@ -2248,7 +2260,7 @@ impl Placement {
             if has_icon_collision_circle {
                 update_collision_circles(
                     icon_collision_circle,
-                    symbol_instance.get_icon_collision_feature(),
+                    symbol_instance.icon_collision_feature(),
                     opacity_state.icon.placed,
                     false,
                 );
@@ -2256,21 +2268,17 @@ impl Placement {
             if has_text_collision_circle {
                 update_collision_circles(
                     text_collision_circle,
-                    symbol_instance.get_text_collision_feature(),
+                    symbol_instance.text_collision_feature(),
                     opacity_state.text.placed,
                     true,
                 );
             }
         }
-        let sorted = bucket.sort_features(state.get_bearing() as f32);
-
-        if let Some(retained_data) = self.retained_query_data.get(&bucket.bucket_instance_id) {
-            *retained_data.feature_sort_order.borrow_mut() = bucket.state.feature_sort_order.clone();
-        }
-        sorted
+        bucket.sort_features(state.get_bearing() as f32)
     }
 
-    /// The virtual `symbolFadeChange(now)`.
+    /// How far the symbols' fade has come at `now`, from 0 to 1 and past
+    /// it once it is done: always 1 where symbols don't fade.
     pub(crate) fn symbol_fade_change(&self, now: Option<Instant>) -> f32 {
         match self.kind {
             PlacementKind::Continuous => {
@@ -2291,26 +2299,24 @@ impl Placement {
         // calculations. Reducing the interval between placements means collisions
         // are discovered and eliminated sooner.
         let adjustment = (self.placement_zoom - zoom) / 1.5;
-        // `std::max(0.0f, x)`: `(0 < x) ? x : 0`.
         if 0.0 < adjustment { adjustment } else { 0.0 }
     }
 
-    pub(crate) fn get_symbol_placement(&self, symbol: &SymbolInstance) -> Option<&JointPlacement> {
+    pub(crate) fn symbol_placement(&self, symbol: &SymbolInstance) -> Option<&JointPlacement> {
         self.placements.get(&symbol.cross_tile_id()?)
     }
 
-    pub(crate) fn get_update_period(&self, zoom: f32) -> Duration {
-        // Even if transitionOptions.duration is set to a value < 300ms, we still wait
-        // for this default transition duration before attempting another placement operation.
+    pub(crate) fn update_period(&self, zoom: f32) -> Duration {
+        // Even with a transition shorter than the default, placement waits
+        // for the default before it runs again.
         let duration = self.transition_options.duration.unwrap_or(DEFAULT_TRANSITION_DURATION);
-        // `std::max(a, b)`: `(a < b) ? b : a`.
         let fade_duration = if DEFAULT_TRANSITION_DURATION < duration { duration } else { DEFAULT_TRANSITION_DURATION };
-        // `duration_cast<Duration>(fadeDuration * (1.0 - zoomAdjustment(zoom)))`;
-        // zero once the adjustment passes 1.
+        // Zero once the adjustment passes 1.
         Duration::from_nanos((fade_duration.as_nanos() as f64 * (1.0 - f64::from(self.zoom_adjustment(zoom)))) as u64)
     }
 
-    /// The virtual `transitionsEnabled()`.
+    /// Whether symbols fade between placements: only in continuous mode,
+    /// where the style enables placement transitions.
     pub(crate) fn transitions_enabled(&self) -> bool {
         match self.kind {
             PlacementKind::Continuous => self.transition_options.enable_placement_transitions,
@@ -2318,7 +2324,7 @@ impl Placement {
         }
     }
 
-    /// The virtual `hasTransitions(now)`.
+    /// Whether the symbols' fade still runs at `now`.
     pub(crate) fn has_transitions(&self, now: Option<Instant>) -> bool {
         match self.kind {
             PlacementKind::Continuous => {
@@ -2330,15 +2336,15 @@ impl Placement {
         }
     }
 
-    /// The virtual `collectPlacedSymbolData(enable)`.
+    /// Collects the data of the symbols placed, in tile mode, or stops.
     pub(crate) fn collect_placed_symbol_data(&mut self, enable: bool) {
         if let PlacementKind::Tile(tile) = &mut self.kind {
             tile.collect_data = enable;
         }
     }
 
-    /// The virtual `getPlacedSymbolsData()`.
-    pub(crate) fn get_placed_symbols_data(&self) -> &[PlacedSymbolData] {
+    /// The data of the symbols placed, when tile mode collects it.
+    pub(crate) fn placed_symbols_data(&self) -> &[PlacedSymbolData] {
         match &self.kind {
             PlacementKind::Tile(tile) => &tile.placed_symbols_data,
             _ => &[],
@@ -2346,13 +2352,15 @@ impl Placement {
     }
 
     /// The query data of a bucket instance; `Err` if there is none.
-    pub(crate) fn get_query_data(&self, bucket_instance_id: u32) -> Result<&RetainedQueryData, String> {
+    pub(crate) fn query_data(&self, bucket_instance_id: u32) -> Result<&RetainedQueryData, String> {
         self.retained_query_data
             .get(&bucket_instance_id)
-            .ok_or_else(|| "Placement::getQueryData with unrecognized bucketInstanceId".to_owned())
+            .ok_or_else(|| format!("no query data of the bucket instance {bucket_instance_id}"))
     }
 
-    /// The virtual `newSymbolPlaced(...)` (only `TilePlacement` overrides it).
+    /// Records the data of `symbol`, placed as `placement` with its
+    /// collision boxes, where tile mode collects it: for a point symbol that
+    /// won't be placed again at another anchor.
     #[expect(
         clippy::too_many_arguments,
         reason = "the symbol and its pools, the placement and its context and type, and the projected boxes"
@@ -2367,7 +2375,7 @@ impl Placement {
         text_collision_boxes: &[ProjectedCollisionBox],
         icon_collision_boxes: &[ProjectedCollisionBox],
     ) {
-        let viewport_padding = self.collision_index.get_viewport_padding();
+        let viewport_padding = self.collision_index.viewport_padding();
         let should_retry = self.should_retry_placement(placement, ctx);
         let PlacementKind::Tile(tile) = &mut self.kind else {
             return;
@@ -2396,17 +2404,17 @@ impl Placement {
             icon_placed: placement.icon,
             intersects_tile_border: !placement.skip_fade && tile.populate_intersections,
             viewport_padding,
-            layer: ctx.get_bucket().bucket_leader_id.clone(),
+            layer: ctx.bucket().bucket_leader_id.clone(),
         };
         tile.placed_symbols_data.push(symbol_data);
     }
 
-    /// The virtual `getAvoidEdges(bucket, posMatrix)`.
-    fn get_avoid_edges(&mut self, bucket: &SymbolBucket, pos_matrix: &Mat4) -> Option<CollisionBoundaries> {
+    /// The tile borders that `bucket`'s symbols stay inside, in tile mode,
+    /// where the bucket avoids its tile's edges or places along lines.
+    fn avoid_edges(&mut self, bucket: &SymbolBucket, pos_matrix: &Mat4) -> Option<CollisionBoundaries> {
         let PlacementKind::Tile(tile) = &mut self.kind else {
             return None;
         };
-        // `TilePlacement::getAvoidEdges`.
         tile.tile_borders = Some(self.collision_index.project_tile_boundaries(pos_matrix));
         let layout = &*bucket.layout;
         if *layout.symbol_avoid_edges.uniform() || *layout.symbol_placement.uniform() == SymbolPlacementType::Line {
@@ -2415,8 +2423,10 @@ impl Placement {
         None
     }
 
-    /// The virtual `canPlaceAtVariableAnchor(box, anchor, shift, anchors,
-    /// posMatrix, textPixelRatio)`.
+    /// Whether a label at the variable anchor `anchor` of `anchors`, whose
+    /// box is `box_` moved by `shift`, may show: always outside tile mode; in
+    /// tile mode where it stays inside its tile's borders, or, at the first
+    /// anchor while intersections populate, where it crosses them unshifted.
     fn can_place_at_variable_anchor(
         &self,
         box_: &CollisionBox,
@@ -2429,8 +2439,7 @@ impl Placement {
         let PlacementKind::Tile(tile) = &self.kind else {
             return true;
         };
-        // `TilePlacement::canPlaceAtVariableAnchor`.
-        let tile_borders = tile.tile_borders.as_ref().expect("tileBorders");
+        let tile_borders = tile.tile_borders.as_ref().expect("a tile placed against its borders has them");
         if tile.populate_intersections {
             // A variable label is only allowed to intersect tile border with the first anchor.
             if anchors.first() == Some(&anchor) {
@@ -2450,7 +2459,8 @@ impl Placement {
             }
             // The most important labels shall be placed first anyway, so we continue trying
             // the following variable anchors for them; less priority labels
-            // will wait for the second round (when `populateIntersections` is `false`).
+            // will wait for the second round (when `populate_intersections` is
+            // false).
             if tile.current_intersection_priority > 0 {
                 return false;
             }
@@ -2466,7 +2476,7 @@ impl Placement {
             return false;
         };
         // We re-try the placement to try out remaining variable anchors.
-        tile.populate_intersections && !placement.placed() && ctx.get_bucket().has_variable_text_anchors()
+        tile.populate_intersections && !placement.placed() && ctx.bucket().has_variable_text_anchors()
     }
 
     fn tile_state(&mut self) -> &mut TilePlacementState {
@@ -2494,7 +2504,7 @@ impl Placement {
         let mut contexts: Vec<PlacementContext<'a>> = Vec::new();
         let mut intersections: Vec<Intersection> = Vec::new();
         for layer in layers.iter().rev() {
-            for data in layer.get_placement_data() {
+            for data in layer.placement_data() {
                 if let Some(bucket) = buckets.get(&data.bucket) {
                     self.collect_intersections(data, bucket, reloaded_placed, &mut contexts, &mut intersections);
                 }
@@ -2519,12 +2529,12 @@ impl Placement {
                 .then(a.anchor_point.x.total_cmp(&b.anchor_point.x))
         });
         // Place intersections.
-        let transform_state = self.collision_index.get_transform_state().clone();
+        let transform_state = self.collision_index.transform_state().clone();
         for &i in &order {
             let intersection = &intersections[i];
             let ctx = &contexts[intersection.ctx];
             self.tile_state().current_intersection_priority = intersection.priority;
-            let state = &ctx.get_bucket().state;
+            let state = &ctx.bucket().state;
             let symbol = &state.symbol_instances[intersection.symbol_index];
             if symbol.cross_tile_id().is_some_and(|id| seen_cross_tile_ids.contains(&id)) {
                 continue;
@@ -2542,7 +2552,7 @@ impl Placement {
         // Place the rest labels.
         self.tile_state().populate_intersections = false;
         for layer in layers.iter().rev() {
-            for data in layer.get_placement_data() {
+            for data in layer.placement_data() {
                 if let Some(bucket) = buckets.get(&data.bucket) {
                     self.base_place_symbol_bucket(data, bucket, &mut seen_cross_tile_ids, reloaded_placed);
                 }
@@ -2578,12 +2588,12 @@ impl Placement {
         }
         let render_tile = &params.tile;
         let collision_group = self.collision_groups.get(&params.source_id);
-        let avoid_edges = self.get_avoid_edges(bucket, &render_tile.matrix);
+        let avoid_edges = self.avoid_edges(bucket, &render_tile.matrix);
         let ctx = PlacementContext::new(
             params,
             bucket,
             just_reloaded(reloaded_placed, &params.bucket, bucket),
-            self.collision_index.get_transform_state(),
+            self.collision_index.transform_state(),
             self.placement_zoom,
             collision_group,
             avoid_edges,
@@ -2593,15 +2603,15 @@ impl Placement {
         // In this case we first try to place symbols, which intersects the tile
         // borders, so that those symbols will remain even if each tile is handled
         // independently.
-        let symbol_instances = get_bucket_symbols(
+        let symbol_instances = bucket_symbols(
             bucket,
             state,
             params.sort_key_range.as_ref(),
-            self.collision_index.get_transform_state().get_bearing(),
+            self.collision_index.transform_state().get_bearing(),
         );
 
         let neighbor_tile_data = |collision_index: &CollisionIndex, id: UnwrappedTileID, shift: Vec2| {
-            let m = collision_index.get_transform_state().get_projection_data(&id).fallback_matrix;
+            let m = collision_index.transform_state().get_projection_data(&id).fallback_matrix;
             let borders = collision_index.project_tile_boundaries(&m);
             NeighborTileData { shift, matrix: m, borders }
         };
@@ -2634,7 +2644,7 @@ impl Placement {
             ), // right
         ];
 
-        let tile_borders = self.tile_state().tile_borders.expect("tileBorders");
+        let tile_borders = self.tile_state().tile_borders.expect("a tile placed against its borders has them");
         let collision_index = &self.collision_index;
         let collision_box_intersects_tile_edges = |collision_box: &CollisionBox, shift: Vec2| -> IntersectStatus {
             let mut intersects = collision_index.intersects_tile_edges(
@@ -2669,14 +2679,14 @@ impl Placement {
         let symbol_intersects_tile_edges = |symbol: &SymbolInstance| -> IntersectStatus {
             let mut result = IntersectStatus::default();
             let mut variable_anchor: Option<SymbolAnchorType> = None;
-            let text_variable_anchor_offset = symbol.get_text_variable_anchor_offset();
+            let text_variable_anchor_offset = symbol.text_variable_anchor_offset();
             if let Some(offsets) = text_variable_anchor_offset
                 && !offsets.is_empty()
             {
                 variable_anchor = offsets.iter().next().map(|pair| pair.anchor_type);
             }
 
-            if let Some(text_collision_box) = instance_pools.boxes(symbol.get_text_collision_feature()).first() {
+            if let Some(text_collision_box) = instance_pools.boxes(symbol.text_collision_feature()).first() {
                 let mut offset = Vec2::ZERO;
                 if let Some(variable_anchor) = variable_anchor
                     && let Some(text_variable_anchor_offset) = &text_variable_anchor_offset
@@ -2691,7 +2701,7 @@ impl Placement {
                         width,
                         height,
                         variable_text_offset,
-                        symbol.get_text_box_scale(),
+                        symbol.text_box_scale(),
                         rotate_text_with_map,
                         pitch_text_with_map,
                         bearing,
@@ -2700,7 +2710,7 @@ impl Placement {
                 result = collision_box_intersects_tile_edges(text_collision_box, offset);
             }
 
-            if let Some(icon_collision_box) = instance_pools.boxes(symbol.get_icon_collision_feature()).first() {
+            if let Some(icon_collision_box) = instance_pools.boxes(symbol.icon_collision_feature()).first() {
                 let mut offset = Vec2::ZERO;
                 if let Some(variable_anchor) = variable_anchor
                     && variable_icon_placement
@@ -2716,7 +2726,7 @@ impl Placement {
                         width,
                         height,
                         variable_text_offset,
-                        symbol.get_text_box_scale(),
+                        symbol.text_box_scale(),
                         rotate_text_with_map,
                         pitch_text_with_map,
                         bearing,
@@ -2745,7 +2755,7 @@ impl Placement {
             new_intersections.push(Intersection {
                 ctx: ctx_index,
                 symbol_index,
-                anchor_point: symbol.get_anchor().point,
+                anchor_point: symbol.anchor().point,
                 status: intersect_status,
                 priority,
             });
@@ -2774,8 +2784,7 @@ impl SymbolBucket {
 
         let dynamic_updated = placement.update_bucket_dynamic_attribute_data(self, state, data, None);
 
-        // `uploaded = false` for either change, then the buffers'
-        // `updateModified()` when not uploaded.
+        // The vertices of either change upload again.
         self.mark_vertices_updated(update_opacities, dynamic_updated);
         BucketChanges { paint: false, opacity: update_opacities, dynamic: dynamic_updated, sort: sorted }
     }

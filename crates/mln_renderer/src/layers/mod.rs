@@ -12,13 +12,10 @@ pub(crate) mod render_line_layer;
 pub(crate) mod render_raster_layer;
 pub(crate) mod render_symbol_layer;
 
-use mln_gfx::vertex_vector::VertexVectorBasePtr;
-use mln_style::layer_type::ErasedLayerStyle;
-
 use crate::bucket::UploadNeeds;
 use crate::draw::DrawObjects;
+use crate::gfx::vertex_attribute::VertexAttributeArray;
 use crate::layer_drawing::BucketChanges;
-use crate::render_tile::FrameTile;
 
 /// What the layers' draws read of the buckets on the device of `context`.
 pub(crate) fn upload_needs(context: &crate::gfx::context::Context) -> UploadNeeds {
@@ -35,30 +32,12 @@ pub(crate) fn upload_needs(context: &crate::gfx::context::Context) -> UploadNeed
 pub(crate) fn refresh_paint_attributes(
     objects: &mut DrawObjects,
     changes: BucketChanges,
-    refresh: impl FnOnce(&mut mln_gfx::vertex_attribute::VertexAttributeArray),
+    refresh: impl FnOnce(&mut VertexAttributeArray),
 ) {
     if !changes.paint {
         return;
     }
     refresh(objects.paint_attributes_mut());
-}
-
-/// A shared gfx vertex vector holding a copy of `vertices`, for data that
-/// stays in the bucket or the layer (see `bucket_geometry::released_vertices`;
-/// a bucket's geometry comes from `bucket_geometry::bucket_vertices`).
-pub(crate) fn shared_vertices<V: bytemuck::Pod>(vertices: &[V]) -> VertexVectorBasePtr {
-    crate::bucket_geometry::released_vertices(vertices)
-}
-
-/// The tile's bucket of the layer `style`, if it was laid out to draw in
-/// `pass`.
-pub(crate) fn layer_bucket_for_pass<'a>(
-    tile: FrameTile<'a>,
-    style: &dyn ErasedLayerStyle,
-    pass: crate::render_pass::RenderPass,
-) -> Option<crate::render_layer::LayerBucket<'a>> {
-    let render_data = tile.layer_bucket(style)?;
-    if (render_data.layer.render_passes() & pass.underlying_type()) != 0 { Some(render_data) } else { None }
 }
 
 #[must_use]

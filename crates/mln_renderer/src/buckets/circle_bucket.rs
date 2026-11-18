@@ -1,6 +1,5 @@
-// The vertex/index vectors are plain `Vec`s here (the bucket is built on the
-// worker thread and shared with `Arc`); the render layer copies them into
-// the shared gfx vectors its draws reference.
+// The vertices and indices are `GeometryVec`s, which a worker fills and the
+// bucket's upload moves into the context's stores, which its draws read.
 
 use std::sync::Arc;
 
@@ -13,7 +12,7 @@ use mln_util::Color;
 use mln_vec_map::VecMap;
 
 use crate::bucket::{Bucket, BucketBase, UploadNeeds};
-use crate::bucket_geometry::{BucketGeometry, GeometryVec};
+use crate::bucket_geometry::{GeometryUpload, GeometryVec};
 use crate::layer_type::EvaluatedLayer;
 use crate::paint_property_binder::PaintPropertyBinder;
 
@@ -71,23 +70,23 @@ impl CircleBucket {
     pub(crate) fn query_radius(&self, layer: &EvaluatedLayer<Circle>) -> f32 {
         let evaluated = &layer.paint;
         let binders = self.paint_property_binders.get(&layer.style.id);
-        let radius = get_radius_or_width(
+        let radius = radius_or_width(
             evaluated.circle_radius.constant(),
             CirclePaintProperties::Defaults::circle_radius(),
             binders.and_then(|b| b.circle_radius.statistics.max()),
         );
-        let stroke = get_radius_or_width(
+        let stroke = radius_or_width(
             evaluated.circle_stroke_width.constant(),
             CirclePaintProperties::Defaults::circle_stroke_width(),
             binders.and_then(|b| b.circle_stroke_width.statistics.max()),
         );
         let translate = evaluated.circle_translate.uniform();
-        // util::length(a, b) = std::sqrt(a * a + b * b), in float
+        // The translation's length, in `f32`.
         radius + stroke + (translate[0] * translate[0] + translate[1] * translate[1]).sqrt()
     }
 
-    /// The layout vertex for `p` with extrusion (`ex`, `ey`). As in C++,
-    /// `p.x * 2` is an integer, added to a float and truncated to `i16`.
+    /// The layout vertex for `p` with extrusion (`ex`, `ey`): `p.x * 2` is
+    /// an integer, added to a float and truncated to `i16`.
     #[must_use]
     pub(crate) fn vertex(
         p: mln_tile_id::geometry_tile_data::GeometryCoordinate,
@@ -103,9 +102,9 @@ impl CircleBucket {
     }
 }
 
-/// The anonymous-namespace `get<Property>(evaluated, id, binders)` of
-/// `circle_bucket.cpp`.
-fn get_radius_or_width(evaluated_constant: Option<f32>, default_value: f32, statistics_max: Option<f32>) -> f32 {
+/// A data-driven property's largest value over the bucket's features, from
+/// its binder's `statistics_max`, or else its constant value or default.
+fn radius_or_width(evaluated_constant: Option<f32>, default_value: f32, statistics_max: Option<f32>) -> f32 {
     match statistics_max {
         Some(max) => max,
         None => evaluated_constant.unwrap_or(default_value),
@@ -117,7 +116,7 @@ impl Bucket for CircleBucket {
         &self.base
     }
 
-    fn upload(&mut self, geometry: &mut BucketGeometry, _needs: UploadNeeds) {
+    fn upload(&mut self, geometry: &mut GeometryUpload<'_>, _needs: UploadNeeds) {
         geometry.move_vertices(&mut self.vertices);
         geometry.move_indexes(&mut self.triangles);
         for binders in self.paint_property_binders.values_mut() {

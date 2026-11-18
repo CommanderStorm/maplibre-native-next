@@ -26,6 +26,7 @@ use crate::bucket::Bucket;
 use crate::layout::layout::{BuildParams, Layout, LayoutParameters, SourceLayer};
 use crate::layout::tile_layout::{Built, Resolved};
 use crate::render_layer::RenderLayer;
+use crate::render_tile::TileView;
 
 /// A layer type that the renderer draws.
 pub(crate) trait LayerType: StyleLayerType {
@@ -37,6 +38,13 @@ pub(crate) trait LayerType: StyleLayerType {
     /// The bucket the layout makes. [`NoBucket`](crate::bucket::NoBucket)
     /// for a type that doesn't lay out.
     type Bucket: Bucket + Wire;
+
+    /// What a frame's tile shows a layer of the type, which its draws draw:
+    /// its bucket in the tile's layout
+    /// ([`LayerBucket`](crate::render_layer::LayerBucket)), a raster or
+    /// raster-dem tile's own bucket, or nothing for a type without a source
+    /// ([`NoTileBucket`](crate::render_tile::NoTileBucket)).
+    type TileBucket<'a>: TileView<'a>;
 
     /// Whether the layout of `group` can need glyphs or images. A tile
     /// makes such a group's layout before the dependencies are resolved,
@@ -116,9 +124,6 @@ pub(crate) trait ErasedEvaluatedLayer: Any + Send + Sync {
 
     fn shared_style(&self) -> Arc<dyn ErasedLayerStyle>;
 
-    /// The `RenderPass` bits the layer draws in.
-    fn render_passes(&self) -> u8;
-
     /// Bit i is set when the i-th data-driven paint property is the same for
     /// every feature.
     fn constants_mask(&self) -> u64;
@@ -146,10 +151,6 @@ impl<T: LayerType> ErasedEvaluatedLayer for EvaluatedLayer<T> {
 
     fn shared_style(&self) -> Arc<dyn ErasedLayerStyle> {
         Arc::<LayerStyle<T>>::clone(&self.style)
-    }
-
-    fn render_passes(&self) -> u8 {
-        self.render_passes
     }
 
     fn constants_mask(&self) -> u64 {
@@ -232,8 +233,7 @@ impl<T: LayerType> ErasedLayerType for LayerTypeEntry<T> {
     }
 
     fn query_radius(&self, bucket: &dyn Bucket, layer: &Arc<dyn ErasedEvaluatedLayer>) -> f32 {
-        let any: &dyn Any = bucket;
-        match (any.downcast_ref::<T::Bucket>(), EvaluatedLayer::<T>::recover(layer)) {
+        match (recover_bucket::<T>(bucket), EvaluatedLayer::<T>::recover(layer)) {
             (Some(bucket), Some(layer)) => T::query_radius(bucket, &layer),
             _ => 0.0,
         }
@@ -255,6 +255,20 @@ impl<T: LayerType> ErasedLayerType for LayerTypeEntry<T> {
     fn read_bucket(&self, r: &mut Reader<'_>) -> Option<Box<dyn Bucket>> {
         Some(Box::new(T::Bucket::read(r)?))
     }
+}
+
+/// `bucket` as a bucket of a `T` layer, or `None` for another type's. The
+/// engine holds buckets as `dyn Bucket`; a layer type gets its own through
+/// this, in its glue, and never names another type's.
+pub(crate) fn recover_bucket<T: LayerType>(bucket: &dyn Bucket) -> Option<&T::Bucket> {
+    let any: &dyn Any = bucket;
+    any.downcast_ref()
+}
+
+/// [`recover_bucket`], to change the bucket.
+pub(crate) fn recover_bucket_mut<T: LayerType>(bucket: &mut dyn Bucket) -> Option<&mut T::Bucket> {
+    let any: &mut dyn Any = bucket;
+    any.downcast_mut()
 }
 
 /// `group`'s layers as `T` layers' values; fails if one is another type's.

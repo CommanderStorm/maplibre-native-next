@@ -4,7 +4,6 @@
 // its layout goes, and dropping a lease queues its bins for the atlas to free
 // the next time it packs or uploads.
 
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -18,8 +17,9 @@ use mln_util::size::Size;
 
 #[cfg(test)]
 use super::dynamic_texture::QueuedPixels;
-use super::dynamic_texture::{DynamicTexture, DynamicTextureBinId, PageTexture, TextureHandle};
+use super::dynamic_texture::{DynamicTexture, DynamicTextureBinId, TextureHandle};
 use crate::gfx::context::Context;
+use crate::gfx::store::SharedTexture;
 
 const EXTRA_PADDING: u16 = 1;
 const PADDING: u16 = ImagePosition::PADDING + EXTRA_PADDING;
@@ -61,7 +61,7 @@ fn padded_image(image: &PremultipliedImage, bin: RectU16, type_: ImageType) -> P
 
 /// A page of the atlas, as the atlas numbers it. Never reused within an
 /// atlas.
-type PageId = u64;
+pub(crate) type PageId = u64;
 
 /// Bins a lease gives back: the page's id and the handles.
 type Release = (PageId, Vec<TextureHandle>);
@@ -86,17 +86,10 @@ pub(crate) struct AtlasLease {
     texture_handles: Vec<TextureHandle>,
     /// What each of `texture_handles` is for.
     uses: Vec<BinUse>,
-    texture: PageTexture,
     releases: Sender<Release>,
 }
 
 impl AtlasLease {
-    /// The page's GPU texture, which the atlas makes in its first upload of
-    /// the page.
-    pub(crate) fn page_texture(&self) -> &PageTexture {
-        &self.texture
-    }
-
     /// The handles of the bins the lease holds, one per use.
     #[cfg(test)]
     pub(crate) fn texture_handles(&self) -> &[TextureHandle] {
@@ -104,7 +97,6 @@ impl AtlasLease {
     }
 
     /// The id of the page the bins are on.
-    #[cfg(test)]
     pub(crate) fn page(&self) -> PageId {
         self.page
     }
@@ -219,13 +211,7 @@ impl DynamicTextureAtlas {
 
     fn lease(&self, page: &Page, texture_handles: Vec<TextureHandle>, uses: Vec<BinUse>) -> AtlasLease {
         debug_assert_eq!(texture_handles.len(), uses.len());
-        AtlasLease {
-            page: page.id,
-            texture_handles,
-            uses,
-            texture: Rc::clone(page.texture.texture()),
-            releases: self.releases.clone(),
-        }
+        AtlasLease { page: page.id, texture_handles, uses, releases: self.releases.clone() }
     }
 
     /// A lease on the bins of `lease` that `keep` keeps, on the same page.
@@ -239,26 +225,20 @@ impl DynamicTextureAtlas {
                     continue;
                 }
                 // `lease` holds the bin, so its id still names it.
-                let rect = handle.get_rectangle();
+                let rect = handle.rectangle();
                 let size = Size::new(u32::from(rect.w), u32::from(rect.h));
-                if let Some(handle) = page.texture.reserve_size(size, Some(handle.get_id())) {
+                if let Some(handle) = page.texture.reserve_size(size, Some(handle.id())) {
                     texture_handles.push(handle);
                     uses.push(bin_use.clone());
                 }
             }
         }
-        AtlasLease {
-            page: lease.page,
-            texture_handles,
-            uses,
-            texture: Rc::clone(&lease.texture),
-            releases: self.releases.clone(),
-        }
+        AtlasLease { page: lease.page, texture_handles, uses, releases: self.releases.clone() }
     }
 
     /// A lease on the bin of the 1×1 page of `pixel_type`.
     fn dummy_lease(&mut self, pixel_type: TexturePixelType) -> AtlasLease {
-        let existing = self.dummies.iter().position(|page| page.texture.get_pixel_format() == pixel_type);
+        let existing = self.dummies.iter().position(|page| page.texture.pixel_format() == pixel_type);
         let index = if let Some(index) = existing {
             index
         } else {
@@ -316,7 +296,7 @@ impl DynamicTextureAtlas {
                     texture.upload_glyph(Arc::clone(glyph), PADDING, tex_handle);
                 }
             }
-            let rects: Vec<RectU16> = texture_handles.iter().map(|handle| *handle.get_rectangle()).collect();
+            let rects: Vec<RectU16> = texture_handles.iter().map(|handle| *handle.rectangle()).collect();
             let uses = drawn.into_iter().map(|(bin_use, _)| bin_use).collect();
             (self.lease(&self.pages[index], texture_handles, uses), rects)
         };
@@ -368,7 +348,7 @@ impl DynamicTextureAtlas {
 
         let texture = &mut self.pages[index].texture;
         for (tex_handle, (image, type_)) in texture_handles.iter_mut().zip(&images) {
-            let rect = *tex_handle.get_rectangle();
+            let rect = *tex_handle.rectangle();
             if tex_handle.is_upload_needed() {
                 texture.upload_image(padded_image(&image.image, rect, *type_).data, tex_handle);
             }
@@ -395,7 +375,7 @@ impl DynamicTextureAtlas {
     ) -> (usize, Vec<TextureHandle>) {
         let mut handles = Vec::new();
         for index in 0..self.pages.len() {
-            if self.pages[index].texture.get_pixel_format() != pixel_type {
+            if self.pages[index].texture.pixel_format() != pixel_type {
                 continue;
             }
             if reserve(self, index, &mut handles) {
@@ -434,9 +414,8 @@ impl DynamicTextureAtlas {
         if let Some(tex_handle) = &tex_handle
             && existing.is_none()
         {
-            self.image_allocations
-                .insert(key, ImageAllocation { image: Arc::clone(image), bin_id: tex_handle.get_id() });
-            self.image_allocation_keys.insert(BinKey { page: page.id, bin_id: tex_handle.get_id() }, key);
+            self.image_allocations.insert(key, ImageAllocation { image: Arc::clone(image), bin_id: tex_handle.id() });
+            self.image_allocation_keys.insert(BinKey { page: page.id, bin_id: tex_handle.id() }, key);
         }
         tex_handle
     }
@@ -456,9 +435,8 @@ impl DynamicTextureAtlas {
         if let Some(tex_handle) = &tex_handle
             && existing.is_none()
         {
-            self.glyph_allocations
-                .insert(key, GlyphAllocation { _glyph: Arc::clone(glyph), bin_id: tex_handle.get_id() });
-            self.glyph_allocation_keys.insert(BinKey { page: page.id, bin_id: tex_handle.get_id() }, key);
+            self.glyph_allocations.insert(key, GlyphAllocation { _glyph: Arc::clone(glyph), bin_id: tex_handle.id() });
+            self.glyph_allocation_keys.insert(BinKey { page: page.id, bin_id: tex_handle.id() }, key);
         }
         tex_handle
     }
@@ -471,7 +449,7 @@ impl DynamicTextureAtlas {
             }
             // The last handle was released, so forget the image revision or
             // glyph; its bin may now be reused.
-            let bin_key = BinKey { page: page.id, bin_id: tex_handle.get_id() };
+            let bin_key = BinKey { page: page.id, bin_id: tex_handle.id() };
             if let Some(key) = self.image_allocation_keys.remove(&bin_key) {
                 self.image_allocations.remove(&key);
             }
@@ -518,11 +496,16 @@ impl DynamicTextureAtlas {
     }
 
     /// Makes the pages' GPU textures and uploads what was queued for them.
-    pub(crate) fn upload(&mut self, context: &Context) {
+    pub(crate) fn upload(&mut self, context: &mut Context) {
         self.free_released();
         for page in self.pages.iter_mut().chain(&mut self.dummies) {
             page.texture.upload(context);
         }
+    }
+
+    /// The GPU texture of the page `page`, once the atlas uploaded it.
+    pub(crate) fn page_texture(&self, page: PageId) -> Option<&SharedTexture> {
+        self.pages.iter().chain(&self.dummies).find(|candidate| candidate.id == page)?.texture.texture()
     }
 
     /// The pages, for tests.

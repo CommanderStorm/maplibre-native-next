@@ -7,26 +7,26 @@ use std::sync::Arc;
 
 use mln_map_types::MapDebugOptions;
 use mln_style::Source;
-use mln_util::constants;
 use mln_util::error::Error;
 
 use crate::bucket::UploadNeeds;
+use crate::gfx::context::Context;
 use crate::layer_type::ErasedEvaluatedLayer;
 use crate::paint_parameters::{PaintParameters, TransformParameters};
 use crate::registry::Registry;
 use crate::render_tile::RenderTile;
-use crate::render_tree::DebugLayers;
 use crate::sources::render_image_source::ImageSourceRenderData;
+use crate::sources::render_tile_source::DebugLayers;
 use crate::tile::job::SourceKey;
 use crate::tile::store::TileStore;
 use crate::tile_parameters::TileParameters;
 
-pub(crate) struct SourcePrepareParameters<'a> {
+pub(crate) struct RenderTileParameters<'a> {
     pub(crate) transform: &'a TransformParameters,
     pub(crate) debug_options: MapDebugOptions,
     pub(crate) source_name: String,
     /// Whether a layer of the frame draws the source's tiles in
-    /// [`TileOrder::ByY`], which `prepare` then sorts them in.
+    /// [`TileOrder::ByY`], which `update_render_tiles` then sorts them in.
     pub(crate) sort_by_y: bool,
 }
 
@@ -68,18 +68,19 @@ pub(crate) trait RenderSource {
     );
 
     /// Makes the source's render tiles of the frame.
-    fn prepare(&mut self, store: &mut TileStore, parameters: &SourcePrepareParameters<'_>);
+    fn update_render_tiles(&mut self, store: &mut TileStore, parameters: &RenderTileParameters<'_>);
 
     /// Readies the buckets the frame draws, before its layers make their
-    /// draws, which read what `needs` says.
-    fn upload(&mut self, store: &mut TileStore, needs: UploadNeeds);
+    /// draws, which read what `needs` says, uploading their indexes through
+    /// `context`.
+    fn upload(&mut self, store: &mut TileStore, context: &mut Context, needs: UploadNeeds);
 
     /// Updates the source's draws of the debug overlays; a no-op for the
-    /// sources that have none (the image source) (layers: debug).
-    fn update_debug_draws(&self, _debug_layers: &mut DebugLayers, _parameters: &PaintParameters<'_>) {}
+    /// sources that have none (the image source).
+    fn update_debug_draws(&self, _debug_layers: &mut DebugLayers, _parameters: &mut PaintParameters<'_>) {}
 
-    /// Releases the render data from the last `prepare` while the source is
-    /// disabled.
+    /// Releases the render data from the last `update_render_tiles` while
+    /// the source is disabled.
     fn release_render_data(&mut self) {}
 
     /// The source's tiles in the tile store, for a source with tiles.
@@ -87,19 +88,20 @@ pub(crate) trait RenderSource {
         None
     }
 
-    /// The source's render tiles, as of the last `prepare`.
+    /// The source's render tiles, as of the last `update_render_tiles`.
     fn render_tiles(&self) -> &[RenderTile] {
         &[]
     }
 
     /// The source's tiles in `order`, as indexes into `render_tiles`, as of
-    /// the last `prepare`; `None` for a source without tiles.
+    /// the last `update_render_tiles`; `None` for a source without tiles.
     fn tile_order(&self, _order: TileOrder) -> Option<&[usize]> {
         None
     }
 
-    /// conformance: `getImageRenderData()` (image sources).
-    fn get_image_render_data(&self) -> Option<ImageSourceRenderData<'_>> {
+    /// An image source's image, as the layers that draw it read it; `None`
+    /// for other sources.
+    fn image_render_data(&self) -> Option<ImageSourceRenderData<'_>> {
         None
     }
 
@@ -119,10 +121,9 @@ pub(crate) trait RenderSource {
 
     fn dump_debug_logs(&self);
 
-    fn get_max_zoom(&self) -> u8 {
-        debug_assert!(false);
-        constants::TERRAIN_RGB_MAXZOOM
-    }
+    /// The deepest zoom the source has tiles of; `None` for a source without
+    /// tiles.
+    fn max_zoom(&self) -> Option<u8>;
 
     fn is_enabled(&self) -> bool {
         self.base().enabled

@@ -1,8 +1,6 @@
 use std::any::Any;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
-use mln_gfx::gpu::{ColorAttachment, DepthStencilAttachment, Gpu, GpuError, LoadOp, PassDesc, TargetFormats};
+use mln_gfx::gpu::{ColorAttachment, DepthStencilAttachment, Gpu, GpuError, LoadOp, PassDesc, Scissor, TargetFormats};
 use mln_gfx::stencil_mode::Test;
 use mln_gfx::types::{DepthFunctionType, StencilOpType};
 use mln_gfx::{DepthMaskType, DepthMode, ScissorRect, StencilMode};
@@ -16,10 +14,9 @@ use mln_util::size::Size;
 use mln_vec_map::VecMap;
 
 use crate::clip_masks::ClipMasks;
+use crate::frame::Frame;
 use crate::gfx::context::Context;
 use crate::layer_composite::LayerComposite;
-use crate::line_atlas::LineAtlas;
-use crate::pattern_atlas::PatternAtlas;
 use crate::render_pass::RenderPass;
 use crate::render_static_data::RenderStaticData;
 
@@ -32,7 +29,6 @@ pub(crate) struct Composited {
     group: SimpleIdentity,
     /// The frame's pass, which resumes after the group's draws.
     frame: OpenPass,
-    layer_composite: LayerComposite,
     /// The frame's tile masks and next stencil value, which the group's
     /// draws don't share; `None` where the texture's pass didn't begin.
     frame_stencil: Option<(VecMap<UnwrappedTileID, i32>, i32)>,
@@ -41,7 +37,7 @@ pub(crate) struct Composited {
 
 /// Checks, in debug builds, that a [`Composited`] reaches
 /// [`PaintParameters::end_composited`], which forgets it: dropping a group
-/// that didn't would drop the layer composite it took.
+/// that didn't would leave the frame's pass ended and its stencil lost.
 struct Unended;
 
 impl Drop for Unended {
@@ -94,6 +90,24 @@ impl TransformParameters {
             state,
         }
     }
+
+    /// The projection of the tile `tile_id`, with the projection matrix
+    /// aligned to the pixel grid or not.
+    #[must_use]
+    pub(crate) fn projection_data_for_tile(&self, tile_id: &UnwrappedTileID, aligned: bool) -> ProjectionData {
+        self.state
+            .get_projection_data_with(tile_id, if aligned { &self.aligned_proj_matrix } else { &self.proj_matrix })
+    }
+}
+
+/// Where a draw draws in the open pass: the pass's attachments' size and
+/// formats, and the scissor rect within them, `None` where nothing of the
+/// frame's scissor rect is.
+#[derive(Clone, Copy)]
+pub(crate) struct DrawTarget {
+    pub(crate) size: Size,
+    pub(crate) targets: TargetFormats,
+    pub(crate) scissor: Option<Scissor>,
 }
 
 /// A pass of the backend's `Gpu` that draws draw into, and its
@@ -127,22 +141,19 @@ impl OpenPass {
     }
 }
 
+/// The state of a frame's encode: the renderer's GPU state, which the
+/// encode changes, the frame's camera and values, and where its passes are.
 pub(crate) struct PaintParameters<'a> {
-    pub(crate) context: &'a Context,
+    pub(crate) context: &'a mut Context,
     /// The pass of the backend's `Gpu` that draws draw into, while one
     /// is open.
-    open_pass: Cell<Option<OpenPass>>,
+    open_pass: Option<OpenPass>,
 
     pub(crate) transform_params: &'a TransformParameters,
     pub(crate) state: &'a TransformState,
-    /// conformance: `const EvaluatedLight& evaluatedLight` (a copy; the
-    /// renderer sets it from the render tree's parameters).
-    pub(crate) evaluated_light: crate::render_light::EvaluatedLight,
+    /// The light of the frame.
+    pub(crate) light: &'a crate::render_light::EvaluatedLight,
     pub(crate) static_data: &'a RenderStaticData,
-    /// The orchestrator's line atlas. `new` starts with an empty one, and the
-    /// renderer assigns the orchestrator's.
-    pub(crate) line_atlas: Rc<RefCell<LineAtlas>>,
-    pub(crate) pattern_atlas: Rc<RefCell<PatternAtlas>>,
 
     pub(crate) pass: RenderPass,
     pub(crate) debug_options: MapDebugOptions,
@@ -152,9 +163,9 @@ pub(crate) struct PaintParameters<'a> {
     pub(crate) pixels_to_gl_units: [f32; 2],
 
     /// The masks of the tiles that the frame's draw groups can clip to.
-    pub(crate) clip_masks: ClipMasks,
+    pub(crate) clip_masks: &'a mut ClipMasks,
     /// What the frame's layers drawn as a whole draw into and composite with.
-    pub(crate) layer_composite: LayerComposite,
+    pub(crate) layer_composite: &'a mut LayerComposite,
     /// The stencil value of each tile whose mask the stencil buffer holds.
     tile_clipping_mask_ids: VecMap<UnwrappedTileID, i32>,
     next_stencil_id: i32,
@@ -174,17 +185,22 @@ impl<'a> PaintParameters<'a> {
     pub(crate) const DEPTH_EPSILON: f32 = 1.0 / (1 << 16) as f32;
     pub(crate) const MAX_STENCIL_VALUE: i32 = 255;
 
-    #[expect(clippy::too_many_arguments, reason = "each argument is a field of the paint parameters")]
+    /// The parameters of the encode of `frame`, into a target of
+    /// `renderable_size` device pixels at `pixel_ratio`, drawn within
+    /// `scissor_rect`, which clips with `clip_masks` and composites with
+    /// `layer_composite`.
+    #[expect(clippy::too_many_arguments, reason = "the renderer's GPU state, the frame and where it draws")]
     pub(crate) fn new(
-        context: &'a Context,
-        pixel_ratio: f32,
-        debug_options: MapDebugOptions,
-        transform_params: &'a TransformParameters,
+        context: &'a mut Context,
+        clip_masks: &'a mut ClipMasks,
+        layer_composite: &'a mut LayerComposite,
+        frame: &'a Frame,
         static_data: &'a RenderStaticData,
-        pattern_atlas: Rc<RefCell<PatternAtlas>>,
+        pixel_ratio: f32,
         renderable_size: Size,
         scissor_rect: ScissorRect,
     ) -> Self {
+        let transform_params = &frame.transform;
         let state = &transform_params.state;
         let mut pixels_to_gl_units = [2.0f32 / state.get_size().width as f32, -2.0f32 / state.get_size().height as f32];
 
@@ -194,27 +210,25 @@ impl<'a> PaintParameters<'a> {
 
         PaintParameters {
             context,
-            open_pass: Cell::new(None),
+            open_pass: None,
             transform_params,
             state,
             static_data,
-            evaluated_light: crate::render_light::EvaluatedLight::default(),
-            line_atlas: Rc::new(RefCell::new(LineAtlas::new())),
-            pattern_atlas,
+            light: &frame.light,
             pass: RenderPass::Opaque,
-            debug_options,
+            debug_options: frame.debug_options,
             pixel_ratio,
             renderable_size,
             pixels_to_gl_units,
-            clip_masks: ClipMasks::default(),
-            layer_composite: LayerComposite::default(),
+            clip_masks,
+            layer_composite,
             tile_clipping_mask_ids: VecMap::new(),
             next_stencil_id: 1,
             // The renderer sets these before use.
             current_layer: 0,
             depth_range_size: 1.0,
-            opaque_pass_cutoff: 0,
-            symbol_fade_change: 0.0,
+            opaque_pass_cutoff: frame.opaque_pass_cutoff,
+            symbol_fade_change: frame.symbol_fade_change,
             scissor_rect,
             custom_layer_frame: None,
         }
@@ -223,19 +237,25 @@ impl<'a> PaintParameters<'a> {
     /// The size and formats of the attachments that draws draw into
     /// now, `None` outside a pass.
     pub(crate) fn pass_target(&self) -> Option<(Size, TargetFormats)> {
-        self.open_pass.get().map(|pass| (pass.size, pass.targets))
+        self.open_pass.map(|pass| (pass.size, pass.targets))
+    }
+
+    /// Where draws draw now, `None` outside a pass.
+    pub(crate) fn draw_target(&self) -> Option<DrawTarget> {
+        let (size, targets) = self.pass_target()?;
+        Some(DrawTarget { size, targets, scissor: clamped_scissor(self.scissor_rect, size) })
     }
 
     /// Begins `pass` on `gpu`, the context's, which draws then draw
     /// into.
-    pub(crate) fn begin_pass(&self, gpu: &mut dyn Gpu, pass: OpenPass) -> Result<(), GpuError> {
+    pub(crate) fn begin_pass(&mut self, gpu: &mut dyn Gpu, pass: OpenPass) -> Result<(), GpuError> {
         gpu.begin_pass(&pass.desc())?;
-        self.open_pass.set(Some(pass));
+        self.open_pass = Some(pass);
         Ok(())
     }
 
     /// Ends the pass begun on `gpu`, the context's, if any.
-    pub(crate) fn end_pass(&self, gpu: &mut dyn Gpu) -> Result<(), GpuError> {
+    pub(crate) fn end_pass(&mut self, gpu: &mut dyn Gpu) -> Result<(), GpuError> {
         match self.open_pass.take() {
             Some(_) => gpu.end_pass(),
             None => Ok(()),
@@ -244,8 +264,8 @@ impl<'a> PaintParameters<'a> {
 
     /// Ends the pass begun on `gpu`, the context's, and begins one over its
     /// attachments that loads them, with the stencil as `stencil` says.
-    fn restart_pass(&self, gpu: &mut dyn Gpu, stencil: LoadOp<u32>) {
-        let Some(pass) = self.open_pass.get() else {
+    fn restart_pass(&mut self, gpu: &mut dyn Gpu, stencil: LoadOp<u32>) {
+        let Some(pass) = self.open_pass else {
             return;
         };
         let restarted = self.end_pass(gpu).and_then(|()| self.begin_pass(gpu, pass.loading(stencil)));
@@ -263,16 +283,16 @@ impl<'a> PaintParameters<'a> {
     /// the texture onto the pass begun, whose stencil stays as it was.
     pub(crate) fn begin_composited(&mut self, gpu: &mut dyn Gpu, group: SimpleIdentity) -> Option<Composited> {
         let (frame, composite) =
-            self.open_pass.get().zip(self.layer_composite.pass()).filter(|_| self.layer_composite.composites(group))?;
-        let mut layer_composite = std::mem::take(&mut self.layer_composite);
+            self.open_pass.zip(self.layer_composite.pass()).filter(|_| self.layer_composite.composites(group))?;
         let mut drawn = self.end_pass(gpu);
         if drawn.is_ok()
-            && let Some(backdrop) = layer_composite.backdrop_pass(group)
+            && let Some(backdrop) = self.layer_composite.backdrop_pass(group)
         {
-            drawn = self
-                .begin_pass(gpu, backdrop)
-                .map(|()| layer_composite.copy_frame(gpu, self))
-                .and_then(|()| self.end_pass(gpu));
+            drawn = self.begin_pass(gpu, backdrop);
+            if drawn.is_ok() {
+                self.copy_frame(gpu);
+                drawn = self.end_pass(gpu);
+            }
         }
         drawn = drawn.and_then(|()| self.begin_pass(gpu, composite));
         let frame_stencil = match drawn {
@@ -285,13 +305,20 @@ impl<'a> PaintParameters<'a> {
                 None
             }
         };
-        Some(Composited { group, frame, layer_composite, frame_stencil, unended: Unended })
+        Some(Composited { group, frame, frame_stencil, unended: Unended })
+    }
+
+    /// Copies the layer composite's frame texture onto the open pass.
+    fn copy_frame(&mut self, gpu: &mut dyn Gpu) {
+        if let Some(target) = self.draw_target() {
+            self.layer_composite.copy_frame(gpu, target, self.context);
+        }
     }
 
     /// Ends the draws `begin_composited` began, and composites what they drew
     /// onto the frame's pass, which this begins again.
     pub(crate) fn end_composited(&mut self, gpu: &mut dyn Gpu, composited: Composited) {
-        let Composited { group, frame, mut layer_composite, frame_stencil, unended } = composited;
+        let Composited { group, frame, frame_stencil, unended } = composited;
         std::mem::forget(unended);
         let drawn = frame_stencil.is_some();
         if let Some((tile_clipping_mask_ids, next_stencil_id)) = frame_stencil {
@@ -303,10 +330,10 @@ impl<'a> PaintParameters<'a> {
         }
         if let Err(error) = self.begin_pass(gpu, frame.loading(LoadOp::Load)) {
             Log::error(Event::Render, format!("Resuming the {} pass failed: {error}", frame.label));
-        } else if drawn {
-            layer_composite.draw(gpu, self, group);
+        } else if drawn && let Some(target) = self.draw_target() {
+            let depth = self.depth_mode_for_sublayer(0, DepthMaskType::ReadOnly);
+            self.layer_composite.draw(gpu, target, depth, self.context, group);
         }
-        self.layer_composite = layer_composite;
     }
 
     /// Ends the frame's pass, which drew into the layer composite's frame
@@ -320,16 +347,14 @@ impl<'a> PaintParameters<'a> {
             Log::error(Event::Render, format!("Beginning the frame's copy failed: {error}"));
             return;
         }
-        let mut layer_composite = std::mem::take(&mut self.layer_composite);
-        layer_composite.copy_frame(gpu, self);
-        self.layer_composite = layer_composite;
+        self.copy_frame(gpu);
     }
 
     /// Runs `f` with `gpu`'s, the context's, commands inside the pass
     /// begun, after what drew there so far, as a custom layer draws: `f`
     /// gets the backend's `CustomLayerPass`. Returns whether `f` ran.
     pub(crate) fn lend_pass(&self, gpu: &mut dyn Gpu, f: &mut dyn FnMut(&mut dyn Any)) -> Result<bool, GpuError> {
-        if self.open_pass.get().is_none() {
+        if self.open_pass.is_none() {
             return Ok(false);
         }
         gpu.lend(f).map(|()| true)
@@ -337,10 +362,7 @@ impl<'a> PaintParameters<'a> {
 
     #[must_use]
     pub(crate) fn projection_data_for_tile(&self, tile_id: &UnwrappedTileID, aligned: bool) -> ProjectionData {
-        self.state.get_projection_data_with(
-            tile_id,
-            if aligned { &self.transform_params.aligned_proj_matrix } else { &self.transform_params.proj_matrix },
-        )
+        self.transform_params.projection_data_for_tile(tile_id, aligned)
     }
 
     #[must_use]
@@ -390,9 +412,9 @@ impl<'a> PaintParameters<'a> {
     }
 
     fn draw_clip_masks(&mut self, gpu: &mut dyn Gpu, masks: &[(UnwrappedTileID, i32)]) {
-        let mut clip_masks = std::mem::take(&mut self.clip_masks);
-        clip_masks.draw(gpu, masks, self);
-        self.clip_masks = clip_masks;
+        if let Some(target) = self.draw_target() {
+            self.clip_masks.draw(gpu, masks, target, self.context);
+        }
     }
 
     /// Renders the clipping masks of `tile_ids`, unless the stencil buffer
@@ -465,4 +487,12 @@ impl<'a> PaintParameters<'a> {
             pass: StencilOpType::Replace,
         }
     }
+}
+
+/// `rect` within a target of `size`, `None` where nothing of it is.
+fn clamped_scissor(rect: ScissorRect, size: Size) -> Option<Scissor> {
+    let (x, y) = (rect.x as u32, rect.y as u32);
+    let width = if x < size.width { rect.width.min(size.width - x) } else { 0 };
+    let height = if y < size.height { rect.height.min(size.height - y) } else { 0 };
+    (width > 0 && height > 0).then_some(Scissor { x, y, width, height })
 }

@@ -2,7 +2,7 @@
 // layer's draws: their vertices, indices and paint values. Workers build
 // buckets and send them to the render thread, which owns each one once, in
 // its tile's contents, and changes it only where it has the contents
-// mutably: feature state and symbol placement in a frame's prepare, the
+// mutably: feature state and symbol placement in a frame's update, the
 // upload that moves its geometry to the draws in the frame's encode. What
 // every bucket has is `BucketBase`; what each type does, the `Bucket` trait.
 
@@ -16,7 +16,7 @@ use mln_util::error::Error;
 use mln_util::identity::SimpleIdentity;
 use mln_wire::{Reader, Wire, Writer};
 
-use crate::bucket_geometry::BucketGeometry;
+use crate::bucket_geometry::GeometryUpload;
 use crate::layout::pattern_layout::PatternLayerMap;
 
 pub(crate) type FeatureStates = mln_util::hash::HashMap<String, mln_style::expression::expression::FeatureState>;
@@ -106,11 +106,11 @@ pub(crate) trait Bucket: Any + Send + CloneBucket {
     }
 
     /// Readies the bucket for its tile's draws, once it has data and until
-    /// it changes again: moves its vertices and indices into `geometry`,
-    /// the gfx vectors the draws share, all but the values that feature
-    /// state rewrites, which stay with the bucket. What else the draws
-    /// read, `needs` says.
-    fn upload(&mut self, geometry: &mut BucketGeometry, needs: UploadNeeds);
+    /// it changes again: moves its vertices and indices into the context's
+    /// stores through `geometry`, for the draws to share, all but the values
+    /// that feature state rewrites, which stay with the bucket. What else
+    /// the draws read, `needs` says.
+    fn upload(&mut self, geometry: &mut GeometryUpload<'_>, needs: UploadNeeds);
 
     fn has_data(&self) -> bool;
 
@@ -123,7 +123,7 @@ pub(crate) trait Bucket: Any + Send + CloneBucket {
         !self.base().uploaded && self.has_data()
     }
 
-    fn get_id(&self) -> SimpleIdentity {
+    fn id(&self) -> SimpleIdentity {
         self.base().bucket_id
     }
 }
@@ -150,7 +150,7 @@ impl Bucket for NoBucket {
         match *self {}
     }
 
-    fn upload(&mut self, _geometry: &mut BucketGeometry, _needs: UploadNeeds) {
+    fn upload(&mut self, _geometry: &mut GeometryUpload<'_>, _needs: UploadNeeds) {
         match *self {}
     }
 
@@ -173,21 +173,16 @@ impl Wire for NoBucket {
     }
 }
 
+#[cfg(test)]
 impl dyn Bucket {
     /// Downcasts to the bucket type `B`; `None` if it is another type.
     pub(crate) fn downcast_ref<B: Bucket>(&self) -> Option<&B> {
         let any: &dyn Any = self;
         any.downcast_ref()
     }
-
-    /// Downcasts to the bucket type `B`; `None` if it is another type.
-    pub(crate) fn downcast_mut<B: Bucket>(&mut self) -> Option<&mut B> {
-        let any: &mut dyn Any = self;
-        any.downcast_mut()
-    }
 }
 
-// bench: `bench.rs` reaches the bucket a benchmark's layer places by this
-// path, which other commits' `bench.rs` builds against too.
+// The benchmarks (`bench.rs`) hold the bucket a benchmark's layer places
+// through this path, which they take in every commit they compare.
 #[cfg(feature = "bench")]
 pub(crate) use crate::render_layer::hold_symbol_bucket as recover;

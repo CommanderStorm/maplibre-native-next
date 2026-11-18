@@ -1,17 +1,14 @@
-// C++ keeps a `gfx::RendererBackend&`; the frontend owns the backend, so the
-// renderer shares it through an `Rc`.
-
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mln_gfx::gpu::{ColorAttachment, DepthStencilAttachment, LoadOp, TargetFormats};
+use mln_gfx::gpu::{ColorAttachment, DepthStencilAttachment, Gpu, LoadOp, TargetFormats};
 use mln_gfx::rendering_stats::RenderingStats;
 use mln_gfx::shaders::layer_ubo::GlobalPaintParamsUBO;
 use mln_gfx::shaders::program_parameters::ProgramParameters;
 use mln_gfx::shaders::shader_defines::ID_GLOBAL_PAINT_PARAMS_UBO;
-use mln_gfx::{FrameTarget, Handoff, RendererBackend, ScissorRect, ShaderRegistry};
+use mln_gfx::{FrameImage, FrameTarget, Handoff, RendererBackend, ScissorRect, ShaderRegistry};
 use mln_map_types::{MapDebugOptions, MapView};
 use mln_style::layers::CustomLayerFrame;
 use mln_text::GlyphCache;
@@ -19,21 +16,22 @@ use mln_text::local_glyph_rasterizer::LocalGlyphs;
 use mln_tile_id::UnwrappedTileID;
 use mln_util::Color;
 use mln_util::event_queue::Waker;
+use mln_util::identity::SimpleIdentity;
 use mln_util::logging::{Event, Log};
 use mln_util::pool::Pool;
 use mln_util::time::Instant;
 
 use crate::Registry;
 use crate::clip_masks::ClipMasks;
+use crate::frame::Frame;
 use crate::frame_projection::{self, FrameProjection};
-use crate::gfx::context::{Context, Stats};
-use crate::layer_composite::LayerComposite;
+use crate::gfx::context::Context;
+use crate::layer_composite::{Composite, LayerComposite};
 use crate::layer_drawing::DrawOrder;
 use crate::paint_parameters::{OpenPass, PaintParameters};
 use crate::render_orchestrator::RenderOrchestrator;
 use crate::render_pass::RenderPass;
 use crate::render_static_data::RenderStaticData;
-use crate::render_tree::RenderTree;
 use crate::renderer_event::{RenderMode, RendererEvent, RendererEvents};
 use crate::tile::worker_codec::RemoteWorkers;
 use crate::tile_matrix::to_projection_ubo;
@@ -46,15 +44,16 @@ enum RenderState {
     Fully,
 }
 
-/// Port-only: what the last frame that [`Renderer::render`] drew spent on
+/// What the last frame that [`Renderer::render`] drew spent on
 /// each of its steps, on the CPU. They follow each other, and together take
 /// nearly all of `render`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RenderTimings {
-    /// Updating the render layers and sources from the update: the sources'
-    /// tile pyramids and the tiles' matrices.
+    /// The update up to symbol placement: the style's changes, the layers'
+    /// values, the sources' tiles and the layers' choice of them.
     pub sources: Duration,
-    /// Placing symbols across tiles and updating their opacities.
+    /// The rest of the update: placing symbols across tiles and updating
+    /// their buckets.
     pub symbols: Duration,
     /// Making the layers' draws from the tiles, with their uniforms.
     pub layers: Duration,
@@ -65,16 +64,29 @@ pub struct RenderTimings {
     pub draw: Duration,
 }
 
+/// Draws a map's updates into frame targets on one backend: it keeps the
+/// map's sources, tiles and layers between frames, and the GPU objects
+/// they draw with.
 pub struct Renderer {
-    /// Dropped by hand in `drop`, inside the backend's hold: its custom
+    /// Dropped by hand in `tear_down`, inside the backend's hold: its custom
     /// layers' hosts free their graphics objects as the layers go, which on
     /// GL needs the context current. A safe `Drop` runs before the fields
     /// drop, so it can't wrap their drops in the hold otherwise.
     orchestrator: ManuallyDrop<RenderOrchestrator>,
     backend: Rc<dyn RendererBackend>,
+    encoder: Encoder,
+    /// Where the renderer reports its events, once the host gives it one.
+    events: Option<RendererEvents>,
+    /// Whether `tear_down` dropped the orchestrator.
+    torn_down: bool,
+}
+
+/// What the renderer keeps for its frames' encodes: its GPU state, the
+/// shaders, the passes' masks and composite, and what the last frame drew.
+struct Encoder {
     /// What the renderer keeps over the backend's `Gpu`, which goes after
     /// the resources that `drop` drops first.
-    context: Rc<Context>,
+    context: Context,
     pixel_ratio: f32,
     /// Dropped in `drop` inside the hold, after the orchestrator.
     static_data: Option<RenderStaticData>,
@@ -84,12 +96,9 @@ pub struct Renderer {
     /// frames.
     layer_composite: LayerComposite,
     render_state: RenderState,
-    frame_count: u64,
     /// Where the last frame drew the map.
     frame_projection: Option<FrameProjection>,
     timings: RenderTimings,
-    /// Where the renderer reports its events, once the host gives it one.
-    events: Option<RendererEvents>,
 }
 
 impl Renderer {
@@ -155,17 +164,19 @@ impl Renderer {
                 waker,
                 pool,
             )),
-            context: Rc::new(Context::new(Rc::clone(&backend))),
+            encoder: Encoder {
+                context: Context::new(Rc::clone(&backend)),
+                pixel_ratio,
+                static_data: None,
+                clip_masks: ClipMasks::default(),
+                layer_composite: LayerComposite::default(),
+                render_state: RenderState::Never,
+                frame_projection: None,
+                timings: RenderTimings::default(),
+            },
             backend,
-            pixel_ratio,
-            static_data: None,
-            clip_masks: ClipMasks::default(),
-            layer_composite: LayerComposite::default(),
-            render_state: RenderState::Never,
-            frame_count: 0,
-            frame_projection: None,
-            timings: RenderTimings::default(),
             events: None,
+            torn_down: false,
         }
     }
 
@@ -174,24 +185,26 @@ impl Renderer {
     /// renderer makes its shaders and draws again, and keeps its
     /// tiles. The host sizes the backend's framebuffer for the new ratio.
     pub fn set_pixel_ratio(&mut self, pixel_ratio: f32) {
-        if pixel_ratio == self.pixel_ratio {
+        if pixel_ratio == self.encoder.pixel_ratio {
             return;
         }
         // The shaders build the pixel ratio in on some backends, so a new
         // ratio takes new shaders, and new draws that use them.
-        self.pixel_ratio = pixel_ratio;
-        self.static_data = None;
-        self.clip_masks = ClipMasks::default();
-        self.layer_composite = LayerComposite::default();
+        let encoder = &mut self.encoder;
+        encoder.pixel_ratio = pixel_ratio;
+        encoder.static_data = None;
+        encoder.clip_masks = ClipMasks::default();
+        encoder.layer_composite = LayerComposite::default();
         self.orchestrator.release_shaders();
     }
 
+    /// The device pixels per logical pixel the renderer draws at.
     #[must_use]
-    pub fn get_pixel_ratio(&self) -> f32 {
-        self.pixel_ratio
+    pub fn pixel_ratio(&self) -> f32 {
+        self.encoder.pixel_ratio
     }
 
-    /// Port-only: runs the tiles' jobs, and the raster tiles' workers, in
+    /// Runs the tiles' jobs, and the raster tiles' workers, in
     /// `workers` (by default on the renderer's pool). Set it before the
     /// first render so that every tile uses it.
     pub fn set_tile_workers(&mut self, workers: RemoteWorkers) {
@@ -205,7 +218,7 @@ impl Renderer {
     /// doesn't wait for the next frame to start.
     pub fn receive_tiles(&mut self) {
         self.orchestrator.receive_tiles();
-        self.report_orchestrator_events();
+        report(&mut self.orchestrator, self.events.as_ref());
     }
 
     /// Sets the queue the renderer pushes its events to: the map's, which
@@ -214,69 +227,64 @@ impl Renderer {
         self.events = events;
     }
 
-    /// Pushes what the orchestrator reported since the last call to the
-    /// renderer's event queue, or drops it when there is no queue.
-    fn report_orchestrator_events(&mut self) {
-        for event in self.orchestrator.take_events() {
-            emit(self.events.as_ref(), event);
-        }
-    }
-
     /// Draws `update_parameters` into a frame of `target`, which must be
     /// built on the renderer's backend. Returns where the frame went, or
     /// `None` when nothing was drawn: there was nothing to draw, or the
     /// target had nothing to draw into.
+    ///
+    /// A frame runs in two phases: the orchestrator's update brings the
+    /// renderer's state to the update and returns the frame as a value, and
+    /// the encode builds the layers' GPU objects and draws from it.
     pub fn render(&mut self, update_parameters: &Arc<UpdateParameters>, target: &dyn FrameTarget) -> Option<Handoff> {
         // Held from the update on: a custom layer that the update removes or
         // gives a new host deinitializes on the backend, as on OpenGL with
         // the context current.
-        let backend = Rc::clone(&self.backend);
-        let _hold = backend.hold();
-        let start = Instant::now();
-        let frame_layers = self.orchestrator.update(update_parameters);
-        let render_tree = frame_layers.map(|layers| self.orchestrator.prepare(update_parameters, layers));
-        self.report_orchestrator_events();
-        let render_tree = render_tree?;
-        let prepared = Instant::now();
-        let placement = render_tree.symbols_start().max(start);
-        let handoff = self.encode(&render_tree, update_parameters, target);
+        let _hold = self.backend.hold();
+        let orchestrator = &mut *self.orchestrator;
+        let frame = orchestrator.update(update_parameters);
+        report(orchestrator, self.events.as_ref());
+        let frame = frame?;
+        let updated = Instant::now();
+        let encoder = &mut self.encoder;
+        let handoff =
+            encoder.encode(orchestrator, &*self.backend, self.events.as_ref(), &frame, update_parameters, target);
         if handoff.is_some() {
-            self.timings.sources = placement - start;
-            self.timings.symbols = prepared - placement;
+            encoder.timings.sources = frame.symbols_started - frame.started;
+            encoder.timings.symbols = updated - frame.symbols_started;
         }
         handoff
     }
 
-    /// Port-only: drops `value` on the renderer's workers instead of this
+    /// Drops `value` on the renderer's workers instead of this
     /// thread, for data that would take a frame long to free, such as the
     /// sources of an earlier update. The renderer's drop waits for it.
     pub fn drop_on_workers<T: Send + 'static>(&self, value: T) {
         self.orchestrator.drop_on_workers(value);
     }
 
-    /// Port-only: what the last frame that [`render`](Self::render) drew
+    /// What the last frame that [`render`](Self::render) drew
     /// spent on each of its steps.
     #[must_use]
     pub fn render_timings(&self) -> RenderTimings {
-        self.timings
+        self.encoder.timings
     }
 
     /// Where the last frame that [`render`](Self::render) drew put the map,
     /// or `None` before the first.
     #[must_use]
     pub fn frame_projection(&self) -> Option<FrameProjection> {
-        self.frame_projection
+        self.encoder.frame_projection
     }
 
-    // query: `Err` is the exception C++ throws out of the query (a
-    // malformed tile).
+    /// The features drawn in `geometry`, a point or a polygon in screen
+    /// coordinates. `Err` for a malformed tile.
     pub fn query_rendered_features(
         &mut self,
         geometry: &[mln_util::geo::ScreenCoordinate],
         options: &crate::query::RenderedQueryOptions,
     ) -> Result<Vec<mln_util::feature::Feature>, mln_util::error::Error> {
         let features = self.orchestrator.query_rendered_features(geometry, options);
-        self.report_orchestrator_events();
+        report(&mut self.orchestrator, self.events.as_ref());
         features
     }
 
@@ -307,7 +315,7 @@ impl Renderer {
         options: &crate::query::SourceQueryOptions,
     ) -> Result<Vec<mln_util::feature::Feature>, mln_util::error::Error> {
         let features = self.orchestrator.query_source_features(source_id, options);
-        self.report_orchestrator_events();
+        report(&mut self.orchestrator, self.events.as_ref());
         features
     }
 
@@ -327,9 +335,12 @@ impl Renderer {
         self.orchestrator.query_feature_extensions(source_id, feature, extension, extension_field, args)
     }
 
+    /// The data of the symbols the last placement placed, when
+    /// [`collect_placed_symbol_data`](Self::collect_placed_symbol_data)
+    /// turned their collection on.
     #[must_use]
-    pub fn get_placed_symbols_data(&self) -> Vec<crate::text::placement::PlacedSymbolData> {
-        self.orchestrator.get_placed_symbols_data()
+    pub fn placed_symbols_data(&self) -> Vec<crate::text::placement::PlacedSymbolData> {
+        self.orchestrator.placed_symbols_data()
     }
 
     /// Logs every render source's tiles and the image manager's state.
@@ -337,7 +348,6 @@ impl Renderer {
         self.orchestrator.dump_debug_logs();
     }
 
-    // layers: feature state
     /// Merges `state` into a feature's state.
     ///
     /// An update whose feature state for the source differs from the last
@@ -355,14 +365,15 @@ impl Renderer {
         self.orchestrator.set_feature_state(source_id, source_layer_id, feature_id, state);
     }
 
+    /// The state of a feature.
     #[must_use]
-    pub fn get_feature_state(
+    pub fn feature_state(
         &self,
         source_id: &str,
         source_layer_id: Option<&str>,
         feature_id: &str,
     ) -> mln_style::expression::expression::FeatureState {
-        self.orchestrator.get_feature_state(source_id, source_layer_id, feature_id)
+        self.orchestrator.feature_state(source_id, source_layer_id, feature_id)
     }
 
     /// Removes a key of a feature's state, a feature's whole state, or a
@@ -386,9 +397,11 @@ impl Renderer {
         self.orchestrator.set_tile_cache_enabled(enable);
     }
 
+    /// Whether the renderer keeps tiles that left the view, to show them
+    /// again without loading them.
     #[must_use]
-    pub fn get_tile_cache_enabled(&self) -> bool {
-        self.orchestrator.get_tile_cache_enabled()
+    pub fn tile_cache_enabled(&self) -> bool {
+        self.orchestrator.tile_cache_enabled()
     }
 
     /// Tells the hosts of the custom layers that the renderer's graphics
@@ -398,32 +411,36 @@ impl Renderer {
         self.orchestrator.visit_render_layers(|layer| layer.lose_context());
     }
 
-    /// Destroys what the renderer released and waits for the GPU, so that
-    /// its work finishes before the app goes to the background, and lets go
-    /// of what the orchestrator caches.
+    /// Lets go of what the orchestrator caches, destroys what it and the
+    /// renderer released, and waits for the GPU, so that its work finishes
+    /// before the app goes to the background.
     pub fn reduce_memory_use(&mut self) {
-        let backend = Rc::clone(&self.backend);
-        let _hold = backend.hold();
-        self.context.destroy_released();
-        if let Err(error) = self.context.gpu().flush(true) {
-            Log::error(Event::Render, format!("Waiting for the GPU failed: {error}"));
+        {
+            let _hold = self.backend.hold();
+            self.orchestrator.reduce_memory_use();
+            self.encoder.context.destroy_released();
+            if let Err(error) = self.encoder.context.gpu().flush(true) {
+                Log::error(Event::Render, format!("Waiting for the GPU failed: {error}"));
+            }
         }
-        self.orchestrator.reduce_memory_use();
-        self.report_orchestrator_events();
+        report(&mut self.orchestrator, self.events.as_ref());
     }
 
     /// The rendering stats, which count the renderer's resources until it
-    /// releases them.
+    /// releases them. A texture counts until the end of the frame that
+    /// follows its release, or until
+    /// [`reduce_memory_use`](Self::reduce_memory_use).
     #[must_use]
     pub fn rendering_stats(&self) -> RenderingStats {
-        self.context.stats().get()
+        self.encoder.context.stats()
     }
 
-    /// The rendering stats, to read after the renderer goes: what it
-    /// releases as it goes comes off them.
+    /// Destroys the renderer, and returns its rendering stats as it leaves
+    /// them, with all its resources released.
     #[must_use]
-    pub fn stats(&self) -> Rc<Stats> {
-        Rc::clone(self.context.stats())
+    pub fn into_rendering_stats(mut self) -> RenderingStats {
+        self.tear_down();
+        self.encoder.context.stats()
     }
 
     pub fn clear_data(&mut self) {
@@ -431,43 +448,48 @@ impl Renderer {
         let _hold = self.backend.hold();
         self.orchestrator.clear_data();
     }
+}
 
-    /// The last phase of a frame: draws `render_tree` into `target`, unless
-    /// the target has nothing to draw into now.
+impl Encoder {
+    /// The second phase of a frame: builds and refreshes the GPU objects of
+    /// the layers' draws of `frame`, and draws them into `target`, unless
+    /// the target has nothing to draw into now. It reads the style, the
+    /// sources, the tiles each layer draws and the placement as the update
+    /// left them, and changes only what draws them on the GPU: the atlases'
+    /// textures, the tiles' buckets, which it uploads and binds to the
+    /// atlases' textures, the layers' drawing and the renderer's GPU state.
+    ///
+    /// It uploads the atlases and the tiles' buckets; then the draw update
+    /// makes the layers' draws of the frame, the draw upload uploads what
+    /// they bind, and the draw section encodes the passes and submits them.
     fn encode(
         &mut self,
-        render_tree: &RenderTree,
+        orchestrator: &mut RenderOrchestrator,
+        backend: &dyn RendererBackend,
+        events: Option<&RendererEvents>,
+        frame: &Frame,
         update_parameters: &Arc<UpdateParameters>,
         target: &dyn FrameTarget,
     ) -> Option<Handoff> {
         let start = Instant::now();
-        let context = Rc::clone(&self.context);
-        let context = &*context;
-
         let image = target.begin_frame()?;
         {
-            let mut stats = context.rendering_stats();
+            let stats = self.context.rendering_stats();
             stats.num_draw_calls = 0;
             stats.num_frames += 1;
         }
-
-        if self.static_data.is_none() {
+        let static_data = &*self.static_data.get_or_insert_with(|| {
             let program_parameters = ProgramParameters::new(self.pixel_ratio, false);
-            self.static_data = Some(RenderStaticData::new(Box::new(ShaderRegistry::new(&program_parameters))));
-        }
-
-        let render_tree_parameters = render_tree.get_parameters();
-        let static_data = self.static_data.as_mut().expect("static data");
-        static_data.has_3d = render_tree_parameters.has_3d;
-        let renderable_size = image.size;
+            RenderStaticData::new(Box::new(ShaderRegistry::new(&program_parameters)))
+        });
 
         if self.render_state == RenderState::Never {
-            emit(self.events.as_ref(), RendererEvent::RenderMapStarted);
+            emit(events, RendererEvent::RenderMapStarted);
         }
+        emit(events, RendererEvent::RenderFrameStarted);
 
-        emit(self.events.as_ref(), RendererEvent::RenderFrameStarted);
-
-        let state = &render_tree_parameters.transform_params.state;
+        let state = &frame.transform.state;
+        let renderable_size = image.size;
         let frustum_offset = state.get_frustum_offset();
         let pixel_ratio = f64::from(self.pixel_ratio);
         let scissor_rect = ScissorRect {
@@ -481,297 +503,113 @@ impl Renderer {
                 .wrapping_sub(((frustum_offset.top + frustum_offset.bottom) * pixel_ratio) as u32),
         };
 
-        let static_data: &RenderStaticData = static_data;
-        let orchestrator = &mut *self.orchestrator;
-
         let mut parameters = PaintParameters::new(
-            context,
-            self.pixel_ratio,
-            render_tree_parameters.debug_options,
-            &render_tree_parameters.transform_params,
+            &mut self.context,
+            &mut self.clip_masks,
+            &mut self.layer_composite,
+            frame,
             static_data,
-            Rc::clone(orchestrator.get_pattern_atlas()),
+            self.pixel_ratio,
             renderable_size,
             scissor_rect,
         );
 
-        parameters.line_atlas = Rc::clone(orchestrator.get_line_atlas());
-        parameters.symbol_fade_change = render_tree_parameters.symbol_fade_change;
-        parameters.evaluated_light = render_tree_parameters.light.clone(); // conformance
-        parameters.opaque_pass_cutoff = render_tree_parameters.opaque_pass_cut_off;
-
         // - UPLOAD --------------------------------------------------------
-        // Uploads all required buffers and images before we do any actual
-        // rendering. The atlas goes first: the tiles bind its textures.
-        orchestrator.upload_atlas(context);
-        orchestrator.upload_sources(context);
-        static_data.upload(context);
-        parameters.line_atlas.borrow_mut().upload(context);
-        parameters.pattern_atlas.borrow_mut().upload(context); // conformance
+        // The atlases first, whose textures the tiles bind, then the tiles'
+        // buckets.
+        orchestrator.upload_atlases(parameters.context);
+        orchestrator.upload_sources(parameters.context);
 
         // - DRAW UPDATE ---------------------------------------------------
-        // Makes the layers' draws of the frame
+        // The layers' draws of the frame, and those of the debug overlays.
         let uploaded = Instant::now();
-        orchestrator.update_layers(update_parameters, &parameters, render_tree);
-
+        orchestrator.update_layer_draws(update_parameters, &mut parameters, frame);
         let layers_updated = Instant::now();
+        orchestrator.update_debug_layers(&mut parameters);
 
-        // - DRAW UPLOAD -----------------------------------------------------
-        // Update the debug overlays
-        orchestrator.update_debug_layers(&parameters); // layers: debug
-        // What the update replaced, before the uploads make what replaces it.
-        context.destroy_released();
+        // What the frame's update and draw update replaced goes before the
+        // uploads make what replaces it.
+        parameters.context.destroy_released();
 
-        // Give the layers a chance to upload
-        orchestrator.upload_draw_groups(context);
-        orchestrator.globe_depth().upload(context);
-        if let Some(sky) = orchestrator.sky() {
-            sky.upload(context);
-        }
-        if let Some(atmosphere) = orchestrator.atmosphere() {
-            atmosphere.upload(context);
-        }
-
-        // Give the render targets a chance to upload
-        // dem-heatmap
-        orchestrator.visit_render_layers(|layer| layer.upload_render_targets(context));
-
-        // Upload the debug overlays
-        // layers: debug
-        for debug in orchestrator.debug_layers() {
-            debug.upload(context);
-        }
-
-        // The number of draw groups, which sets the depth range of the passes;
-        // the masks of the tiles the draw groups clip to and, when any of them
-        // uses the stencil buffer, of the tile that clears it; and the draw
-        // groups drawn as a whole, each into the layer composite's texture and
-        // then onto the frame. Draw groups of one source clip to the same
-        // tiles, which are added once.
-        let mut num_draw_groups = 0_usize;
-        let mut clip_tiles = Vec::new();
-        let mut last: Option<&[UnwrappedTileID]> = None;
-        let mut composited = Vec::new();
-        orchestrator.visit_draw_groups(|group| {
-            num_draw_groups += 1;
-            if let Some(tiles) = group.stencil_tiles()
-                && last.is_none_or(|last| last != tiles)
-            {
-                clip_tiles.extend(tiles.iter().copied());
-                last = Some(tiles);
-            }
-            composited.extend(group.composite());
-        });
-        if last.is_some() {
-            clip_tiles.extend(parameters.stencil_clear_tile());
-        }
-        if !clip_tiles.is_sorted() {
-            clip_tiles.sort_unstable();
-        }
-        clip_tiles.dedup();
-        self.clip_masks.update(
-            context,
+        // - DRAW UPLOAD ---------------------------------------------------
+        orchestrator.upload_draws(parameters.context);
+        let draw_groups = DrawGroups::of(orchestrator, &parameters);
+        let (proj_state, transform) = (parameters.state, parameters.transform_params);
+        parameters.clip_masks.update(
+            parameters.context,
             &static_data.shaders,
-            parameters.state.is_globe_rendering(),
-            &clip_tiles,
-            |tile| to_projection_ubo(&parameters.projection_data_for_tile(tile, false)),
+            proj_state.is_globe_rendering(),
+            &draw_groups.clip_tiles,
+            |tile| to_projection_ubo(&transform.projection_data_for_tile(tile, false)),
         );
-        parameters.clip_masks = std::mem::take(&mut self.clip_masks);
-
-        self.layer_composite.update(
-            context,
+        parameters.layer_composite.update(
+            parameters.context,
             &static_data.shaders,
             image.size,
             image.targets.color,
             parameters.debug_options.contains(MapDebugOptions::OVERDRAW),
-            &composited,
+            &draw_groups.composited,
         );
-        parameters.layer_composite = std::mem::take(&mut self.layer_composite);
-
-        let layers_uploaded = Instant::now();
-        let atlas_size = parameters.pattern_atlas.borrow().get_pixel_size();
-        let world_size = parameters.renderable_size;
+        let atlas_size = orchestrator.atlases().pattern.pixel_size();
         let global_paint_params_ubo = GlobalPaintParamsUBO {
             pattern_atlas_texsize: [atlas_size.width as f32, atlas_size.height as f32],
             units_to_pixels: [1.0 / parameters.pixels_to_gl_units[0], 1.0 / parameters.pixels_to_gl_units[1]],
-            world_size: [world_size.width as f32, world_size.height as f32],
-            camera_to_center_distance: parameters.state.get_camera_to_center_distance(),
+            world_size: [renderable_size.width as f32, renderable_size.height as f32],
+            camera_to_center_distance: state.get_camera_to_center_distance(),
             symbol_fade_change: parameters.symbol_fade_change,
-            aspect_ratio: parameters.state.get_size().aspect_ratio(),
+            aspect_ratio: state.get_size().aspect_ratio(),
             pixel_ratio: parameters.pixel_ratio,
-            map_zoom: parameters.state.get_zoom() as f32,
+            map_zoom: state.get_zoom() as f32,
             pad1: 0.0,
         };
-        context.mutable_global_uniform_buffers().create_or_update_pod(
-            ID_GLOBAL_PAINT_PARAMS_UBO,
-            &global_paint_params_ubo,
-            context,
-        );
+        parameters.context.write_global_uniform_buffer(ID_GLOBAL_PAINT_PARAMS_UBO, &global_paint_params_ubo);
+        // What the uploads replaced goes before the passes make what
+        // replaces it, such as a draw's geometry.
+        parameters.context.destroy_released();
+        let layers_uploaded = Instant::now();
 
-        let num_sublayers = PaintParameters::NUM_SUBLAYERS as usize;
-        let depth_epsilon = PaintParameters::DEPTH_EPSILON;
-
-        // - CUSTOM LAYER PRERENDER ------------------------------------------
-        // Custom layers record their own work before the first pass, with the
-        // projection that the frame's result reports. The 3D layers draw into
-        // depth from 0 to the passes' depth range size, which the draw
-        // groups' count sets.
-        let frame_projection = frame_projection::compute(
-            &render_tree_parameters.transform_params,
-            1.0 - ((num_draw_groups + 2) * num_sublayers) as f32 * depth_epsilon,
-            context.caps().clip_depth,
-        );
+        // - DRAW ----------------------------------------------------------
+        // The passes hold the backend's `Gpu` until the frame is submitted.
+        // The 3D layers draw into depth from 0 to the passes' depth range
+        // size, which the draw groups' count sets, and custom layers record
+        // their work with the projection that the frame's result reports.
+        let depth_range_size = 1.0
+            - ((draw_groups.count + 2) * PaintParameters::NUM_SUBLAYERS as usize) as f32
+                * PaintParameters::DEPTH_EPSILON;
+        let frame_projection =
+            frame_projection::compute(&frame.transform, depth_range_size, parameters.context.caps().clip_depth);
         parameters.custom_layer_frame = Some(CustomLayerFrame {
             view: MapView::from_state(state, pixel_ratio),
             projection: frame_projection,
             width: renderable_size.width,
             height: renderable_size.height,
         });
-        for &index in render_tree.get_layer_render_item_map().keys() {
-            orchestrator.layer_mut(index as usize).prerender(&parameters);
-        }
-
-        // - 3D PASS -------------------------------------------------------
-        // Renders any 3D layers bottom-to-top to unique FBOs with texture
-        // attachments, but share the same depth rbo between them. No pass is
-        // open, so its draw groups draw nothing.
-        if parameters.static_data.has_3d {
-            // common3DPass
-            parameters.pass = RenderPass::Pass3D;
-
-            // The 3D pass: draw the draw groups.
-            debug_assert_eq!(parameters.pass, RenderPass::Pass3D);
-            // `depthModeFor3D` uses this, and the 3D pass runs before the opaque pass sets it
-            parameters.depth_range_size = 1.0 - ((num_draw_groups + 2) * num_sublayers) as f32 * depth_epsilon;
-            parameters.current_layer = (num_draw_groups as u32).wrapping_sub(1);
-            let mut gpu = context.gpu();
-            orchestrator.render_draw_groups(&mut *gpu, &mut parameters, DrawOrder::BottomUp);
-        }
-
-        // Draw the render targets.
-        // dem-heatmap
-        orchestrator.visit_render_layers(|layer| layer.render_targets(&mut parameters));
-
-        let mut gpu = context.gpu();
-        // commonClearPass
-        // - CLEAR ---------------------------------------------------------
-        // Renders the backdrop of the OpenGL view. This also paints in areas
-        // where we don't have any tiles whatsoever.
-        {
-            let color = if parameters.debug_options.contains(MapDebugOptions::OVERDRAW) {
-                Color::black()
-            } else {
-                render_tree_parameters.background_color
-            };
-            let pass = OpenPass {
-                label: "main buffer",
-                color: Some(ColorAttachment {
-                    texture: parameters.layer_composite.frame_texture().unwrap_or(image.color),
-                    load: LoadOp::Clear(color),
-                }),
-                depth_stencil: image.depth_stencil.map(|texture| DepthStencilAttachment {
-                    texture,
-                    depth: LoadOp::Clear(1.0),
-                    stencil: LoadOp::Clear(0),
-                }),
-                size: image.size,
-                targets: image.targets,
-            };
-            if let Err(error) = parameters.begin_pass(&mut *gpu, pass) {
-                Log::error(Event::Render, format!("Beginning the frame's pass failed: {error}"));
-            }
-        }
-
-        // The sky.
-        if let Some(sky) = orchestrator.sky() {
-            parameters.pass = RenderPass::Translucent;
-            parameters.depth_range_size = 1.0 - ((num_draw_groups + 2) * num_sublayers) as f32 * depth_epsilon;
-            parameters.current_layer = num_draw_groups as u32 + 1;
-            sky.render(&mut *gpu, &mut parameters);
-        }
-
-        // The opaque pass.
-        {
-            parameters.pass = RenderPass::Opaque;
-            parameters.depth_range_size = 1.0 - ((num_draw_groups + 2) * num_sublayers) as f32 * depth_epsilon;
-
-            // draw the draw groups, opaque pass: front to back with the depth
-            // buffer, except on the globe, where 2D layers carry no depth and
-            // are painted bottom to top.
-            if render_tree_parameters.transform_params.state.is_globe_rendering() {
-                parameters.current_layer = (num_draw_groups as u32).wrapping_sub(1);
-                orchestrator.render_draw_groups(&mut *gpu, &mut parameters, DrawOrder::BottomUp);
-            } else {
-                parameters.current_layer = 0;
-                orchestrator.render_draw_groups(&mut *gpu, &mut parameters, DrawOrder::TopDown);
-            }
-        }
-
-        // The translucent pass.
-        {
-            parameters.pass = RenderPass::Translucent;
-            parameters.depth_range_size = 1.0 - ((num_draw_groups + 2) * num_sublayers) as f32 * depth_epsilon;
-
-            // The planet goes into the depth buffer first, so 3D geometry
-            // behind the horizon stays hidden.
-            orchestrator.globe_depth().render(&mut *gpu, &mut parameters);
-
-            // draw the draw groups, translucent pass
-            parameters.current_layer = (num_draw_groups as u32).wrapping_sub(1);
-            orchestrator.render_draw_groups(&mut *gpu, &mut parameters, DrawOrder::BottomUp);
-        }
-
-        // The atmosphere.
-        if let Some(atmosphere) = orchestrator.atmosphere() {
-            parameters.pass = RenderPass::Translucent;
-            parameters.depth_range_size = 1.0 - ((num_draw_groups + 2) * num_sublayers) as f32 * depth_epsilon;
-            parameters.current_layer = num_draw_groups as u32 + 1;
-            atmosphere.render(&mut *gpu, &mut parameters);
-        }
-
-        // The debug overlays.
-        // Renders debug overlays.
-        parameters.current_layer = 0;
-        // layers: debug
-        for debug in orchestrator.debug_layers() {
-            debug.render(&mut *gpu, &mut parameters);
-            parameters.current_layer += 1;
-        }
-
-        parameters.present_frame(
-            &mut *gpu,
-            OpenPass {
-                label: "main buffer",
-                color: Some(ColorAttachment {
-                    texture: image.color,
-                    load: LoadOp::Clear(Color::new(0.0, 0.0, 0.0, 0.0)),
-                }),
-                depth_stencil: None,
-                size: image.size,
-                targets: TargetFormats { color: image.targets.color, depth_stencil: None },
-            },
-        );
-
+        let mut gpu = backend.gpu();
+        draw(orchestrator, &mut *gpu, &mut parameters, frame, &image, draw_groups.count, depth_range_size);
         let start_rendering = Instant::now();
         if let Err(error) = parameters.end_pass(&mut *gpu).and_then(|()| gpu.flush(false)) {
             Log::error(Event::Render, format!("Submitting the frame failed: {error}"));
         }
         drop(gpu);
         let handoff = target.end_frame();
-        // The frame read back counts as a framebuffer, as C++'s headless
-        // backend's offscreen texture does.
-        context.rendering_stats().num_frame_buffers = i32::from(handoff == Handoff::ReadBack);
         let submitted = Instant::now();
-        context.rendering_stats().rendering_time = (submitted - start_rendering).as_secs_f64();
 
+        // - FINISH --------------------------------------------------------
+        let context = &mut *parameters.context;
+        {
+            let stats = context.rendering_stats();
+            // The frame read back counts as a framebuffer, as an offscreen
+            // texture does.
+            stats.num_frame_buffers = i32::from(handoff == Handoff::ReadBack);
+            stats.rendering_time = (submitted - start_rendering).as_secs_f64();
+        }
+        // What the uploads and the passes replaced.
         context.destroy_released();
-        self.clip_masks = std::mem::take(&mut parameters.clip_masks);
-        self.layer_composite = std::mem::take(&mut parameters.layer_composite);
-
-        let rendering_time = context.rendering_stats().rendering_time;
-        context.rendering_stats().encoding_time = render_tree.get_elapsed_time() - rendering_time;
-
-        let stats = Arc::new(context.stats().get());
+        {
+            let stats = context.rendering_stats();
+            stats.encoding_time = frame.started.elapsed().as_secs_f64() - stats.rendering_time;
+        }
+        let stats = Arc::new(context.stats());
         drop(parameters);
 
         self.timings.layers = layers_updated - uploaded;
@@ -779,11 +617,11 @@ impl Renderer {
         self.timings.draw = submitted - layers_uploaded;
 
         emit(
-            self.events.as_ref(),
+            events,
             RendererEvent::RenderFrameFinished {
-                mode: if render_tree_parameters.loaded { RenderMode::Full } else { RenderMode::Partial },
-                needs_repaint: render_tree_parameters.needs_repaint,
-                placement_changed: render_tree_parameters.placement_changed,
+                mode: if frame.loaded { RenderMode::Full } else { RenderMode::Partial },
+                needs_repaint: frame.needs_repaint,
+                placement_changed: frame.placement_changed,
                 still_image_request_id: if update_parameters.still_image_request {
                     update_parameters.still_image_request_id
                 } else {
@@ -793,16 +631,173 @@ impl Renderer {
             },
         );
 
-        if !render_tree_parameters.loaded {
+        if !frame.loaded {
             self.render_state = RenderState::Partial;
         } else if self.render_state != RenderState::Fully {
             self.render_state = RenderState::Fully;
-            emit(self.events.as_ref(), RendererEvent::RenderMapFinished);
+            emit(events, RendererEvent::RenderMapFinished);
         }
 
-        self.frame_count += 1;
         self.frame_projection = Some(frame_projection);
         Some(handoff)
+    }
+}
+
+/// What the frame's draw groups need of the passes: their number, which sets
+/// the passes' depth range; the masks of the tiles they clip to and, when
+/// any of them uses the stencil buffer, of the tile that clears it; and the
+/// groups drawn as a whole, each into the layer composite's texture and then
+/// onto the frame.
+struct DrawGroups {
+    count: usize,
+    clip_tiles: Vec<UnwrappedTileID>,
+    composited: Vec<(SimpleIdentity, Composite)>,
+}
+
+impl DrawGroups {
+    /// The draw groups of `orchestrator`'s layers. Draw groups of one source
+    /// clip to the same tiles, which are added once.
+    fn of(orchestrator: &RenderOrchestrator, parameters: &PaintParameters<'_>) -> DrawGroups {
+        let mut groups = DrawGroups { count: 0, clip_tiles: Vec::new(), composited: Vec::new() };
+        let mut last: Option<&[UnwrappedTileID]> = None;
+        orchestrator.visit_draw_groups(|group| {
+            groups.count += 1;
+            if let Some(tiles) = group.stencil_tiles()
+                && last.is_none_or(|last| last != tiles)
+            {
+                groups.clip_tiles.extend(tiles.iter().copied());
+                last = Some(tiles);
+            }
+            groups.composited.extend(group.composite());
+        });
+        if last.is_some() {
+            groups.clip_tiles.extend(parameters.stencil_clear_tile());
+        }
+        if !groups.clip_tiles.is_sorted() {
+            groups.clip_tiles.sort_unstable();
+        }
+        groups.clip_tiles.dedup();
+        groups
+    }
+}
+
+/// The draw section of a frame's encode: encodes the passes of `frame` into
+/// `image` through `gpu`, which holds the frame's work until it is
+/// submitted, each pass drawing the `num_draw_groups` draw groups at depths
+/// below `depth_range_size`.
+fn draw(
+    orchestrator: &mut RenderOrchestrator,
+    gpu: &mut dyn Gpu,
+    parameters: &mut PaintParameters<'_>,
+    frame: &Frame,
+    image: &FrameImage,
+    num_draw_groups: usize,
+    depth_range_size: f32,
+) {
+    // Custom layers record their own work before the first pass.
+    for &index in frame.layers.keys() {
+        orchestrator.layer_mut(index as usize).prerender(gpu, parameters);
+    }
+
+    // The 3D pass: the 3D layers draw bottom to top. No pass is open, so
+    // the draw groups draw nothing but into their own targets.
+    if frame.has_3d {
+        parameters.pass = RenderPass::Pass3D;
+        parameters.depth_range_size = depth_range_size;
+        parameters.current_layer = (num_draw_groups as u32).wrapping_sub(1);
+        orchestrator.render_draw_groups(gpu, parameters, DrawOrder::BottomUp);
+    }
+
+    // The layers' render targets, which the passes sample.
+    orchestrator.visit_render_layers(|layer| layer.render_targets(gpu, parameters));
+
+    // The frame's pass, cleared to the backdrop, which shows where there are
+    // no tiles.
+    let color = if parameters.debug_options.contains(MapDebugOptions::OVERDRAW) {
+        Color::black()
+    } else {
+        frame.background_color
+    };
+    let pass = OpenPass {
+        label: "main buffer",
+        color: Some(ColorAttachment {
+            texture: parameters.layer_composite.frame_texture().unwrap_or(image.color),
+            load: LoadOp::Clear(color),
+        }),
+        depth_stencil: image.depth_stencil.map(|texture| DepthStencilAttachment {
+            texture,
+            depth: LoadOp::Clear(1.0),
+            stencil: LoadOp::Clear(0),
+        }),
+        size: image.size,
+        targets: image.targets,
+    };
+    if let Err(error) = parameters.begin_pass(gpu, pass) {
+        Log::error(Event::Render, format!("Beginning the frame's pass failed: {error}"));
+    }
+
+    // The sky.
+    if let Some(sky) = orchestrator.sky() {
+        parameters.pass = RenderPass::Translucent;
+        parameters.depth_range_size = depth_range_size;
+        parameters.current_layer = num_draw_groups as u32 + 1;
+        sky.render(gpu, parameters);
+    }
+
+    // The opaque pass: front to back with the depth buffer, except on the
+    // globe, where 2D layers carry no depth and are painted bottom to top.
+    parameters.pass = RenderPass::Opaque;
+    parameters.depth_range_size = depth_range_size;
+    if frame.transform.state.is_globe_rendering() {
+        parameters.current_layer = (num_draw_groups as u32).wrapping_sub(1);
+        orchestrator.render_draw_groups(gpu, parameters, DrawOrder::BottomUp);
+    } else {
+        parameters.current_layer = 0;
+        orchestrator.render_draw_groups(gpu, parameters, DrawOrder::TopDown);
+    }
+
+    // The translucent pass. The planet goes into the depth buffer first, so
+    // 3D geometry behind the horizon stays hidden.
+    parameters.pass = RenderPass::Translucent;
+    parameters.depth_range_size = depth_range_size;
+    orchestrator.globe_depth().render(gpu, parameters);
+    parameters.current_layer = (num_draw_groups as u32).wrapping_sub(1);
+    orchestrator.render_draw_groups(gpu, parameters, DrawOrder::BottomUp);
+
+    // The atmosphere.
+    if let Some(atmosphere) = orchestrator.atmosphere() {
+        parameters.pass = RenderPass::Translucent;
+        parameters.depth_range_size = depth_range_size;
+        parameters.current_layer = num_draw_groups as u32 + 1;
+        atmosphere.render(gpu, parameters);
+    }
+
+    // The debug overlays.
+    parameters.current_layer = 0;
+    for debug in orchestrator.debug_layers() {
+        debug.render(gpu, parameters);
+        parameters.current_layer += 1;
+    }
+
+    // The frame, where it drew into the layer composite's texture, copied
+    // into the target.
+    parameters.present_frame(
+        gpu,
+        OpenPass {
+            label: "main buffer",
+            color: Some(ColorAttachment { texture: image.color, load: LoadOp::Clear(Color::new(0.0, 0.0, 0.0, 0.0)) }),
+            depth_stencil: None,
+            size: image.size,
+            targets: TargetFormats { color: image.targets.color, depth_stencil: None },
+        },
+    );
+}
+
+/// Pushes what `orchestrator` reported since the last call to `events`, the
+/// renderer's event queue, or drops it when there is no queue.
+fn report(orchestrator: &mut RenderOrchestrator, events: Option<&RendererEvents>) {
+    for event in orchestrator.take_events() {
+        emit(events, event);
     }
 }
 
@@ -813,19 +808,33 @@ fn emit(events: Option<&RendererEvents>, event: RendererEvent) {
     }
 }
 
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        let backend = Rc::clone(&self.backend);
-        let _hold = backend.hold();
-        // SAFETY: `orchestrator` is dropped once, here, and nothing reads it
-        // afterwards: the remaining fields' drops don't touch it.
+impl Renderer {
+    /// Drops the renderer's resources inside the backend's hold, and
+    /// destroys what the context made and what the renderer released. Once:
+    /// the renderer is then only dropped.
+    fn tear_down(&mut self) {
+        if self.torn_down {
+            return;
+        }
+        self.torn_down = true;
+        let _hold = self.backend.hold();
+        // SAFETY: `torn_down` drops `orchestrator` once, here, and nothing
+        // reads it afterwards: the renderer only drops after this, and the
+        // remaining fields' drops don't touch it.
         #[expect(unsafe_code, reason = "drops the orchestrator inside the backend's hold; see its field")]
         unsafe {
             ManuallyDrop::drop(&mut self.orchestrator);
         }
-        self.clip_masks = ClipMasks::default();
-        self.layer_composite = LayerComposite::default();
-        self.static_data = None;
-        self.context.destroy_released();
+        let encoder = &mut self.encoder;
+        encoder.clip_masks = ClipMasks::default();
+        encoder.layer_composite = LayerComposite::default();
+        encoder.static_data = None;
+        encoder.context.release_all();
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        self.tear_down();
     }
 }

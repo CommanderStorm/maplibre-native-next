@@ -1,6 +1,6 @@
-// Port-only: how the members of the tile workers' messages that the derive
-// can't write cross (mod.rs): trait objects, as the types they can be, and
-// the values that cross once per worker instance, then by key
+// How the members of the tile workers' messages that the derive can't
+// write cross (mod.rs): trait objects, as the types they can be, and the
+// values that cross once per worker instance, then by key
 // (mln_util::serialization::shared).
 
 use std::sync::Arc;
@@ -158,11 +158,11 @@ impl LayoutResult {
     /// Each bucket with the layers that render it, in layer id order.
     fn buckets(&self) -> Vec<RenderedBucket<'_>> {
         let laid = &self.layer_render_data;
-        let mut layers: Vec<_> = laid.laid_layers().collect();
-        layers.sort_unstable_by_key(|(layer_id, ..)| *layer_id);
         // Where each of the layout's buckets is among `buckets`.
         let mut positions: Vec<Option<usize>> = vec![None; laid.bucket_count()];
         let mut buckets: Vec<RenderedBucket<'_>> = Vec::new();
+        let mut layers: Vec<_> = laid.laid_layers().collect();
+        layers.sort_unstable_by_key(|(layer_id, ..)| *layer_id);
         for (layer_id, bucket_index, layer) in layers {
             let Some(bucket) = laid.bucket(bucket_index) else { continue };
             let position = *positions[bucket_index].get_or_insert_with(|| {

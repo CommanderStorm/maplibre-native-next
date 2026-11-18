@@ -232,7 +232,7 @@ fn cross(layers: &[Arc<dyn ErasedEvaluatedLayer>], data: &TileData) -> LayoutRes
     assert_eq!(result.layer_render_data.len(), layers.len());
     assert_eq!(comparable(&lay_out(layers, data, direct_result).result), comparable(&result));
     // The tile attaches its own data.
-    assert!(result.feature_index.get_data().is_none());
+    assert!(result.feature_index.data().is_none());
     result
 }
 
@@ -608,9 +608,6 @@ impl ErasedEvaluatedLayer for Unknown {
     fn shared_style(&self) -> Arc<dyn mln_style::layer_type::ErasedLayerStyle> {
         Arc::clone(&self.0)
     }
-    fn render_passes(&self) -> u8 {
-        0
-    }
     fn constants_mask(&self) -> u64 {
         0
     }
@@ -766,7 +763,7 @@ fn dem_decodes_cross() {
             panic!("not DEMs");
         };
         assert_eq!((through.dim, through.stride, through.encoding), (16, 18, encoding));
-        assert_eq!(through.get_image().data, direct.get_image().data);
+        assert_eq!(through.image().data, direct.image().data);
         assert_eq!(through.get(-1, 3), through.get(0, 3), "the border repeats the edge");
     }
 

@@ -11,8 +11,6 @@
 //! its own, copied into a second texture before each such layer and onto the
 //! frame's target at the end.
 
-use std::rc::Rc;
-
 use mln_gfx::buffer::BufferPtr;
 use mln_gfx::color_mode::{BlendFunction, LinearBlend};
 use mln_gfx::gpu::{
@@ -33,8 +31,7 @@ use mln_gfx::shaders::shader_defines::{
 };
 use mln_gfx::types::ColorBlendFactorType;
 use mln_gfx::{
-    AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DepthMode, DrawModeType, ShaderProgramPtr,
-    ShaderRegistry, StencilMode,
+    AttributeDataType, ColorMode, CullFaceMode, DepthMode, DrawModeType, ShaderProgramPtr, ShaderRegistry, StencilMode,
 };
 use mln_style_types::LayerBlendType;
 use mln_util::Color;
@@ -42,13 +39,12 @@ use mln_util::identity::SimpleIdentity;
 use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 
-use crate::draw::clamped_scissor;
 use crate::gfx::attachment::Attachment;
 use crate::gfx::context::Context;
 use crate::gfx::owned::Owned;
-use crate::gfx::texture2d::Texture2D;
+use crate::gfx::store::SharedTexture;
 use crate::gfx::uniform_buffer::UniformBufferPtr;
-use crate::paint_parameters::{OpenPass, PaintParameters};
+use crate::paint_parameters::{DrawTarget, OpenPass};
 use crate::render_static_data::RenderStaticData;
 
 /// The format of the texture a composited layer draws into: its colors are
@@ -124,19 +120,20 @@ impl Composite {
 /// A texture that passes draw into and draws sample.
 struct Texture {
     /// The texture, which `texture` and `sampler` bind.
-    _texture: Texture2D,
+    _texture: SharedTexture,
     texture: TextureId,
     sampler: SamplerId,
 }
 
 impl Texture {
-    fn new(context: &Context, size: Size, format: TextureFormat) -> Result<Texture, GpuError> {
-        let mut texture = Texture2D::new(Rc::clone(context.released()));
-        texture.set_size(size);
-        texture.set_format(format);
-        texture.set_render_target();
-        let (id, sampler) = texture.binding(&mut *context.gpu(), context)?;
-        Ok(Texture { _texture: texture, texture: id, sampler })
+    fn new(context: &mut Context, size: Size, format: TextureFormat) -> Result<Texture, GpuError> {
+        let owned = context.add_texture_with(|texture| {
+            texture.set_size(size);
+            texture.set_format(format);
+            texture.set_render_target();
+        });
+        let (texture, sampler) = context.bind_texture(&owned)?;
+        Ok(Texture { _texture: owned, texture, sampler })
     }
 }
 
@@ -198,7 +195,7 @@ impl LayerComposite {
     /// does every group that blends in the shader.
     pub(crate) fn update(
         &mut self,
-        context: &Context,
+        context: &mut Context,
         shaders: &ShaderRegistry,
         size: Size,
         format: Option<TextureFormat>,
@@ -243,9 +240,9 @@ impl LayerComposite {
             };
             self.bytes[slot * stride..][..size].copy_from_slice(bytemuck::bytes_of(&ubo));
         }
-        context.write_uniform_buffer(&mut self.uniforms, &self.bytes);
+        context.device().write_uniform_buffer(&mut self.uniforms, &self.bytes);
         if self.projection.is_none() {
-            context.write_uniform_buffer_pod(&mut self.projection, &ProjectionUBO::default());
+            context.device().write_uniform_buffer_pod(&mut self.projection, &ProjectionUBO::default());
         }
     }
 
@@ -259,11 +256,17 @@ impl LayerComposite {
 
     /// Makes the target of `size`, unless it is made, the frame copy of
     /// `frame_format` where there is one, and the quad.
-    fn make(&mut self, context: &Context, size: Size, frame_format: Option<TextureFormat>) -> Result<(), GpuError> {
+    fn make(&mut self, context: &mut Context, size: Size, frame_format: Option<TextureFormat>) -> Result<(), GpuError> {
         if self.target.as_ref().is_none_or(|target| target.size != size) {
             self.drop_textures();
             let color = Texture::new(context, size, COLOR)?;
-            let depth_stencil = Attachment::new(context, "layer composite depth and stencil", size, DEPTH_STENCIL)?;
+            let depth_stencil = Attachment::new(
+                &mut *context.gpu(),
+                context.released(),
+                "layer composite depth and stencil",
+                size,
+                DEPTH_STENCIL,
+            )?;
             self.target = Some(Target { size, color, depth_stencil });
         }
         match frame_format {
@@ -280,8 +283,8 @@ impl LayerComposite {
             let vertices: [[i16; 2]; 4] = [[0, 0], [1, 0], [0, 1], [1, 1]];
             let indices = RenderStaticData::quad_triangle_indices();
             self.quad = Some(Quad {
-                vertices: context.buffer(BufferUsage::Vertex, bytemuck::cast_slice(&vertices))?,
-                indices: context.buffer(BufferUsage::Index, bytemuck::cast_slice(&indices))?,
+                vertices: context.device().buffer(BufferUsage::Vertex, bytemuck::cast_slice(&vertices))?,
+                indices: context.device().buffer(BufferUsage::Index, bytemuck::cast_slice(&indices))?,
                 geometry: None,
             });
         }
@@ -345,24 +348,31 @@ impl LayerComposite {
     /// Composites the texture onto the open pass, as the draw group `group`
     /// does, at the depth of the current layer: layers above that drew into
     /// the depth buffer hide it.
-    pub(crate) fn draw(&mut self, gpu: &mut dyn Gpu, parameters: &PaintParameters<'_>, group: SimpleIdentity) {
+    pub(crate) fn draw(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        target: DrawTarget,
+        depth: DepthMode,
+        context: &mut Context,
+        group: SimpleIdentity,
+    ) {
         let Some(slot) = self.groups.iter().position(|(id, _)| *id == group) else {
             return;
         };
         let blend = self.groups[slot].1.blend_function();
-        let depth = parameters.depth_mode_for_sublayer(0, DepthMaskType::ReadOnly);
-        if let Err(error) = self.draw_quad(gpu, parameters, slot, blend, depth) {
+        if let Err(error) = self.draw_quad(gpu, target, context, slot, blend, depth) {
             Log::warning(Event::Render, format!("Compositing a layer failed: {error}"));
         }
     }
 
     /// Copies the frame's texture onto the open pass, over what it holds.
-    pub(crate) fn copy_frame(&mut self, gpu: &mut dyn Gpu, parameters: &PaintParameters<'_>) {
+    pub(crate) fn copy_frame(&mut self, gpu: &mut dyn Gpu, target: DrawTarget, context: &mut Context) {
         if self.frame.is_none() {
             return;
         }
         let slot = self.groups.len();
-        if let Err(error) = self.draw_quad(gpu, parameters, slot, BlendFunction::Replace, DepthMode::disabled()) {
+        let blend = BlendFunction::Replace;
+        if let Err(error) = self.draw_quad(gpu, target, context, slot, blend, DepthMode::disabled()) {
             Log::warning(Event::Render, format!("Copying the frame failed: {error}"));
         }
     }
@@ -372,7 +382,8 @@ impl LayerComposite {
     fn draw_quad(
         &mut self,
         gpu: &mut dyn Gpu,
-        parameters: &PaintParameters<'_>,
+        draw_target: DrawTarget,
+        context: &mut Context,
         slot: usize,
         blend: BlendFunction,
         depth: DepthMode,
@@ -382,10 +393,7 @@ impl LayerComposite {
         else {
             return Ok(());
         };
-        let Some((size, targets)) = parameters.pass_target() else {
-            return Ok(());
-        };
-        let context = parameters.context;
+        let DrawTarget { size, targets, scissor } = draw_target;
         let shader_id = match self.shader_id {
             Some(id) => id,
             None => *self.shader_id.insert(context.shader(gpu, shader.key())?),
@@ -489,13 +497,13 @@ impl LayerComposite {
             global_index: 0,
             dynamic: DynamicState {
                 depth_range: (depth.range.min, depth.range.max),
-                scissor: clamped_scissor(parameters, size).unwrap_or(full),
+                scissor: scissor.unwrap_or(full),
                 stencil_reference: 0,
                 blend_constant: Color::default(),
                 line_width: 1.0,
             },
         })?;
-        let mut stats = context.rendering_stats();
+        let stats = context.rendering_stats();
         stats.num_draw_calls += 1;
         stats.total_draw_calls += 1;
         Ok(())

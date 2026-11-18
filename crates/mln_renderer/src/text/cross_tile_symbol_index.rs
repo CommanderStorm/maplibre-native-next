@@ -1,5 +1,5 @@
 // The index gives the symbols of the buckets a layer places their ids in
-// the frame's prepare, which has the buckets mutably (`SymbolBuckets`).
+// the frame's update, which has the buckets mutably (`SymbolBuckets`).
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
@@ -73,10 +73,7 @@ impl TileLayerIndex {
             index.symbols.push(IndexedSymbol {
                 key_start: index.keys.len() as u32,
                 key_len: key.len() as u32,
-                instance: IndexedSymbolInstance::new(
-                    cross_tile_id,
-                    index.get_scaled_coordinates(symbol_instance, &coord),
-                ),
+                instance: IndexedSymbolInstance::new(cross_tile_id, index.scaled_coordinates(symbol_instance, &coord)),
             });
             index.keys.extend_from_slice(key);
         }
@@ -94,7 +91,7 @@ impl TileLayerIndex {
     }
 
     #[must_use]
-    pub(crate) fn get_scaled_coordinates(
+    pub(crate) fn scaled_coordinates(
         &self,
         symbol_instance: &SymbolInstance,
         child_tile_coord: &OverscaledTileID,
@@ -103,9 +100,9 @@ impl TileLayerIndex {
         let rounding_factor: f64 = 512.0 / f64::from(EXTENT) / 2.0;
         let scale =
             rounding_factor / 2f64.powi(i32::from(child_tile_coord.canonical.z) - i32::from(self.coord.canonical.z));
-        // `childTileCoord.canonical.x * util::EXTENT` is uint32_t arithmetic;
-        // adding the float anchor makes it a float, the scale a double.
-        let anchor = symbol_instance.get_anchor().point;
+        // The tile's position wraps in `u32`; adding the anchor makes it an
+        // `f32`, and the scale an `f64`.
+        let anchor = symbol_instance.anchor().point;
         let x = child_tile_coord.canonical.x.wrapping_mul(EXTENT as u32) as f32 + anchor.x;
         let y = child_tile_coord.canonical.y.wrapping_mul(EXTENT as u32) as f32 + anchor.y;
         Point::new((f64::from(x) * scale).floor() as i64, (f64::from(y) * scale).floor() as i64)
@@ -142,7 +139,7 @@ impl TileLayerIndex {
                 continue;
             }
 
-            let scaled_symbol_coord = self.get_scaled_coordinates(symbol_instance, new_coord);
+            let scaled_symbol_coord = self.scaled_coordinates(symbol_instance, new_coord);
 
             for this_tile_symbol in indexed.iter().map(|symbol| &symbol.instance) {
                 // Return any symbol with the same keys whose coordinates are within
@@ -209,8 +206,8 @@ impl CrossTileSymbolLayerIndex {
 
     /// Sometimes when a user pans across the antimeridian the longitude value
     /// gets wrapped. To prevent labels from flashing out and in we adjust the
-    /// tileID values in the indexes so that they match the new wrapped
-    /// version of the map.
+    /// tile ids in the indexes so that they match the new wrapped version of
+    /// the map.
     pub(crate) fn handle_wrap_jump(&mut self, new_lng: f32) {
         let wrap_delta = ((new_lng - self.lng) / 360.0).round() as i32;
         if wrap_delta != 0 {
@@ -218,7 +215,7 @@ impl CrossTileSymbolLayerIndex {
             for (zoom, zoom_index) in std::mem::take(&mut self.indexes) {
                 let mut new_zoom_index: VecMap<OverscaledTileID, TileLayerIndex> = VecMap::new();
                 for (_, mut index) in zoom_index {
-                    // change the tileID's wrap and move its index
+                    // Change the tile id's wrap and move its index.
                     index.coord = index.coord.unwrap_to((i32::from(index.coord.wrap) + wrap_delta) as i16);
                     new_zoom_index.entry(index.coord).or_insert(index);
                 }
@@ -262,11 +259,10 @@ impl CrossTileSymbolLayerIndex {
             if previous_index.bucket_instance_id == bucket.bucket_instance_id && !state.has_uninitialized_symbols {
                 return false;
             }
-            // We're replacing this bucket with an updated version
-            // Remove the old bucket's "used crossTileIDs" now so that the new
-            // bucket can claim them. We have to keep the old index entries
-            // themselves until the end of 'addBucket' so that we can copy them
-            // with 'findMatches'.
+            // An updated version replaces this bucket: the old bucket's used
+            // cross-tile ids go now, so that the new bucket can claim them.
+            // The old index entries stay until the end of `add_bucket`,
+            // which copies them as it finds matches.
             remove_bucket_cross_tile_ids(&mut self.used_cross_tile_ids, tile_id.overscaled_z, previous_index);
         }
 
@@ -280,7 +276,7 @@ impl CrossTileSymbolLayerIndex {
             for symbol_instance in &mut state.symbol_instances {
                 symbol_instance.set_cross_tile_id(None);
                 let in_viewport =
-                    is_in_viewport(projector, symbol_instance.get_anchor().point, symbol_instance.height_offset());
+                    is_in_viewport(projector, symbol_instance.anchor().point, symbol_instance.height_offset());
                 pending.push(in_viewport);
                 state.has_uninitialized_symbols |= !in_viewport;
             }
@@ -399,7 +395,7 @@ impl CrossTileSymbolIndex {
         state: &TransformState,
         buckets: &mut (impl SymbolBuckets + ?Sized),
     ) -> AddLayerResult {
-        let layer_index = self.layer_indexes.get_or_insert_with(layer.get_id(), CrossTileSymbolLayerIndex::new);
+        let layer_index = self.layer_indexes.get_or_insert_with(layer.id(), CrossTileSymbolLayerIndex::new);
 
         let mut result = AddLayerResult::default();
         let current_bucket_ids = &mut self.current_bucket_ids;
@@ -407,7 +403,7 @@ impl CrossTileSymbolIndex {
 
         layer_index.handle_wrap_jump(lng);
 
-        for item in layer.get_placement_data() {
+        for item in layer.placement_data() {
             let Some(bucket) = buckets.get_mut(&item.bucket) else {
                 continue;
             };
@@ -428,8 +424,8 @@ impl CrossTileSymbolIndex {
         result
     }
 
-    /// bench: [`index_layer`](Self::index_layer) of the buckets that
-    /// `HeldBuckets` holds.
+    /// [`index_layer`](Self::index_layer) of the buckets that
+    /// `HeldBuckets` holds, for the benchmarks.
     #[cfg(feature = "bench")]
     pub(crate) fn add_layer(&mut self, layer: &dyn RenderLayer, lng: f32, state: &TransformState) -> AddLayerResult {
         let mut buckets = crate::render_layer::HeldBuckets::take();
@@ -677,7 +673,7 @@ mod tests {
             &mut max_cross_tile_id,
         );
 
-        // Matches the symbol in `mainBucket`
+        // Matches the symbol in the main bucket.
         assert_eq!(cross_tile_id(&grandchild_bucket, 0), Some(1));
         // Does not match the previous value for Windsor because that tile was removed
         assert_eq!(cross_tile_id(&grandchild_bucket, 1), Some(5));

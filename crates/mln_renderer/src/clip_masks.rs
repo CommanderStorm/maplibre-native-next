@@ -21,12 +21,11 @@ use mln_tile_id::UnwrappedTileID;
 use mln_util::logging::{Event, Log};
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
-use crate::draw::clamped_scissor;
 use crate::gfx::context::Context;
 use crate::gfx::owned::Owned;
 use crate::gfx::uniform_buffer::UniformBufferPtr;
 use crate::globe_tile_mesh::raw_globe_tile_mesh;
-use crate::paint_parameters::PaintParameters;
+use crate::paint_parameters::DrawTarget;
 use crate::render_static_data::RenderStaticData;
 
 /// The vertex layout of the masks' meshes: a tile position of two shorts.
@@ -59,10 +58,10 @@ struct Mesh {
 }
 
 impl Mesh {
-    fn new(context: &Context, vertices: &[u8], indices: &[u16], segments: Vec<SegmentBase>) -> Option<Mesh> {
-        let made = context
-            .buffer(BufferUsage::Vertex, vertices)
-            .and_then(|vertices| Ok((vertices, context.buffer(BufferUsage::Index, bytemuck::cast_slice(indices))?)));
+    fn new(context: &mut Context, vertices: &[u8], indices: &[u16], segments: Vec<SegmentBase>) -> Option<Mesh> {
+        let made = context.device().buffer(BufferUsage::Vertex, vertices).and_then(|vertices| {
+            Ok((vertices, context.device().buffer(BufferUsage::Index, bytemuck::cast_slice(indices))?))
+        });
         match made {
             Ok((vertices, indices)) => Some(Mesh { vertices, indices, segments, geometry: None }),
             Err(error) => {
@@ -119,7 +118,7 @@ impl ClipMasks {
     /// over the area that `projection` gives its tile.
     pub(crate) fn update(
         &mut self,
-        context: &Context,
+        context: &mut Context,
         shaders: &ShaderRegistry,
         globe: bool,
         tiles: &[UnwrappedTileID],
@@ -186,7 +185,7 @@ impl ClipMasks {
             let masks = &self.masks;
             self.meshes.retain(|key, _| masks.values().any(|(_, keys)| keys.contains(key)));
         }
-        context.write_uniform_buffer(&mut self.projections, &self.bytes);
+        context.device().write_uniform_buffer(&mut self.projections, &self.bytes);
     }
 
     /// Draws the mask of each tile of `masks` with its stencil value, which
@@ -196,9 +195,10 @@ impl ClipMasks {
         &mut self,
         gpu: &mut dyn Gpu,
         masks: &[(UnwrappedTileID, i32)],
-        parameters: &PaintParameters<'_>,
+        target: DrawTarget,
+        context: &mut Context,
     ) {
-        if let Err(error) = self.draw_in(gpu, masks, parameters) {
+        if let Err(error) = self.draw_in(gpu, masks, target, context) {
             Log::warning(Event::Render, format!("Drawing the clipping masks failed: {error}"));
         }
     }
@@ -207,15 +207,13 @@ impl ClipMasks {
         &mut self,
         gpu: &mut dyn Gpu,
         masks: &[(UnwrappedTileID, i32)],
-        parameters: &PaintParameters<'_>,
+        target: DrawTarget,
+        context: &mut Context,
     ) -> Result<(), GpuError> {
         let (Some(shader), Some(projections)) = (&self.shader, &self.projections) else {
             return Ok(());
         };
-        let Some((size, targets)) = parameters.pass_target() else {
-            return Ok(());
-        };
-        let context = parameters.context;
+        let DrawTarget { size, targets, scissor } = target;
         let shader_id = match self.shader_id {
             Some(id) => id,
             None => *self.shader_id.insert(context.shader(gpu, shader.key())?),
@@ -285,15 +283,14 @@ impl ClipMasks {
         let full = Scissor { x: 0, y: 0, width: size.width, height: size.height };
         let dynamic = DynamicState {
             depth_range: (depth.min, depth.max),
-            scissor: clamped_scissor(parameters, size).unwrap_or(full),
+            scissor: scissor.unwrap_or(full),
             stencil_reference: 0,
             blend_constant: ColorMode::disabled().blend_color,
             line_width: 1.0,
         };
-        // On the globe each mask is drawn with a border first, then exactly,
-        // as GL JS does: where a tile meets finer ones, its coarser edge
-        // leaves a sliver between the masks that only a neighbor's border
-        // covers.
+        // On the globe each mask is drawn with a border first, then exactly:
+        // where a tile meets finer ones, its coarser edge leaves a sliver
+        // between the masks that only a neighbor's border covers.
         let passes = if self.globe { 2 } else { 1 };
         let mut draws = 0;
         for pass in 0..passes {
@@ -324,7 +321,7 @@ impl ClipMasks {
                 }
             }
         }
-        let mut stats = context.rendering_stats();
+        let stats = context.rendering_stats();
         stats.num_draw_calls += draws;
         stats.total_draw_calls += draws;
         Ok(())
