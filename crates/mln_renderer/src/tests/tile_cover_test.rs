@@ -222,7 +222,7 @@ mod tile_cover {
 
         transform.jump_to(&CameraOptions {
             center: Some(ll(0.1, -0.1)),
-            padding: Some(EdgeInsets::new(376.0, 0.0, 0.0, 0.0).unwrap()),
+            padding: Some(EdgeInsets::new(376.0, 0.0, 0.0, 0.0)),
             zoom: Some(8.0),
             bearing: Some(45.0),
             pitch: Some(60.0),
@@ -250,7 +250,7 @@ mod tile_cover {
         // selection in tile_cover.cpp scanSpans.
         transform.jump_to(&CameraOptions {
             center: Some(ll(0.1, -0.1)),
-            padding: Some(EdgeInsets::new(400.0, 0.0, 0.0, 0.0).unwrap()),
+            padding: Some(EdgeInsets::new(400.0, 0.0, 0.0, 0.0)),
             zoom: Some(5.0),
             bearing: Some(-142.263_000_000_352_92),
             pitch: Some(60.0),
@@ -733,7 +733,7 @@ mod tile_cover {
             }
 
             eprint!(".");
-            let mut tc = TileCover::new_from_geometry(&Geometry::Polygon(polygon(rings)), 5, true).unwrap();
+            let mut tc = TileCover::new_from_geometry(&Geometry::Polygon(polygon(rings)), 5).unwrap();
             while tc.next().is_some() {}
         }
     }
@@ -762,8 +762,7 @@ mod tile_cover {
             }
 
             eprint!(".");
-            let mut tc =
-                TileCover::new_from_geometry(&Geometry::MultiLineString(MultiLineString(mls)), 5, true).unwrap();
+            let mut tc = TileCover::new_from_geometry(&Geometry::MultiLineString(MultiLineString(mls)), 5).unwrap();
             while tc.next().is_some() {}
         }
     }

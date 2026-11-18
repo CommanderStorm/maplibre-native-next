@@ -42,10 +42,10 @@ fn max_mercator_horizon_angle() -> f64 {
     mln_math::deg2rad(89.25)
 }
 
-/// A `LatLng` from coordinates that the state's invariants keep valid: its
-/// setters take only finite numbers.
+/// A `LatLng` from coordinates the transform state keeps valid, saturating
+/// any that aren't (see [`LatLng::saturating`]).
 fn lat_lng(lat: f64, lon: f64, mode: WrapMode) -> LatLng {
-    LatLng::with_mode(lat, lon, mode).expect("a transform state's coordinates are finite")
+    LatLng::saturating(lat, lon, mode)
 }
 
 fn lat_lng_from_mercator(mercator_coordinate: Point<f64>, wrap_mode: WrapMode) -> Result<LatLng, Error> {
@@ -1682,7 +1682,7 @@ mod tests {
     #[test]
     fn numbers_out_of_range_do_not_panic() {
         use mln_style_types::ProjectionType;
-        use mln_util::geo::{ScreenCoordinate, WrapMode};
+        use mln_util::geo::{EdgeInsets, ScreenCoordinate, WrapMode};
 
         use crate::FreeCameraOptions;
 
@@ -1724,6 +1724,10 @@ mod tests {
             }),
             ("free camera orientation", |s, v| {
                 s.set_free_camera_options(&FreeCameraOptions { position: None, orientation: Some([v, 0.0, 0.0, 1.0]) });
+            }),
+            ("edge insets", |s, v| s.set_edge_insets(&EdgeInsets { top: v, left: v, bottom: v, right: v })),
+            ("frustum offset", |s, v| {
+                s.set_frustum_offset(&EdgeInsets { top: v, left: v, bottom: v, right: v });
             }),
             ("move anchor", |s, v| {
                 let _ = s.move_lat_lng(&LatLng::new(1.0, 1.0).unwrap(), &ScreenCoordinate::new(v, v));

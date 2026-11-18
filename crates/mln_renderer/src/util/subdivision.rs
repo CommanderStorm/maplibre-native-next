@@ -80,12 +80,11 @@ impl Subdivider {
     }
 
     fn vertex_to_index(&mut self, x: f64, y: f64) -> u32 {
-        if x < -32768.0 || y < -32768.0 || x > 32767.0 || y > 32767.0 {
-            panic!("Vertex coordinates are out of signed 16 bit integer range.");
-        }
-        // std::lround
-        let x_int = x.round() as i32;
-        let y_int = y.round() as i32;
+        // The inputs are `i16` tile coordinates, and every vertex made from
+        // them lies within the bounds of a triangle of them, so the casts
+        // never saturate.
+        let x_int = i32::from(x.round() as i16);
+        let y_int = i32::from(y.round() as i16);
         let k = Self::key(x_int, y_int);
         if let Some(&index) = self.dictionary.get(&k) {
             return index;
@@ -663,10 +662,10 @@ pub(crate) fn fix_winding_order(vertices: &[i16], indices: &[u32]) -> Vec<u32> {
 }
 
 /// Triangulates an ordered convex ring of vertex indices by walking outward
-/// from its leftmost vertex.
+/// from its leftmost vertex. An empty ring adds no triangles.
 pub(crate) fn scanline_triangulate_vertex_ring(vertices: &[i16], ring: &[u32], out_indices: &mut Vec<u32>) {
     if ring.is_empty() {
-        panic!("Subdivision vertex ring is empty.");
+        return;
     }
 
     let mut leftmost_index = 0;

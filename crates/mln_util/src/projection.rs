@@ -74,12 +74,12 @@ impl Projection {
         let easting = deg2rad(EARTH_RADIUS_M * constrained_longitude);
         let northing = 0.5 * EARTH_RADIUS_M * ((1.0 + f) / (1.0 - f)).ln();
 
-        // C++ is noexcept here: a LatLng is never NaN, so neither value is.
-        ProjectedMeters::new(northing, easting).expect("projected meters from a valid LatLng")
+        // A valid LatLng, clamped, gives values that aren't NaN.
+        ProjectedMeters { northing, easting }
     }
 
-    /// Not noexcept in C++, but the clamps keep both values in range (a NaN
-    /// clamps to the upper bound), so the `LatLng` constructor cannot throw.
+    /// The clamps keep both values in range, a NaN clamping to the upper
+    /// bound.
     #[must_use]
     pub fn lat_lng_for_projected_meters(projected_meters: &ProjectedMeters) -> LatLng {
         let mut latitude = rad2deg(2.0 * (projected_meters.northing() / EARTH_RADIUS_M).exp().atan() - (PI / 2.0));
@@ -88,7 +88,7 @@ impl Projection {
         latitude = clamp_f64(latitude, -LATITUDE_MAX, LATITUDE_MAX);
         longitude = clamp_f64(longitude, -LONGITUDE_MAX, LONGITUDE_MAX);
 
-        LatLng::new(latitude, longitude).expect("clamped latitude and longitude")
+        LatLng::new_unchecked(latitude, longitude)
     }
 
     #[must_use]
@@ -96,11 +96,10 @@ impl Projection {
         Self::project_(lat_lng, Self::world_size(scale))
     }
 
-    /// Returns point on tile. The C++ `project(const LatLng&, int32_t zoom)`
-    /// overload: `worldSize = 1 << zoom` (int shift; zoom must be 0..=30).
+    /// The point of `lat_lng` on a world `2^zoom` tiles wide.
     #[must_use]
     pub fn project_zoom(lat_lng: &LatLng, zoom: i32) -> Point<f64> {
-        Self::project_(lat_lng, f64::from(1i32 << zoom))
+        Self::project_(lat_lng, 2f64.powi(zoom))
     }
 
     /// Fails with the [`LatLng::new`] error for a NaN or infinite result.
