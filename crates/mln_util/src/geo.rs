@@ -66,6 +66,20 @@ impl LatLng {
         Ok(result)
     }
 
+    /// The nearest valid location, as an `as` cast between number types
+    /// saturates: a NaN coordinate becomes 0, a latitude past ±90 becomes ±90,
+    /// and an infinite longitude becomes the largest finite one.
+    #[must_use]
+    pub fn saturating(lat: f64, lon: f64, mode: WrapMode) -> Self {
+        let lat = if lat.is_nan() { 0.0 } else { lat.clamp(-90.0, 90.0) };
+        let lon = if lon.is_nan() { 0.0 } else { lon.clamp(f64::MIN, f64::MAX) };
+        let mut result = LatLng { lat, lon };
+        if mode == WrapMode::Wrapped {
+            result.wrap();
+        }
+        result
+    }
+
     /// For construction from values that are valid by construction (the
     /// C++ `noexcept` paths).
     pub(crate) const fn new_unchecked(lat: f64, lon: f64) -> Self {
@@ -225,15 +239,14 @@ impl LatLngBounds {
         LatLng::new_unchecked(self.north(), self.west())
     }
 
-    /// Panics if the longitude sum overflows to infinity (C++ constructs the
-    /// `LatLng` in a `noexcept` function, so it terminates).
     #[must_use]
     pub fn center(&self) -> LatLng {
-        LatLng::new(
+        // The midpoint of two valid coordinates is valid: `midpoint` can't
+        // overflow.
+        LatLng::new_unchecked(
             f64::midpoint(self.sw.latitude(), self.ne.latitude()),
             f64::midpoint(self.sw.longitude(), self.ne.longitude()),
         )
-        .expect("LatLngBounds::center")
     }
 
     #[must_use]
@@ -345,11 +358,7 @@ impl LatLngBounds {
 
         if wrap == WrapMode::Wrapped {
             let wrapped = LatLngBounds::from_corners(self.sw.wrapped(), self.ne.wrapped());
-            // LatLng(0.0, longitude).wrapped(): longitude is finite here
-            // (it compared above), except for NaN/inf inputs, which the C++
-            // constructor rejects by throwing in a noexcept function.
-            let longitude =
-                LatLng::new(0.0, longitude).expect("LatLngBounds::contains_longitude").wrapped().longitude();
+            let longitude = mln_math::wrap(longitude, -constants::LONGITUDE_MAX, constants::LONGITUDE_MAX);
             if self.crosses_antimeridian() {
                 return (longitude >= -constants::LONGITUDE_MAX && longitude <= wrapped.east())
                     || (longitude >= wrapped.west() && longitude <= constants::LONGITUDE_MAX);
@@ -386,8 +395,7 @@ pub enum NorthOrientation {
 
 /// The distance on each side between a rectangle and a rectangle within.
 ///
-/// The fields are public (seed API); `new` validates like the C++
-/// constructor.
+/// Any values are allowed; the users of insets say which they accept.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EdgeInsets {
     /// Number of pixels inset from the top edge.
@@ -401,22 +409,9 @@ pub struct EdgeInsets {
 }
 
 impl EdgeInsets {
-    /// Fails with [`ErrorKind::InvalidArgument`](crate::ErrorKind) for a NaN
-    /// inset.
-    pub fn new(top: f64, left: f64, bottom: f64, right: f64) -> Result<Self, Error> {
-        if top.is_nan() {
-            return Err(Error::invalid_argument("top must not be NaN"));
-        }
-        if left.is_nan() {
-            return Err(Error::invalid_argument("left must not be NaN"));
-        }
-        if bottom.is_nan() {
-            return Err(Error::invalid_argument("bottom must not be NaN"));
-        }
-        if right.is_nan() {
-            return Err(Error::invalid_argument("right must not be NaN"));
-        }
-        Ok(EdgeInsets { top, left, bottom, right })
+    #[must_use]
+    pub const fn new(top: f64, left: f64, bottom: f64, right: f64) -> Self {
+        EdgeInsets { top, left, bottom, right }
     }
 
     #[must_use]
@@ -456,10 +451,9 @@ impl std::ops::AddAssign for EdgeInsets {
 
 impl std::ops::Add for EdgeInsets {
     type Output = EdgeInsets;
-    // C++ goes through the throwing constructor (NaN from inf + -inf).
-    fn add(self, o: EdgeInsets) -> EdgeInsets {
-        EdgeInsets::new(self.top + o.top, self.left + o.left, self.bottom + o.bottom, self.right + o.right)
-            .expect("EdgeInsets::operator+")
+    fn add(mut self, o: EdgeInsets) -> EdgeInsets {
+        self += o;
+        self
     }
 }
 
@@ -472,6 +466,15 @@ pub struct LatLngAltitude {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturating_lat_lng() {
+        let lat_lng = LatLng::saturating(f64::NAN, f64::INFINITY, WrapMode::Unwrapped);
+        assert_eq!((0.0, f64::MAX), (lat_lng.latitude(), lat_lng.longitude()));
+        let lat_lng = LatLng::saturating(-100.0, f64::NAN, WrapMode::Unwrapped);
+        assert_eq!((-90.0, 0.0), (lat_lng.latitude(), lat_lng.longitude()));
+        assert_eq!(190.0 - 360.0, LatLng::saturating(0.0, 190.0, WrapMode::Wrapped).longitude());
+    }
 
     #[test]
     fn latlng_validation() {
