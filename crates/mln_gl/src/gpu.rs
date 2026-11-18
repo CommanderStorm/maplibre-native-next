@@ -532,6 +532,9 @@ pub(crate) struct GlGpu {
     pass: Option<OpenPass>,
     /// The texels each readback read.
     readbacks: SlotMap<ReadbackId, Vec<u8>>,
+    /// The time queries of each pass, where the context has them.
+    #[cfg(feature = "bench")]
+    timer: Option<crate::bench::Timer>,
 }
 
 impl GlGpu {
@@ -584,6 +587,8 @@ impl GlGpu {
             };
             (caps, anisotropic, line_widths[0].min(1.0)..=max_line_width)
         };
+        #[cfg(feature = "bench")]
+        let timer = crate::bench::Timer::new(gl, caps.cpu_rasterizer);
         drop(current);
         GlGpu {
             context,
@@ -605,6 +610,8 @@ impl GlGpu {
             framebuffers: HashMap::default(),
             pass: None,
             readbacks: SlotMap::with_key(),
+            #[cfg(feature = "bench")]
+            timer,
         }
     }
 
@@ -1551,6 +1558,11 @@ impl Gpu for GlGpu {
             geometry: None,
             dynamic: None,
         });
+        #[cfg(feature = "bench")]
+        if let Some(timer) = &mut self.timer {
+            // The pass holds the context current.
+            timer.begin(self.context.gl());
+        }
         let clear_color = desc.color.and_then(|attachment| match attachment.load {
             LoadOp::Clear(color) => Some(color),
             LoadOp::Load => None,
@@ -1640,6 +1652,11 @@ impl Gpu for GlGpu {
 
     fn end_pass(&mut self) -> Result<(), GpuError> {
         let pass = self.pass.take().ok_or_else(|| no_pass("the end of a pass"))?;
+        #[cfg(feature = "bench")]
+        if let Some(timer) = &mut self.timer {
+            // The pass holds the context current until it drops.
+            timer.end(self.context.gl());
+        }
         for &id in &pass.destroyed {
             self.current(|gpu| gpu.forget_framebuffers(id));
         }
@@ -1657,6 +1674,10 @@ impl Gpu for GlGpu {
             if wait {
                 // SAFETY: the context is current.
                 unsafe { gpu.context.gl().finish() };
+            }
+            #[cfg(feature = "bench")]
+            if let Some(timer) = &mut gpu.timer {
+                timer.collect(gpu.context.gl());
             }
         });
         Ok(())
@@ -1681,7 +1702,13 @@ impl Gpu for GlGpu {
         let rgba = self.current(|gpu| {
             let framebuffer = gpu.framebuffer_of(Some(texture), None, "readback")?;
             gpu.context.state().bind_framebuffer(gpu.context.gl(), framebuffer);
-            Ok::<_, GpuError>(read_pixels(gpu.context.gl(), gpu.context.state(), height, region))
+            let rgba = read_pixels(gpu.context.gl(), gpu.context.state(), height, region);
+            // Reading the pixels waited for the passes before it.
+            #[cfg(feature = "bench")]
+            if let Some(timer) = &mut gpu.timer {
+                timer.collect(gpu.context.gl());
+            }
+            Ok::<_, GpuError>(rgba)
         })?;
         let texels = if red { rgba.as_chunks::<4>().0.iter().map(|&[red, ..]| red).collect() } else { rgba };
         Ok(self.readbacks.insert(texels))
@@ -1715,6 +1742,10 @@ impl Drop for GlGpu {
         self.samplers.clear();
         self.delete_let_go();
         let (gl, state) = (context.gl(), context.state());
+        #[cfg(feature = "bench")]
+        if let Some(timer) = &mut self.timer {
+            timer.destroy(gl);
+        }
         // SAFETY: the context is current, and the objects are alive and
         // only this backend's.
         unsafe {

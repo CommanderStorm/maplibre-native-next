@@ -35,7 +35,32 @@ fn main() {
     let version = std::process::Command::new(rustc).arg("-vV").output().expect("rustc -vV").stdout;
     hash.write(&version);
     println!("cargo::rustc-env=MLN_BENCH_HARNESS={:016x}", hash.0);
+    backend_timers(&workspace);
     layout_probe();
+}
+
+/// Sets `mln_bench_vulkan`, `mln_bench_gl`, `mln_bench_d3d12` and
+/// `mln_bench_mtl` where the native backends'
+/// `bench` modules, which time the GPU's work (`meter::gpu_time`), are
+/// built: where the runtime's `bench` feature turns on theirs. A base of
+/// `mln-bench compare` from before they had them builds without them, and
+/// reports no GPU time on those backends.
+fn backend_timers(workspace: &Path) {
+    let manifest = workspace.join("crates/mln_runtime/Cargo.toml");
+    println!("cargo::rerun-if-changed={}", manifest.display());
+    println!("cargo::rustc-check-cfg=cfg(mln_bench_vulkan, mln_bench_gl, mln_bench_d3d12, mln_bench_mtl)");
+    let manifest = std::fs::read_to_string(&manifest).expect("the runtime's manifest");
+    for (library, cfg) in [
+        ("mln_vulkan", "mln_bench_vulkan"),
+        ("mln_gl", "mln_bench_gl"),
+        ("mln_d3d12", "mln_bench_d3d12"),
+        ("mln_mtl", "mln_bench_mtl"),
+    ] {
+        // Only the runtime's `bench` feature names a library's.
+        if manifest.contains(&format!("\"{library}?/bench\"")) {
+            println!("cargo::rustc-cfg={cfg}");
+        }
+    }
 }
 
 /// With the `layout-probe` feature, writes `layout_probe.rs` to `OUT_DIR`: a
