@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use feature::{PropertyMap, Value as MbglValue};
 use mln_conversion::{Convertible, Error};
-use mln_expression::dsl::{create_expression_from_str, interpolate, linear, literal, zoom};
+use mln_expression::dsl::{interpolate, linear, literal, zoom};
+use mln_expression::parsing_context::create_expression_from_str;
 use mln_expression::{EvaluationContext, Functions};
 use mln_style::conversion::convert_property_value;
 use mln_style::property_expression::PropertyExpression;
@@ -39,11 +40,14 @@ impl GeometryTileFeature for StubGeometryTileFeature {
 fn interpolate_expression() {
     // Use DLS methods to create an expression
     {
-        let expr = PropertyExpression::<Padding>::new(Arc::from(interpolate(
-            linear(),
-            zoom(),
-            vec![(0.0, literal(Padding::uniform(0.0).into())), (1.0, literal(Padding::uniform(8.0).into()))],
-        )));
+        let expr = PropertyExpression::<Padding>::new(Arc::from(
+            interpolate(
+                linear(),
+                zoom(),
+                vec![(0.0, literal(Padding::uniform(0.0).into())), (1.0, literal(Padding::uniform(8.0).into()))],
+            )
+            .unwrap(),
+        ));
         let result = expr.evaluate(&EvaluationContext::new(0.5), Padding::default());
         assert_eq!(Padding::uniform(4.0), result);
     }
