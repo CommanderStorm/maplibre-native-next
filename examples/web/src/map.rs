@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use mln_gestures::{Button, GestureRecognizer, Input, Key, Modifiers, PointerKind, WheelDelta};
+use mln_gestures::{GestureEvent, GestureRecognizer, Input, Modes, PointerKind};
 use mln_map::{AnimationOptions, CameraOptions, CameraUpdate, CameraUpdateMode, GesturePhase, MapEvent};
 use mln_runtime::{
     AttachOptions, DemandMode, Error, EventMask, EventType, FrameDemand, FrameDisposition, LogicalExtent, Map,
@@ -112,7 +112,11 @@ pub struct WebMap {
     size: Size,
     pixel_ratio: f64,
     /// The page's pointer, wheel and key input, turned into camera moves.
-    gestures: GestureRecognizer,
+    gestures: GestureRecognizer<Map>,
+    /// The pointers that went down on the map and haven't lifted.
+    pointers: Vec<u32>,
+    /// Whether a gesture reached a notch since `take_notch`.
+    notched: bool,
     /// Milliseconds of the pump's pool tasks since the last frame that
     /// drew.
     tasks: f64,
@@ -205,7 +209,7 @@ impl WebMap {
 
         Ok(WebMap {
             session,
-            map,
+            map: map.clone(),
             _runtime: runtime,
             reports,
             redraw,
@@ -214,7 +218,9 @@ impl WebMap {
             rendered: 0,
             size,
             pixel_ratio,
-            gestures: GestureRecognizer::default(),
+            gestures: GestureRecognizer::new(map),
+            pointers: Vec::new(),
+            notched: false,
             tasks: 0.0,
             phases: [0.0; PHASES],
             gpu_check: GpuCheck::default(),
@@ -261,7 +267,7 @@ impl WebMap {
             animation: AnimationOptions::new(Duration::from_millis(500)),
             phase: GesturePhase::None,
         };
-        self.gestures.step_to(&mut self.map, &update);
+        self.gestures.step_to(&update);
     }
 
     /// Lets drags and zooms on the globe turn the bearing with the planet,
@@ -283,7 +289,7 @@ impl WebMap {
             animation: AnimationOptions::default(),
             phase: GesturePhase::None,
         };
-        self.gestures.step_to(&mut self.map, &update);
+        self.gestures.step_to(&update);
     }
 
     /// Reads the style's attributions and name again, for `attributions`
@@ -349,15 +355,18 @@ impl WebMap {
     }
 
     /// One animation frame at `now` (milliseconds, the clock of the input
-    /// methods' `time`): steps the gestures' eased zoom and ends those that
-    /// time out, then demands a frame of the session if the map has
+    /// methods' `time`): ticks the gesture recognizer, then demands a frame
+    /// of the session if the map has
     /// something new to draw, which it renders in a later task. Returns
     /// whether a frame was rendered since the last animation frame.
     pub fn frame(&mut self, now: f64) -> bool {
         // The pool tasks that the pump ran since the last frame: with no
         // tile workers, the tiles' parsing and layout among them.
         self.tasks += pump::take_pool_time().as_secs_f64() * 1000.0;
-        self.gestures.frame(&mut self.map, now);
+        // The page runs an animation frame always, so it ticks the recognizer
+        // on each rather than at its deadlines.
+        self.gestures.tick(now);
+        self.answer_events();
         // A demand renders the map once the commands sent before it ran.
         let sent_sequence = self.map.sent_sequence();
         if self.redraw.swap(false, Ordering::SeqCst) || self.force || sent_sequence != self.demanded {
@@ -407,7 +416,7 @@ impl WebMap {
     /// A pointer went down on the canvas, at `x`, `y` CSS pixels from its
     /// top-left corner: `kind` is the DOM `pointerType` ("mouse", "touch" or
     /// "pen"), `button` the DOM `button` (0 primary, 1 middle, 2 secondary)
-    /// and `modifiers` the bits of [`modifiers`]. `time` is in milliseconds
+    /// and `modifiers` the bits of [`SHIFT`] and [`CTRL`]. `time` is in milliseconds
     /// on the clock `frame` gets. Returns whether the map used it.
     #[expect(clippy::too_many_arguments, reason = "JavaScript passes the DOM pointer event's fields positionally")]
     pub fn pointer_down(
@@ -425,19 +434,16 @@ impl WebMap {
             "pen" => PointerKind::Pen,
             _ => PointerKind::Mouse,
         };
-        let button = match button {
-            1 => Button::Middle,
-            2 => Button::Secondary,
-            _ => Button::Primary,
+        // The secondary button rotates and tilts; the middle one means
+        // nothing to the map.
+        let modes = match button {
+            0 => Modes::default(),
+            2 => Modes { rotate: true, ..Modes::default() },
+            _ => return false,
         };
-        let input = Input::PointerDown {
-            id,
-            kind,
-            button,
-            position: ScreenCoordinate::new(x, y),
-            modifiers: modifiers_from_bits(modifiers),
-        };
-        self.gesture(input, time)
+        self.gesture(Input::Modes(key_modes(modifiers)), time);
+        self.pointers.push(id);
+        self.gesture(Input::PointerDown { id, kind, position: ScreenCoordinate::new(x, y), modes }, time)
     }
 
     /// A pointer moved (see `pointer_down`).
@@ -447,48 +453,79 @@ impl WebMap {
 
     /// A pointer went up (see `pointer_down`).
     pub fn pointer_up(&mut self, id: u32, x: f64, y: f64, time: f64) -> bool {
+        self.pointers.retain(|&p| p != id);
         self.gesture(Input::PointerUp { id, position: ScreenCoordinate::new(x, y) }, time)
     }
 
     /// The browser took a pointer away (`pointercancel`).
     pub fn pointer_cancel(&mut self, id: u32, time: f64) -> bool {
+        self.pointers.retain(|&p| p != id);
         self.gesture(Input::PointerCancel { id }, time)
     }
 
     /// A DOM `wheel` event, as the page classifies it (web/main.ts): at
-    /// (`x`, `y`), `amount` notches of a mouse wheel when `kind` is
-    /// [`WHEEL_NOTCHES`], or `amount` pixels of continuous scrolling when it
-    /// is [`WHEEL_PIXELS`]; positive scrolls down.
+    /// (`x`, `y`), `amount` detents of a mouse wheel when `kind` is
+    /// [`WHEEL_NOTCHES`], a third of a level each and eased, or `amount`
+    /// pixels of continuous scrolling when it is [`WHEEL_PIXELS`], 1/300
+    /// level each; positive scrolls down, zooming out. With Ctrl, which
+    /// browsers add to a trackpad pinch, pixels zoom 1/100 level each.
     pub fn wheel(&mut self, x: f64, y: f64, kind: u32, amount: f64, modifiers: u32, time: f64) -> bool {
         debug_assert!(kind == WHEEL_NOTCHES || kind == WHEEL_PIXELS, "wheel kind {kind}");
-        let delta = if kind == WHEEL_NOTCHES { WheelDelta::Notches(amount) } else { WheelDelta::Pixels(amount) };
-        let input =
-            Input::Wheel { position: ScreenCoordinate::new(x, y), delta, modifiers: modifiers_from_bits(modifiers) };
-        self.gesture(input, time)
+        let (discrete, zoom) = match kind {
+            WHEEL_NOTCHES => (true, -amount / 3.0),
+            _ if modifiers & CTRL != 0 => (false, -amount / 100.0),
+            _ => (false, -amount / 300.0),
+        };
+        let position = ScreenCoordinate::new(x, y);
+        let pan = ScreenCoordinate::default();
+        self.gesture(Input::Delta { position, discrete, pan, zoom, bearing: 0.0, pitch: 0.0 }, time)
     }
 
-    /// A DOM `keydown`, by its `key`: the arrows, `+`/`=`, `-`/`_` and
-    /// Escape; the map ignores the others and returns false.
+    /// A DOM `keydown`, by its `key`, each repeating while held: the arrows
+    /// pan 100 px (Shift: turn 15° and tilt 10°), `+`/`=` and `-`/`_` zoom a
+    /// level (Shift: two), and Escape drops a drag; the map ignores the
+    /// others and returns false.
     pub fn key(&mut self, key: &str, modifiers: u32, time: f64) -> bool {
-        let key = match key {
-            "ArrowLeft" => Key::Left,
-            "ArrowRight" => Key::Right,
-            "ArrowUp" => Key::Up,
-            "ArrowDown" => Key::Down,
-            "+" | "=" => Key::ZoomIn,
-            "-" | "_" => Key::ZoomOut,
-            "Escape" => Key::Escape,
+        self.gesture(Input::Modes(key_modes(modifiers)), time);
+        let shift = modifiers & SHIFT != 0;
+        let levels = if shift { 2.0 } else { 1.0 };
+        let (pan, zoom, bearing, pitch) = match (key, shift) {
+            ("Escape", _) => return self.cancel_pointers(time),
+            ("+" | "=", _) => ((0.0, 0.0), levels, 0.0, 0.0),
+            ("-" | "_", _) => ((0.0, 0.0), -levels, 0.0, 0.0),
+            ("ArrowLeft", true) => ((0.0, 0.0), 0.0, -15.0, 0.0),
+            ("ArrowRight", true) => ((0.0, 0.0), 0.0, 15.0, 0.0),
+            ("ArrowUp", true) => ((0.0, 0.0), 0.0, 0.0, 10.0),
+            ("ArrowDown", true) => ((0.0, 0.0), 0.0, 0.0, -10.0),
+            ("ArrowLeft", false) => ((100.0, 0.0), 0.0, 0.0, 0.0),
+            ("ArrowRight", false) => ((-100.0, 0.0), 0.0, 0.0, 0.0),
+            ("ArrowUp", false) => ((0.0, 100.0), 0.0, 0.0, 0.0),
+            ("ArrowDown", false) => ((0.0, -100.0), 0.0, 0.0, 0.0),
             _ => return false,
         };
-        self.gesture(Input::Key { key, modifiers: modifiers_from_bits(modifiers) }, time)
+        let position = ScreenCoordinate::new(f64::from(self.size.width) / 2.0, f64::from(self.size.height) / 2.0);
+        let pan = ScreenCoordinate::new(pan.0, pan.1);
+        self.gesture(Input::Delta { position, discrete: true, pan, zoom, bearing, pitch }, time)
     }
 
-    /// The canvas lost focus: every pointer is released.
+    /// A modifier key went down or up: `modifiers` are the bits held now.
+    pub fn modifiers(&mut self, modifiers: u32, time: f64) -> bool {
+        self.gesture(Input::Modes(key_modes(modifiers)), time)
+    }
+
+    /// Whether a gesture reached a notch since the last call, for the page
+    /// to play a haptic.
+    pub fn take_notch(&mut self) -> bool {
+        std::mem::take(&mut self.notched)
+    }
+
+    /// The canvas lost focus: its pointers and keys end here.
     pub fn blur(&mut self, time: f64) -> bool {
-        self.gesture(Input::Blur, time)
+        self.gesture(Input::Modes(Modes::default()), time);
+        self.cancel_pointers(time)
     }
 
-    /// The box a Shift-drag zooms to while it is drawn, as `[x0, y0, x1,
+    /// The box a box-zoom drag zooms to while it is drawn, as `[x0, y0, x1,
     /// y1]` in CSS pixels, for the page to show; otherwise undefined.
     #[must_use]
     pub fn box_zoom(&self) -> Option<Vec<f64>> {
@@ -530,9 +567,15 @@ impl WebMap {
 const WHEEL_PIXELS: u32 = 0;
 const WHEEL_NOTCHES: u32 = 1;
 
-/// The input methods' `modifiers`: Shift 1, Ctrl 2, Alt 4, Meta 8.
-fn modifiers_from_bits(bits: u32) -> Modifiers {
-    Modifiers { shift: bits & 1 != 0, ctrl: bits & 2 != 0, alt: bits & 4 != 0, meta: bits & 8 != 0 }
+/// The input methods' `modifiers` bits: Shift 1, Ctrl 2, Alt 4, Meta 8.
+const SHIFT: u32 = 1;
+const CTRL: u32 = 2;
+
+/// What held keys do: Ctrl rotates and tilts on a drag, and Shift zooms to a
+/// box on a drag and out on a double click.
+fn key_modes(modifiers: u32) -> Modes {
+    let shift = modifiers & SHIFT != 0;
+    Modes { rotate: modifiers & CTRL != 0, box_zoom: shift, zoom_out: shift }
 }
 
 fn camera_options(latitude: f64, longitude: f64, zoom: f64, bearing: f64, pitch: f64) -> CameraOptions {
@@ -556,10 +599,31 @@ fn log_refused(error: &Error) {
 }
 
 impl WebMap {
-    /// Feeds one input to the gesture recognizer; returns whether the map
-    /// used it.
+    /// Feeds one input to the gesture recognizer, and answers its events.
+    /// Returns whether the map used the input.
     fn gesture(&mut self, input: Input, time: f64) -> bool {
-        self.gestures.handle(&mut self.map, input, time)
+        let used = self.gestures.handle(input, time);
+        self.answer_events();
+        used
+    }
+
+    /// Answers the recognizer's events: a notch reaches the page. The page
+    /// has no use for taps.
+    fn answer_events(&mut self) {
+        for event in self.gestures.take_events() {
+            if let GestureEvent::Notch { .. } = event {
+                self.notched = true;
+            }
+        }
+    }
+
+    /// Cancels every pointer down on the map; returns whether there was one.
+    fn cancel_pointers(&mut self, time: f64) -> bool {
+        let pointers = std::mem::take(&mut self.pointers);
+        for &id in &pointers {
+            self.gesture(Input::PointerCancel { id }, time);
+        }
+        !pointers.is_empty()
     }
 
     /// Sizes the session, and the map and canvas with it, to the map's size
