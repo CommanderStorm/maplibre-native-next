@@ -9,12 +9,13 @@ use std::sync::{Arc, OnceLock};
 
 use memmap2::Mmap;
 use mln_text::glyph::FontData;
-use mln_text::weight::REGULAR_WEIGHT;
 use mln_util::hash::HashMap;
 use mln_util::logging::{Event, Log};
 use skrifa::raw::tables::cmap::Cmap;
 use skrifa::raw::tables::fvar::Fvar;
+use skrifa::raw::tables::name::Name;
 use skrifa::raw::tables::os2::Os2;
+use skrifa::raw::types::NameId;
 use skrifa::raw::{FontData as RawData, FontRead};
 
 use crate::sfnt::{self, Table};
@@ -23,6 +24,7 @@ use crate::sfnt::{self, Table};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     /// Face `index` of the font file at `path`.
+    #[cfg_attr(target_vendor = "apple", expect(dead_code, reason = "CoreText's fonts come as tables"))]
     File { path: PathBuf, index: u32 },
     /// A font that CoreText holds.
     #[cfg(target_vendor = "apple")]
@@ -49,10 +51,32 @@ impl Source {
         }
     }
 
-    /// The weight the map draws the font at, if it has a glyph for `probe`.
-    pub(crate) fn drawn_weight(&self, probe: char) -> Option<u16> {
-        drawn_weight(&self.tables(&[*b"cmap", *b"OS/2", *b"fvar"])?, probe)
+    /// The weight the map draws the font at when asked for `weight`, if it
+    /// has a glyph for `probe`.
+    pub(crate) fn drawn_weight(&self, probe: char, weight: u16) -> Option<u16> {
+        drawn_weight(&self.tables(&[*b"cmap", *b"OS/2", *b"fvar"])?, probe, weight)
     }
+
+    /// The font's family name, from its `name` table.
+    #[cfg_attr(not(target_os = "android"), expect(dead_code, reason = "the other matchers name the family"))]
+    pub(crate) fn family_name(&self) -> Option<String> {
+        family_name(&self.tables(&[*b"name"])?)
+    }
+}
+
+/// The family name in `tables`' `name` table: the typographic family, where
+/// the font has one, else the family.
+fn family_name(tables: &[Table]) -> Option<String> {
+    let data = tables.iter().find(|(tag, _)| tag == b"name").map(|(_, data)| RawData::new(data))?;
+    let name = Name::read(data).ok()?;
+    let find = |id: NameId| {
+        name.name_record()
+            .iter()
+            .filter(|record| record.name_id() == id)
+            .find_map(|record| record.string(name.string_data()).ok())
+            .map(|string| string.to_string())
+    };
+    find(NameId::TYPOGRAPHIC_FAMILY_NAME).or_else(|| find(NameId::FAMILY_NAME))
 }
 
 /// The font files of the chosen fonts, each shared by the faces that use it.
@@ -96,12 +120,12 @@ pub(crate) fn near_regular(weight: u16) -> bool {
     (300..=600).contains(&weight)
 }
 
-/// The weight the map draws a font with `tables` at, if it has a glyph for
-/// `probe`.
+/// The weight the map draws a font with `tables` at when asked for
+/// `weight`, if it has a glyph for `probe`.
 ///
-/// A variable font draws at regular weight within the range of its `wght`
-/// axis (`mln_text::weight`), a static font at its own.
-pub(crate) fn drawn_weight(tables: &[Table], probe: char) -> Option<u16> {
+/// A variable font draws at `weight` within the range of its `wght` axis, a
+/// static font at its own.
+pub(crate) fn drawn_weight(tables: &[Table], probe: char, weight: u16) -> Option<u16> {
     let table = |tag: &[u8; 4]| tables.iter().find(|(t, _)| t == tag).map(|(_, data)| RawData::new(data));
     let cmap = Cmap::read(table(b"cmap")?).ok()?;
     cmap.map_codepoint(probe)?;
@@ -109,7 +133,7 @@ pub(crate) fn drawn_weight(tables: &[Table], probe: char) -> Option<u16> {
         let axes = fvar.axes().ok()?;
         let axis = axes.iter().find(|axis| axis.axis_tag() == skrifa::Tag::new(b"wght"))?;
         let range = axis.min_value().to_f64() as f32..=axis.max_value().to_f64() as f32;
-        Some(REGULAR_WEIGHT.clamp(*range.start(), *range.end()).round() as u16)
+        Some(f32::from(weight).clamp(*range.start(), *range.end()).round() as u16)
     });
     Some(
         wght.or_else(|| table(b"OS/2").and_then(|data| Os2::read(data).ok()).map(|os2| os2.us_weight_class()))
@@ -161,7 +185,7 @@ fn map(path: &Path) -> Option<Mmap> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drawn_weight, near_regular};
+    use super::{drawn_weight, family_name, near_regular};
     use crate::sfnt::Table;
 
     fn os2(weight: u16) -> Table {
@@ -201,18 +225,47 @@ mod tests {
 
     #[test]
     fn a_font_draws_what_it_maps_at_its_weight() {
-        assert_eq!(drawn_weight(&[cmap(), os2(400)], 'A'), Some(400));
-        assert_eq!(drawn_weight(&[cmap(), os2(100)], 'A'), Some(100));
-        assert_eq!(drawn_weight(&[cmap()], 'A'), Some(400));
-        assert_eq!(drawn_weight(&[cmap(), os2(400)], 'B'), None);
-        assert_eq!(drawn_weight(&[os2(400)], 'A'), None);
+        assert_eq!(drawn_weight(&[cmap(), os2(400)], 'A', 400), Some(400));
+        assert_eq!(drawn_weight(&[cmap(), os2(100)], 'A', 900), Some(100));
+        assert_eq!(drawn_weight(&[cmap()], 'A', 400), Some(400));
+        assert_eq!(drawn_weight(&[cmap(), os2(400)], 'B', 400), None);
+        assert_eq!(drawn_weight(&[os2(400)], 'A', 400), None);
     }
 
     #[test]
-    fn a_variable_font_draws_at_regular_weight_within_its_range() {
-        assert_eq!(drawn_weight(&[cmap(), os2(100), fvar(100, 900)], 'A'), Some(400));
-        assert_eq!(drawn_weight(&[cmap(), os2(400), fvar(100, 200)], 'A'), Some(200));
-        assert_eq!(drawn_weight(&[cmap(), os2(400), fvar(700, 900)], 'A'), Some(700));
+    fn a_variable_font_draws_at_the_weight_asked_for_within_its_range() {
+        assert_eq!(drawn_weight(&[cmap(), os2(100), fvar(100, 900)], 'A', 400), Some(400));
+        assert_eq!(drawn_weight(&[cmap(), os2(100), fvar(100, 900)], 'A', 700), Some(700));
+        assert_eq!(drawn_weight(&[cmap(), os2(400), fvar(100, 900)], 'A', 50), Some(100));
+        assert_eq!(drawn_weight(&[cmap(), os2(400), fvar(100, 200)], 'A', 400), Some(200));
+        assert_eq!(drawn_weight(&[cmap(), os2(400), fvar(700, 900)], 'A', 400), Some(700));
+    }
+
+    /// A `name` table of Windows Unicode records of `names`, by name ID.
+    fn name(names: &[(u16, &str)]) -> Table {
+        let mut table = Vec::new();
+        let header_len = 6 + 12 * names.len();
+        for word in [0, names.len() as u16, header_len as u16] {
+            table.extend_from_slice(&word.to_be_bytes());
+        }
+        let mut strings = Vec::new();
+        for (id, text) in names {
+            let text: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+            for word in [3, 1, 0x409, *id, text.len() as u16, strings.len() as u16] {
+                table.extend_from_slice(&word.to_be_bytes());
+            }
+            strings.extend(text);
+        }
+        table.extend(strings);
+        (*b"name", table)
+    }
+
+    #[test]
+    fn a_fonts_family_is_its_typographic_family_else_its_family() {
+        assert_eq!(family_name(&[name(&[(1, "Noto Serif"), (2, "Regular")])]).as_deref(), Some("Noto Serif"));
+        let both = name(&[(1, "Noto Sans Display SemiBold"), (16, "Noto Sans Display")]);
+        assert_eq!(family_name(&[both]).as_deref(), Some("Noto Sans Display"));
+        assert_eq!(family_name(&[name(&[(2, "Regular")])]), None);
     }
 
     #[test]
