@@ -29,7 +29,7 @@ use crate::tests::{OneTile, style, tile_store};
 use crate::tile::contents::Contents;
 use crate::tile::inbox::{SourceData, TileEvent};
 use crate::tile::job::{DataInput, Job, Run, TileKey};
-use crate::tile::loading::{DataOrigin, Fetch, OriginLoad, VectorTileEncoding};
+use crate::tile::loading::{Ancestors, DataOrigin, Fetch, OriginLoad, VectorTileEncoding};
 use crate::tile::pipeline::LayoutWork;
 use crate::tile::tile::{TileKind, TileNecessity, TileOperation};
 use crate::tile::tile_workers::{InlineWorkers, TileWorkers};
@@ -118,6 +118,7 @@ impl Test {
             tileset: Tileset { tiles: vec!["tiles".to_owned()], ..Default::default() },
             encoding: VectorTileEncoding::Mvt,
             file_source: Some(file_source),
+            ancestors: Ancestors::default(),
         };
         let id = OverscaledTileID::from_zxy(0, 0, 0);
         OneTile::with_origin(store, TileKind::Geometry, false, origin, &[id], MapMode::Static)
@@ -276,6 +277,48 @@ fn fresh_data_is_kept_when_required_again() {
         });
     }
     assert_eq!(manual.submitted(), 2, "one layout per response");
+}
+
+/// A tile cut from an ancestor that another tile brought fresh from the
+/// network takes it from memory, without a request; with the ancestor's
+/// data expired, it loads the ancestor again.
+#[test]
+fn a_cut_tile_takes_a_fresh_ancestor_from_memory() {
+    let test = Test::new();
+    for (response, requests) in [(water(), 0), (expired(water()), 1)] {
+        let file_source = Arc::new(Held::default());
+        let file_source_dyn: Arc<dyn FileSource> = Arc::<Held>::clone(&file_source);
+        let origin = DataOrigin::Tileset {
+            tileset: Tileset {
+                tiles: vec!["tiles".to_owned()],
+                zoom_range: mln_util::range::Range::new(0, 0),
+                ..Default::default()
+            },
+            encoding: VectorTileEncoding::Mvt,
+            file_source: Some(file_source_dyn),
+            ancestors: Ancestors::default(),
+        };
+        let (left, right) = (OverscaledTileID::from_zxy(1, 0, 0), OverscaledTileID::from_zxy(1, 1, 0));
+        let store = tile_store(&test.pool, Box::new(InlineWorkers));
+        let mut tiles = OneTile::with_origin(store, TileKind::Geometry, false, origin, &[left, right], MapMode::Static);
+        let (styled, params) = (style(&[water_layer("water", "red")]), tiles.tile_params());
+        for id in [left, right] {
+            tiles.with_at(&id, |tile| tile.set_style(&styled, params.pixel_ratio, params.subdivision_granularity));
+        }
+        tiles.set_necessity(&left, TileNecessity::Required);
+        file_source.respond(response);
+        tiles.update();
+        tiles.update();
+        assert!(tiles.tile_at(&left).is_complete());
+
+        tiles.set_necessity(&right, TileNecessity::Required);
+        assert_eq!(file_source.pending(), requests);
+        if requests == 0 {
+            tiles.update();
+            tiles.update();
+            assert!(tiles.tile_at(&right).is_complete());
+        }
+    }
 }
 
 /// A tile whose data failed to lay out requests it again when required
@@ -500,6 +543,7 @@ fn style_replaced_mid_load() {
         tileset: Tileset { tiles: vec!["tiles".to_owned()], ..Default::default() },
         encoding: VectorTileEncoding::Mvt,
         file_source: Some(file_source_dyn),
+        ancestors: Ancestors::default(),
     });
     let new_tile = source.info.new_tile(id, params).expect("a tile");
     source.insert(new_tile);

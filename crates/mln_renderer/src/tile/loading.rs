@@ -2,7 +2,7 @@
 //! source's counter, and its responses arrive in the store's inbox naming
 //! it; the store applies one only while the tile still waits for that load.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use mln_storage::response::Reason;
@@ -11,9 +11,11 @@ use mln_style::custom_tile_loader::{CustomProvider, CustomTileSubscriber, Subscr
 use mln_style::sources::custom::{CustomVectorTileData, TileDataFormat};
 use mln_style::sources::geojson::{GeoJSONData, TileFeatures};
 use mln_tile::TileData;
-use mln_tile_id::OverscaledTileID;
+use mln_tile::cut::{Ancestor, Cut, CutData};
+use mln_tile_id::{CanonicalTileID, OverscaledTileID};
 use mln_util::chrono::Timestamp;
 use mln_util::error::Error;
+use mln_util::hash::HashMap;
 use mln_util::pool::Pool;
 use mln_util::tileset::Tileset;
 use parking_lot::Mutex;
@@ -44,6 +46,7 @@ pub(crate) enum DataOrigin {
         tileset: Tileset,
         encoding: VectorTileEncoding,
         file_source: Option<Arc<dyn FileSource>>,
+        ancestors: Ancestors,
     },
     GeoJson(Arc<dyn GeoJSONData>),
     /// Fetches only the tiles that are required.
@@ -54,14 +57,15 @@ pub(crate) enum DataOrigin {
 }
 
 impl DataOrigin {
-    /// What response `res` to a tileset tile's request delivers. A 404,
-    /// unlike an empty response (204, or no tile in an archive), says the
-    /// tileset has no tile here: a vector tile is then empty, as in GL JS,
-    /// and a raster tile missing. A sparse tileset's empty tiles are missing.
-    pub(crate) fn input(&self, kind: TileKind, res: &Response) -> TileInput {
-        let (sparse, encoding) = match self {
-            DataOrigin::Tileset { tileset, encoding, .. } => (tileset.sparse, *encoding),
-            DataOrigin::GeoJson(_) | DataOrigin::Custom { .. } => (false, VectorTileEncoding::Mvt),
+    /// What response `res` to a tileset tile's request delivers, from the
+    /// network or only the cache. A 404, unlike an empty response (204, or
+    /// no tile in an archive), says the tileset has no tile here: a vector
+    /// tile is then empty, as in GL JS, and a raster tile missing. A sparse
+    /// tileset's empty tiles are missing.
+    pub(crate) fn input(&mut self, kind: TileKind, id: &OverscaledTileID, res: &Response, network: bool) -> TileInput {
+        let sparse = match self {
+            DataOrigin::Tileset { tileset, .. } => tileset.sparse,
+            DataOrigin::GeoJson(_) | DataOrigin::Custom { .. } => false,
         };
         let not_found = res.tile_not_found || res.error.as_ref().is_some_and(|e| e.reason == Reason::NotFound);
         let empty = res.no_content || not_found;
@@ -69,9 +73,112 @@ impl DataOrigin {
         let missing = empty && (sparse || (not_found && !not_found_is_empty));
         let data = if empty { None } else { res.data.clone() };
         match kind {
-            TileKind::Geometry => TileInput::Geometry { data: data.map(|data| encoding.decode(data)), missing },
+            TileKind::Geometry => {
+                let fetched = network.then(|| Fetched::of(res));
+                TileInput::Geometry { data: data.map(|data| self.decode(id, data, fetched)), missing }
+            }
             TileKind::Raster | TileKind::Dem(_) => TileInput::Image { data, missing },
         }
+    }
+
+    /// Tile `id`'s data, from `data`: of its ancestor if it is cut from one,
+    /// which `fetched` brought from the network if it isn't `None`.
+    fn decode(&mut self, id: &OverscaledTileID, data: Data, fetched: Option<Fetched>) -> TileData {
+        match self {
+            DataOrigin::Tileset { tileset, encoding, ancestors, .. } => {
+                match Cut::of(&id.canonical, tileset.zoom_range.max) {
+                    Some(cut) => {
+                        let ancestor = ancestors.get(loaded_tile(tileset, id), data, *encoding, fetched);
+                        TileData::Cut(Arc::new(CutData::new(ancestor, cut)))
+                    }
+                    None => encoding.decode(data),
+                }
+            }
+            DataOrigin::GeoJson(_) | DataOrigin::Custom { .. } => VectorTileEncoding::Mvt.decode(data),
+        }
+    }
+
+    /// Tile `id`'s data cut from its ancestor, if another tile's load brought
+    /// that from the network and it hasn't expired at `now`, with what that
+    /// load knew of it.
+    pub(crate) fn cut_in_memory(&mut self, id: &OverscaledTileID, now: Timestamp) -> Option<(TileData, Fetched)> {
+        let DataOrigin::Tileset { tileset, ancestors, .. } = self else {
+            return None;
+        };
+        let cut = Cut::of(&id.canonical, tileset.zoom_range.max)?;
+        let (ancestor, fetched) = ancestors.fresh(loaded_tile(tileset, id), now)?;
+        Some((TileData::Cut(Arc::new(CutData::new(ancestor, cut))), fetched))
+    }
+}
+
+/// What a load from the network knew of the data it brought.
+#[derive(Clone, Debug)]
+pub(crate) struct Fetched {
+    pub(crate) modified: Option<Timestamp>,
+    pub(crate) expires: Option<Timestamp>,
+    pub(crate) etag: Option<String>,
+}
+
+impl Fetched {
+    fn of(res: &Response) -> Fetched {
+        Fetched { modified: res.modified, expires: res.expires, etag: res.etag.clone() }
+    }
+}
+
+/// The tile of `tileset` that tile `id` loads: past the tileset's last zoom,
+/// its ancestor there, which it is cut from.
+fn loaded_tile(tileset: &Tileset, id: &OverscaledTileID) -> CanonicalTileID {
+    if id.canonical.z > tileset.zoom_range.max { id.scaled_to(tileset.zoom_range.max).canonical } else { id.canonical }
+}
+
+/// The ancestors that a tileset's cut tiles share, by their tile id, while
+/// a tile cut from them holds them. A tile cut from an ancestor whose data
+/// is fresh from the network takes it as it is; otherwise it loads the
+/// ancestor, and those whose loads bring the same data share it, decoded
+/// once.
+#[derive(Default)]
+pub(crate) struct Ancestors(HashMap<CanonicalTileID, Held>);
+
+struct Held {
+    ancestor: Weak<Ancestor>,
+    /// `None` if only the cache brought it.
+    fetched: Option<Fetched>,
+}
+
+impl Ancestors {
+    /// Ancestor `id` of `data`, which `fetched` brought from the network if
+    /// it isn't `None`.
+    fn get(
+        &mut self,
+        id: CanonicalTileID,
+        data: Data,
+        encoding: VectorTileEncoding,
+        fetched: Option<Fetched>,
+    ) -> Arc<Ancestor> {
+        self.0.retain(|_, held| held.ancestor.strong_count() > 0);
+        let ancestor = match self.0.get(&id).and_then(|held| held.ancestor.upgrade()) {
+            Some(ancestor) if encoded(ancestor.data()) == Some(data.as_slice()) => ancestor,
+            _ => Arc::new(Ancestor::new(encoding.decode(data))),
+        };
+        self.0.insert(id, Held { ancestor: Arc::downgrade(&ancestor), fetched });
+        ancestor
+    }
+
+    /// Ancestor `id`, if it is held and its data from the network hasn't
+    /// expired at `now`.
+    fn fresh(&self, id: CanonicalTileID, now: Timestamp) -> Option<(Arc<Ancestor>, Fetched)> {
+        let held = self.0.get(&id)?;
+        let fetched = held.fetched.as_ref().filter(|fetched| fetched.expires.is_none_or(|expires| expires > now))?;
+        Some((held.ancestor.upgrade()?, fetched.clone()))
+    }
+}
+
+/// The bytes `data` was decoded from, if it was.
+fn encoded(data: &TileData) -> Option<&[u8]> {
+    match data {
+        TileData::Mvt(tile) => Some(tile.bytes().as_slice()),
+        TileData::Mlt(tile) => Some(tile.bytes().as_slice()),
+        TileData::Features(_) | TileData::Cut(_) => None,
     }
 }
 
@@ -237,12 +344,13 @@ impl Load {
                 // The render sources make no tiles for a tileset without
                 // tiles; such a tile can't load.
                 let url = tileset.tiles.first().map_or("", String::as_str);
+                let canonical = loaded_tile(tileset, id);
                 let resource = Resource::tile(
                     url,
                     pixel_ratio,
-                    id.canonical.x as i32,
-                    id.canonical.y as i32,
-                    id.canonical.z as i8,
+                    canonical.x as i32,
+                    canonical.y as i32,
+                    canonical.z as i8,
                     tileset.scheme,
                     LoadingMethod::CacheOnly,
                 );
