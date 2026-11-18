@@ -240,13 +240,13 @@ fn dist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 // The radial offset is to the edge of the text box. In the horizontal
 // direction, the edge of the text box is where glyphs start. But in the
 // vertical direction, the glyphs appear to "start" at the baseline. We don't
-// actually load baseline data, but we assume an offset of ONE_EM - 17 (see
-// "yOffset" in shaping.js)
+// actually load baseline data, but we assume an offset of ONE_EM - 17, as
+// the shaping does.
 const BASELINE_OFFSET: f32 = 7.0;
 
 /// Any horizontal shaping: this is used for collision purposes, and all the
 /// justifications have the same collision box.
-fn get_default_horizontal_shaping(shaped_text_orientations: &ShapedTextOrientations) -> &Shaping {
+fn default_horizontal_shaping(shaped_text_orientations: &ShapedTextOrientations) -> &Shaping {
     if shaped_text_orientations.right().is_some() {
         return shaped_text_orientations.right();
     }
@@ -277,7 +277,7 @@ fn shaping_for_text_justify_type(
 fn evaluate_radial_offset(anchor: SymbolAnchorType, radial_offset: f32) -> [f32; 2] {
     let mut result = [0.0_f32, 0.0_f32];
     let radial_offset = mln_math::fmaxf(radial_offset, 0.0); // Ignore negative offset.
-    // solve for r where r^2 + r^2 = radialOffset^2
+    // Solve for r where r^2 + r^2 = radial_offset^2.
     let hypotenuse = radial_offset / std::f32::consts::SQRT_2;
 
     match anchor {
@@ -695,7 +695,7 @@ impl SymbolLayout {
     /// The feature's variable anchors and offsets, from either
     /// `text-variable-anchor` or `text-variable-anchor-offset`, with the
     /// offsets converted from ems to pixels.
-    fn get_text_variable_anchor_offset(&self, feature: &SymbolFeature) -> Option<VariableAnchorOffsetCollection> {
+    fn text_variable_anchor_offset(&self, feature: &SymbolFeature) -> Option<VariableAnchorOffsetCollection> {
         let zoom = self.zoom;
         let canonical = &self.canonical_id;
         // If style specifies text-variable-anchor-offset, just return it
@@ -796,14 +796,14 @@ impl SymbolLayout {
         let icon_padding = layout.icon_padding.evaluate(
             &EvaluationContext::with_zoom_feature(zoom, Some(feature)).with_canonical_tile_id(Some(&canonical)),
         ) * self.tile_pixel_ratio;
-        let text_max_angle = (layout.text_max_angle).uniform().to_radians_cpp();
+        let text_max_angle = (layout.text_max_angle).uniform().to_radians_stepwise();
         let icon_rotation = layout.icon_rotate.evaluate(
             &EvaluationContext::with_zoom_feature(zoom, Some(feature)).with_canonical_tile_id(Some(&canonical)),
         );
         let text_rotation = layout.text_rotate.evaluate(
             &EvaluationContext::with_zoom_feature(zoom, Some(feature)).with_canonical_tile_id(Some(&canonical)),
         );
-        let variable_anchor_offsets = self.get_text_variable_anchor_offset(feature);
+        let variable_anchor_offsets = self.text_variable_anchor_offset(feature);
         // The spec raises only point-placed symbols.
         let height_offset = if *layout.symbol_placement.uniform() == SymbolPlacementType::Point {
             layout.symbol_height_offset.evaluate(
@@ -852,7 +852,7 @@ impl SymbolLayout {
                 );
                 vertically_shaped_icon = Some(vertical);
             }
-            let shaped_text = get_default_horizontal_shaping(shaped_text_orientations);
+            let shaped_text = default_horizontal_shaping(shaped_text_orientations);
             if shaped_text.is_some() {
                 icon.fit_icon_to_text(
                     shaped_text,
@@ -946,7 +946,7 @@ impl SymbolLayout {
         let text_shaping = if shaped_text_orientations.vertical.is_some() {
             &shaped_text_orientations.vertical
         } else {
-            get_default_horizontal_shaping(shaped_text_orientations)
+            default_horizontal_shaping(shaped_text_orientations)
         };
         let (text_left, text_right) = (text_shaping.left, text_shaping.right);
         let (icon_left, icon_right) = shaped_icon.as_ref().map_or((0.0, 0.0), |icon| (icon.left(), icon.right()));
@@ -980,7 +980,8 @@ impl SymbolLayout {
             }
         } else if *placement.uniform() == SymbolPlacementType::LineCenter {
             // No clipping, multiple lines per feature are allowed
-            // "lines" with only one point are ignored as in clipLines
+            // "lines" with only one point are ignored, as clipping ignores
+            // them
             for line in feature.geometry.iter() {
                 if line.len() > 1 {
                     let anchor = get_center_anchor(
@@ -1047,9 +1048,9 @@ impl SymbolLayout {
     }
 
     /// Writes the tile distances of `line`'s vertices from `anchor` to
-    /// `tile_distances`, one for each vertex, computed as GL JS's
-    /// `addToLineVertexArray` does, without building a line array. A line
-    /// without an anchor segment leaves them as they are.
+    /// `tile_distances`, one for each vertex, along the line on either side
+    /// of the anchor. A line without an anchor segment leaves them as they
+    /// are.
     pub(crate) fn calculate_tile_distances(line: &[GeometryCoordinate], anchor: &Anchor, tile_distances: &mut [f32]) {
         debug_assert_eq!(line.len(), tile_distances.len());
         if let Some(segment) = anchor.segment {
@@ -1128,7 +1129,7 @@ impl SymbolLayout {
         mut last_added_section: Option<usize>,
         line: &mut Option<(PoolRange, PoolRange)>,
     ) -> (usize, usize) {
-        let size_data = bucket.text_size_binder.get_vertex_size_data(feature);
+        let size_data = bucket.text_size_binder.vertex_size_data(feature);
         let has_format_section_overrides = bucket.has_format_section_overrides();
         let placed_icon_index = if writing_mode == WritingModeType::Vertical {
             symbol_instance.placed_vertical_icon_index
@@ -1143,18 +1144,18 @@ impl SymbolLayout {
             let tile_distances = PoolRange::extend(&mut pools.tile_distances, std::iter::repeat_n(0.0, line.len()));
             Self::calculate_tile_distances(
                 line,
-                symbol_instance.get_anchor(),
+                symbol_instance.anchor(),
                 tile_distances.of_mut(&mut pools.tile_distances),
             );
             (PoolRange::extend(&mut pools.lines, line.iter().copied()), tile_distances)
         });
         let glyph_offsets = PoolRange::at_end(&pools.glyph_offsets);
         state.text.placed_symbols.push(PlacedSymbol::new(
-            symbol_instance.get_anchor().point,
-            symbol_instance.get_anchor().segment.unwrap_or(0),
+            symbol_instance.anchor().point,
+            symbol_instance.anchor().segment.unwrap_or(0),
             size_data.min,
             size_data.max,
-            symbol_instance.get_text_offset(),
+            symbol_instance.text_offset(),
             writing_mode,
             line,
             tile_distances,
@@ -1184,7 +1185,7 @@ impl SymbolLayout {
                 &mut state.text,
                 size_data,
                 symbol_quad,
-                symbol_instance.get_anchor(),
+                symbol_instance.anchor(),
                 placed_index,
                 feature.sort_key,
             );
@@ -1227,8 +1228,8 @@ impl SymbolLayout {
                 last
             }
             _ => {
-                // text-conformance: C++ `triangles.elements()` counts indices
-                // (three per triangle), not triangles.
+                // A segment's length counts indices (three per triangle), not
+                // triangles.
                 let mut segment =
                     mln_gfx::shaders::segment::SegmentBase::with_lengths(vertex_offset, index_offset, 0, 0);
                 segment.sort_key = sort_key;
@@ -1372,8 +1373,7 @@ impl SymbolLayout {
 
                     let index_length = if feature.along_line { 6 } else { 8 };
 
-                    // text-conformance: C++ `triangles/lines.elements()`
-                    // counts indices, not primitives.
+                    // A segment's length counts indices, not primitives.
                     let (vertex_offset, index_offset) =
                         (collision_buffer.vertices.len(), collision_buffer.indices.len());
                     let segment = match collision_buffer.segments.last_mut() {
@@ -1384,7 +1384,7 @@ impl SymbolLayout {
                     };
                     let index = segment.vertex_length as u16;
 
-                    let symbol_anchor = symbol_instance.get_anchor().point;
+                    let symbol_anchor = symbol_instance.anchor().point;
                     let height = symbol_instance.height_offset();
                     for corner in [tl, tr, br, bl] {
                         collision_buffer.vertices.push(SymbolBucket::collision_layout_vertex(
@@ -1415,14 +1415,14 @@ impl SymbolLayout {
                     segment.index_length += index_length;
                 }
             };
-            populate_collision_box(symbol_instance.get_text_collision_feature(), true);
-            if let Some(feature) = symbol_instance.get_vertical_text_collision_feature() {
+            populate_collision_box(symbol_instance.text_collision_feature(), true);
+            if let Some(feature) = symbol_instance.vertical_text_collision_feature() {
                 populate_collision_box(feature, true);
             }
-            if let Some(feature) = symbol_instance.get_vertical_icon_collision_feature() {
+            if let Some(feature) = symbol_instance.vertical_icon_collision_feature() {
                 populate_collision_box(feature, false);
             }
-            populate_collision_box(symbol_instance.get_icon_collision_feature(), false);
+            populate_collision_box(symbol_instance.icon_collision_feature(), false);
         }
         state.symbol_instances = instances;
         state.symbol_instance_pools = pools;
@@ -1433,13 +1433,15 @@ impl SymbolLayout {
     }
 }
 
-/// `deg2radf` as C++ computes it (`deg * pi / 180` in float).
-trait ToRadiansCpp {
-    fn to_radians_cpp(self) -> f32;
+/// Degrees in radians as `deg * π / 180`, rounding after each step, which
+/// `f32::to_radians`, rounding `π / 180` first, doesn't match in the last
+/// bit.
+trait ToRadiansStepwise {
+    fn to_radians_stepwise(self) -> f32;
 }
 
-impl ToRadiansCpp for f32 {
-    fn to_radians_cpp(self) -> f32 {
+impl ToRadiansStepwise for f32 {
+    fn to_radians_stepwise(self) -> f32 {
         self * std::f32::consts::PI / 180.0
     }
 }
@@ -1610,7 +1612,7 @@ impl SymbolLayout {
                     0.0
                 };
 
-                let variable_anchor_offsets = self.get_text_variable_anchor_offset(feature);
+                let variable_anchor_offsets = self.text_variable_anchor_offset(feature);
                 let text_anchor = layout.text_anchor.evaluate(
                     &EvaluationContext::with_zoom_feature(zoom, Some(feature)).with_canonical_tile_id(Some(&canonical)),
                 );
@@ -1712,8 +1714,8 @@ impl SymbolLayout {
                         }
                     }
 
-                    // Vertical point label shaping if allowVerticalPlacement
-                    // is enabled.
+                    // Vertical point label shaping where the layer allows
+                    // vertical placement.
                     if allow_vertical_placement && formatted_text.allows_vertical_writing_mode() {
                         formatted_text.verticalize_punctuation();
                         // Vertical POI label placement is meant to be used
@@ -1747,8 +1749,8 @@ impl SymbolLayout {
                         shaped_text_orientations.horizontal = shaping;
                     }
 
-                    // Vertical point label shaping if allowVerticalPlacement
-                    // is enabled.
+                    // Vertical point label shaping where the layer allows
+                    // vertical placement.
                     if allow_vertical_placement && formatted_text.allows_vertical_writing_mode() {
                         formatted_text.verticalize_punctuation();
                         shaped_text_orientations.vertical = apply_shaping(
@@ -1799,9 +1801,8 @@ impl SymbolLayout {
                 }
             }
 
-            // if either shapedText or icon position is present, add the
-            // feature
-            let default_shaping = get_default_horizontal_shaping(&shaped_text_orientations);
+            // Add the feature if it has either shaped text or an icon.
+            let default_shaping = default_horizontal_shaping(&shaped_text_orientations);
             self.icons_in_text |= default_shaping.is_some() && default_shaping.icons_in_text;
             if default_shaping.is_some() || shaped_icon.is_some() {
                 self.add_feature(
@@ -1858,18 +1859,18 @@ impl SymbolLayout {
             for symbol_instance in &mut instances {
                 let has_text = symbol_instance.has_text();
                 let has_icon = symbol_instance.has_icon();
-                let single_line = symbol_instance.get_single_line();
+                let single_line = symbol_instance.single_line();
 
-                let feature = &self.features[symbol_instance.get_layout_feature_index()];
+                let feature = &self.features[symbol_instance.layout_feature_index()];
 
                 // Insert final placement into collision tree and add
                 // glyphs/icons to buffers
 
                 // Process icon first, so that text symbols would have
-                // reference to iconIndex which is used when dynamic vertices
-                // for icon-text-fit image have to be updated.
+                // the index of the icon, which updates the dynamic vertices of
+                // an `icon-text-fit` image.
                 if has_icon {
-                    let size_data = bucket_ref.icon_size_binder.get_vertex_size_data(feature);
+                    let size_data = bucket_ref.icon_size_binder.vertex_size_data(feature);
                     let sdf = symbol_instance.has_sdf_icon();
                     let mut place_icon = |icon_quads: &SymbolQuads, writing_mode: WritingModeType| -> usize {
                         let icon_buffer = if sdf { &mut state.sdf_icon } else { &mut state.icon };
@@ -1877,11 +1878,11 @@ impl SymbolLayout {
                         let line = PoolRange::extend(&mut pools.lines, symbol_instance.line().iter().copied());
                         let glyph_offsets = PoolRange::at_end(&pools.glyph_offsets);
                         icon_buffer.placed_symbols.push(PlacedSymbol::new(
-                            symbol_instance.get_anchor().point,
-                            symbol_instance.get_anchor().segment.unwrap_or(0),
+                            symbol_instance.anchor().point,
+                            symbol_instance.anchor().segment.unwrap_or(0),
                             size_data.min,
                             size_data.max,
-                            symbol_instance.get_icon_offset(),
+                            symbol_instance.icon_offset(),
                             writing_mode,
                             line,
                             PoolRange::default(),
@@ -1900,7 +1901,7 @@ impl SymbolLayout {
                             icon_buffer,
                             size_data,
                             icon_quads,
-                            symbol_instance.get_anchor(),
+                            symbol_instance.anchor(),
                             index,
                             feature.sort_key,
                         );
@@ -1925,7 +1926,7 @@ impl SymbolLayout {
                         binders.icon_binders.populate_vertex_vectors(
                             feature,
                             length,
-                            symbol_instance.get_data_feature_index(),
+                            symbol_instance.data_feature_index(),
                             &ImagePositions::default(),
                             None,
                             canonical,
@@ -1937,7 +1938,7 @@ impl SymbolLayout {
                 if has_text && feature.formatted_text.is_some() {
                     let mut last_added_section: Option<usize> = None;
                     let mut text_line = None;
-                    let writing_modes = symbol_instance.get_writing_modes();
+                    let writing_modes = symbol_instance.writing_modes();
                     if single_line {
                         let quads = symbol_instance.right_justified_glyph_quads().clone();
                         let (section, placed) = self.add_symbol_glyph_quads(
@@ -1957,7 +1958,7 @@ impl SymbolLayout {
                         symbol_instance.placed_center_text_index = Some(placed);
                         symbol_instance.placed_left_text_index = Some(placed);
                     } else {
-                        if symbol_instance.get_right_justified_glyph_quads_size() != 0 {
+                        if symbol_instance.right_justified_glyph_quads_size() != 0 {
                             let quads = symbol_instance.right_justified_glyph_quads().clone();
                             let (section, placed) = self.add_symbol_glyph_quads(
                                 bucket_ref,
@@ -1974,7 +1975,7 @@ impl SymbolLayout {
                             last_added_section = Some(section);
                             symbol_instance.placed_right_text_index = Some(placed);
                         }
-                        if symbol_instance.get_center_justified_glyph_quads_size() != 0 {
+                        if symbol_instance.center_justified_glyph_quads_size() != 0 {
                             let quads = symbol_instance.center_justified_glyph_quads().clone();
                             let (section, placed) = self.add_symbol_glyph_quads(
                                 bucket_ref,
@@ -1991,7 +1992,7 @@ impl SymbolLayout {
                             last_added_section = Some(section);
                             symbol_instance.placed_center_text_index = Some(placed);
                         }
-                        if symbol_instance.get_left_justified_glyph_quads_size() != 0 {
+                        if symbol_instance.left_justified_glyph_quads_size() != 0 {
                             let quads = symbol_instance.left_justified_glyph_quads().clone();
                             let (section, placed) = self.add_symbol_glyph_quads(
                                 bucket_ref,
@@ -2010,7 +2011,7 @@ impl SymbolLayout {
                         }
                     }
                     if (writing_modes & WritingModeType::Vertical) != WritingModeType::None
-                        && symbol_instance.get_vertical_glyph_quads_size() != 0
+                        && symbol_instance.vertical_glyph_quads_size() != 0
                     {
                         let quads = symbol_instance.vertical_glyph_quads().clone();
                         let (section, placed) = self.add_symbol_glyph_quads(
@@ -2028,7 +2029,8 @@ impl SymbolLayout {
                         last_added_section = Some(section);
                         symbol_instance.placed_vertical_text_index = Some(placed);
                     }
-                    debug_assert!(last_added_section.is_some()); // True, as hasText == true;
+                    // The instance has text, so a section was added.
+                    debug_assert!(last_added_section.is_some());
                     Self::update_paint_properties_for_section(
                         &mut paint_properties,
                         state,

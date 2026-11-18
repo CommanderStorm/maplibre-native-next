@@ -1,10 +1,8 @@
-use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::rc::Rc;
 
 use mln_gfx::color_mode::ColorMode;
 use mln_gfx::cull_face_mode::CullFaceMode;
-use mln_gfx::index_vector::IndexVectorBase;
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shaders::segment::SegmentBase;
 use mln_gfx::shaders::shader_defines::{
@@ -23,6 +21,7 @@ use mln_util::vectors::Vec4;
 
 use crate::draw::{DrawGeometry, DrawObjects, Textures, raw_vertices};
 use crate::gfx::context::Context;
+use crate::gfx::indexes::DrawIndexes;
 use crate::layer_drawing::{DrawDepth, FrameDraw, SingleDraw};
 use crate::render_light::EvaluatedLight;
 use crate::render_sky::EvaluatedSky;
@@ -37,12 +36,11 @@ const ATMOSPHERE_SHADER_NAME: &str = "AtmosphereShader";
 fn fullscreen_draw(shader: &ShaderProgramPtr, vertex_attribute: usize, depth: DrawDepth) -> SingleDraw {
     let corners: [[i16; 2]; 4] = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
     let vertices = bytemuck::cast_slice(&corners).to_vec();
-    let indexes = IndexVectorBase::new(RenderStaticData::quad_triangle_indices());
     let geometry = DrawGeometry {
         vertices: raw_vertices(vertex_attribute, vertices, corners.len(), AttributeDataType::Short2),
         vertex_count: corners.len(),
         mode: DrawMode::Triangles(),
-        indexes: Rc::new(RefCell::new(indexes)),
+        indexes: DrawIndexes::new(RenderStaticData::quad_triangle_indices()),
         segments: vec![SegmentBase::with_lengths(0, 0, 4, 6)],
         instances: None,
     };
@@ -112,7 +110,7 @@ impl SkyPass {
     pub(crate) fn update(
         &mut self,
         shaders: &ShaderRegistry,
-        context: &Context,
+        context: &mut Context,
         state: &TransformState,
         viewport_size: Size,
         pixel_ratio: f32,
@@ -155,7 +153,7 @@ impl SkyPass {
                     sky_blend: projection_transition as f32,
                 };
                 let buffers = &mut sky.frame.uniform_buffers;
-                buffers.create_or_update_pod(ID_SKY_PROPS_UBO, &props, context);
+                buffers.create_or_update_pod(ID_SKY_PROPS_UBO, &props, context.device());
                 bind_no_projection(buffers, context);
             }
         } else {
@@ -189,7 +187,7 @@ impl SkyPass {
             sun_position: sun_position(light, state, atmosphere_blend),
         };
         let buffers = &mut atmosphere.frame.uniform_buffers;
-        buffers.create_or_update_pod(ID_ATMOSPHERE_PROPS_UBO, &props, context);
+        buffers.create_or_update_pod(ID_ATMOSPHERE_PROPS_UBO, &props, context.device());
         bind_no_projection(buffers, context);
     }
 
@@ -246,7 +244,8 @@ mod tests {
     // In the globe's frame +x points to 0°N 90°E, +y to the North Pole and
     // +z to 0°N 0°E.
 
-    // As GL JS's projection/globe/atmosphere/light-position-map: wherever the
+    // As the render test projection/globe/atmosphere/light-position-map
+    // shows: wherever the
     // camera is, a map light at [1.5, 90, 90] stays over 0°N 90°E.
     #[test]
     fn map_light_stays_over_one_place() {
@@ -256,7 +255,8 @@ mod tests {
         }
     }
 
-    // As GL JS's projection/globe/atmosphere/ligth-position-viewport: a
+    // As the render test projection/globe/atmosphere/light-position-viewport
+    // shows: a
     // viewport light at [1.5, 90, 90] stays on the right of the view, which
     // is east of the center: over 0°N 90°E seen from 0°N 0°E, over 0°N 180°
     // seen from 0°N 90°E.

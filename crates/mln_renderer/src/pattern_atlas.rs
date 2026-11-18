@@ -1,5 +1,6 @@
 use etagere::{AllocId, BucketedAtlasAllocator, size2};
 use geometry::Point;
+use mln_gfx::gpu::TextureFormat;
 use mln_style_types::image::{ImagePosition, Impl as ImageImpl, RectU16};
 use mln_util::hash::HashMap;
 use mln_util::image::PremultipliedImage;
@@ -7,7 +8,7 @@ use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 
 use crate::gfx::context::Context;
-use crate::gfx::texture2d::{Texture2DPtr, upload_image};
+use crate::gfx::store::SharedTexture;
 
 /// When copied into the atlas texture, image data is padded by one pixel on
 /// each side. Pattern images are padded with a copy of the image data
@@ -24,7 +25,7 @@ pub(crate) struct PatternAtlas {
     allocator: BucketedAtlasAllocator,
     patterns: HashMap<String, Pattern>,
     atlas_image: PremultipliedImage,
-    atlas_texture_2d: Option<Texture2DPtr>,
+    texture: Option<SharedTexture>,
     dirty: bool,
 }
 
@@ -41,13 +42,13 @@ impl PatternAtlas {
             allocator: BucketedAtlasAllocator::new(size2(64, 64)),
             patterns: HashMap::default(),
             atlas_image: PremultipliedImage::new(Size::new(0, 0)),
-            atlas_texture_2d: None,
+            texture: None,
             dirty: true,
         }
     }
 
     #[must_use]
-    pub(crate) fn get_pattern(&self, id: &str) -> Option<ImagePosition> {
+    pub(crate) fn pattern(&self, id: &str) -> Option<ImagePosition> {
         self.patterns.get(id).map(|pattern| pattern.position.clone())
     }
 
@@ -60,7 +61,7 @@ impl PatternAtlas {
 
         let (alloc_id, bin) = self.allocate(width, height)?;
 
-        let size = self.get_pixel_size();
+        let size = self.pixel_size();
         self.atlas_image.resize(size);
 
         let src = &image.image;
@@ -112,7 +113,7 @@ impl PatternAtlas {
     }
 
     #[must_use]
-    pub(crate) fn get_pixel_size(&self) -> Size {
+    pub(crate) fn pixel_size(&self) -> Size {
         let size = self.allocator.size();
         Size::new(size.width as u32, size.height as u32)
     }
@@ -145,31 +146,31 @@ impl PatternAtlas {
 
     /// Uploads the atlas image to its texture, which is made again when the
     /// atlas grew since.
-    pub(crate) fn upload(&mut self, context: &Context) {
-        let uploaded = match &self.atlas_texture_2d {
+    pub(crate) fn upload(&mut self, context: &mut Context) {
+        let texture = match &self.texture {
             None => {
-                let texture = context.create_texture_2d();
-                let uploaded = upload_image(context, &mut texture.borrow_mut(), &self.atlas_image);
-                self.atlas_texture_2d = Some(texture);
-                uploaded
+                let texture = context.add_texture_with(|texture| texture.set_format(TextureFormat::Rgba8Unorm));
+                &*self.texture.insert(texture)
             }
-            Some(texture) if self.dirty => upload_image(context, &mut texture.borrow_mut(), &self.atlas_image),
-            Some(_) => Ok(()),
+            Some(texture) if self.dirty => texture,
+            Some(_) => return,
         };
-        if let Err(error) = uploaded {
+        let image = &self.atlas_image;
+        if let Err(error) = context.upload_texture_data(texture, &image.data, image.size) {
             Log::error(Event::Render, format!("Uploading the pattern atlas failed: {error}"));
         }
         self.dirty = false;
     }
 
+    /// The atlas's texture, once `upload` made it.
     #[must_use]
-    pub(crate) fn texture(&self) -> Option<&Texture2DPtr> {
-        self.atlas_texture_2d.as_ref()
+    pub(crate) fn texture(&self) -> Option<&SharedTexture> {
+        self.texture.as_ref()
     }
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn get_atlas_image_for_test(&self) -> &PremultipliedImage {
+    pub(crate) fn atlas_image(&self) -> &PremultipliedImage {
         &self.atlas_image
     }
 

@@ -88,13 +88,13 @@ pub(crate) fn sum_within_range(stretches: &ImageStretches, min: f32, max: f32) -
 
 #[inline]
 #[must_use]
-pub(crate) fn get_em_offset(stretch_offset: f32, stretch_size: f32, icon_size: f32, icon_offset: f32) -> f32 {
+fn em_offset(stretch_offset: f32, stretch_size: f32, icon_size: f32, icon_offset: f32) -> f32 {
     icon_offset + icon_size * stretch_offset / stretch_size
 }
 
 #[inline]
 #[must_use]
-pub(crate) fn get_px_offset(fixed_offset: f32, fixed_size: f32, stretch_offset: f32, stretch_size: f32) -> f32 {
+fn px_offset(fixed_offset: f32, fixed_size: f32, stretch_offset: f32, stretch_size: f32) -> f32 {
     fixed_offset - fixed_size * stretch_offset / stretch_size
 }
 
@@ -126,7 +126,7 @@ pub(crate) fn stretch_zones_to_cuts(stretch_zones: &ImageStretches, fixed_size: 
 }
 
 #[must_use]
-pub(crate) fn get_icon_quads(
+pub(crate) fn icon_quads(
     shaped_icon: &PositionedIcon,
     icon_rotate: f32,
     icon_type: SymbolContent,
@@ -191,18 +191,17 @@ pub(crate) fn get_icon_quads(
     let icon_height = icon.bottom() - icon_top;
 
     let mut make_box = |left: Cut, top: Cut, right: Cut, bottom: Cut| {
-        let left_em = get_em_offset(left.stretch - stretch_offset_x, stretch_content_width, icon_width, icon_left);
-        let left_px = get_px_offset(left.fixed - fixed_offset_x, fixed_content_width, left.stretch, stretch_width);
+        let left_em = em_offset(left.stretch - stretch_offset_x, stretch_content_width, icon_width, icon_left);
+        let left_px = px_offset(left.fixed - fixed_offset_x, fixed_content_width, left.stretch, stretch_width);
 
-        let top_em = get_em_offset(top.stretch - stretch_offset_y, stretch_content_height, icon_height, icon_top);
-        let top_px = get_px_offset(top.fixed - fixed_offset_y, fixed_content_height, top.stretch, stretch_height);
+        let top_em = em_offset(top.stretch - stretch_offset_y, stretch_content_height, icon_height, icon_top);
+        let top_px = px_offset(top.fixed - fixed_offset_y, fixed_content_height, top.stretch, stretch_height);
 
-        let right_em = get_em_offset(right.stretch - stretch_offset_x, stretch_content_width, icon_width, icon_left);
-        let right_px = get_px_offset(right.fixed - fixed_offset_x, fixed_content_width, right.stretch, stretch_width);
+        let right_em = em_offset(right.stretch - stretch_offset_x, stretch_content_width, icon_width, icon_left);
+        let right_px = px_offset(right.fixed - fixed_offset_x, fixed_content_width, right.stretch, stretch_width);
 
-        let bottom_em = get_em_offset(bottom.stretch - stretch_offset_y, stretch_content_height, icon_height, icon_top);
-        let bottom_px =
-            get_px_offset(bottom.fixed - fixed_offset_y, fixed_content_height, bottom.stretch, stretch_height);
+        let bottom_em = em_offset(bottom.stretch - stretch_offset_y, stretch_content_height, icon_height, icon_top);
+        let bottom_px = px_offset(bottom.fixed - fixed_offset_y, fixed_content_height, bottom.stretch, stretch_height);
 
         let mut tl = Vec2::new(left_em, top_em);
         let mut tr = Vec2::new(right_em, top_em);
@@ -223,9 +222,9 @@ pub(crate) fn get_icon_quads(
         let y1 = top.stretch + top.fixed;
         let y2 = bottom.stretch + bottom.fixed;
 
-        // TODO: consider making texture coordinates float instead of uint16_t
-        // (`paddedRect.x + border` is an `int`; adding the float makes it a
-        // float, then `static_cast<uint16_t>`.)
+        // TODO: consider making texture coordinates float instead of u16
+        // (the padded rect's x plus the border is an integer, which the
+        // stretch offset makes a float, which truncates to u16.)
         let sub_rect = RectU16 {
             x: ((i32::from(image.padded_rect.x) + i32::from(BORDER)) as f32 + x1) as u16,
             y: ((i32::from(image.padded_rect.y) + i32::from(BORDER)) as f32 + y1) as u16,
@@ -279,7 +278,7 @@ pub(crate) fn get_icon_quads(
 }
 
 #[must_use]
-pub(crate) fn get_glyph_quads(
+pub(crate) fn glyph_quads(
     shaped_text: &Shaping,
     text_offset: [f32; 2],
     layout: &SymbolLayoutProperties::Values,
@@ -295,7 +294,7 @@ pub(crate) fn get_glyph_quads(
 
     for line in &shaped_text.positioned_lines {
         for positioned_glyph in &line.positioned_glyphs {
-            // `rect.hasArea()`.
+            // A glyph without area has no quad.
             if !(positioned_glyph.rect.w != 0 && positioned_glyph.rect.h != 0) {
                 continue;
             }
@@ -349,9 +348,9 @@ pub(crate) fn get_glyph_quads(
                 built_in_offset = Vec2::ZERO;
             }
 
-            // rectBuffer is in 1x logical units; only rect.w/h carry the texture
-            // scale. GL JS keeps 2x glyphs centered by storing fractional
-            // left/top metrics, so native local glyphs do the same.
+            // The rect buffer is in 1x logical units; only rect.w/h carry the
+            // texture scale. Fractional left/top metrics keep 2x glyphs
+            // centered.
             let texture_scale: f32 = if positioned_glyph.metrics.is_double_resolution { 2.0 } else { 1.0 };
             let x1 = (positioned_glyph.metrics.left - rect_buffer) * positioned_glyph.scale - half_advance
                 + built_in_offset.x;
@@ -367,27 +366,27 @@ pub(crate) fn get_glyph_quads(
             if rotate_vertical_glyph {
                 // Vertical-supporting glyphs are laid out in 24x24 point boxes
                 // (1 square em) In horizontal orientation, the y values for
-                // glyphs are below the midline and we use a "yOffset" of -17 to
+                // glyphs are below the midline and we use a y offset of -17 to
                 // pull them up to the middle. By rotating counter-clockwise
                 // around the point at the center of the left edge of a 24x24
                 // layout box centered below the midline, we align the center of
-                // the glyphs with the horizontal midline, so the yOffset is no
+                // the glyphs with the horizontal midline, so the y offset is no
                 // longer necessary, but we also pull the glyph to the left
-                // along the x axis. The y coordinate includes baseline yOffset,
-                // therefore, needs to be accounted for when glyph is rotated
-                // and translated.
+                // along the x axis. The y coordinate includes the baseline's
+                // y offset, which needs to be accounted for when the glyph is
+                // rotated and translated.
 
                 let center = Vec2::new(-half_advance, half_advance - Shaping::Y_OFFSET as f32);
                 let vertical_rotation = -std::f32::consts::PI / 2.0;
 
-                // xHalfWidhtOffsetcorrection is a difference between full-width
-                // and half-width advance, should be 0 for full-width glyphs and
-                // will pull up half-width glyphs.
-                let x_half_widht_offsetcorrection = ONE_EM / 2.0 - half_advance;
+                // The x half-width offset correction is the difference
+                // between full-width and half-width advance: 0 for full-width
+                // glyphs, and it pulls up half-width glyphs.
+                let x_half_width_offset_correction = ONE_EM / 2.0 - half_advance;
                 let y_image_offset_correction =
-                    if positioned_glyph.image_id.is_some() { x_half_widht_offsetcorrection } else { 0.0 };
+                    if positioned_glyph.image_id.is_some() { x_half_width_offset_correction } else { 0.0 };
                 let x_offset_correction = Vec2::new(
-                    5.0 - Shaping::Y_OFFSET as f32 - x_half_widht_offsetcorrection,
+                    5.0 - Shaping::Y_OFFSET as f32 - x_half_width_offset_correction,
                     -y_image_offset_correction,
                 );
 
@@ -485,12 +484,12 @@ mod tests {
         PositionedGlyph::new(GlyphID::new(code), 0.0, 0.0, false, 0, 1.0, rect, metrics, None, 0)
     }
 
-    // Atlas padding is not scaled with textureScale, so a 2x glyph quad is 1
-    // logical pixel smaller than its 1x equivalent. GL JS-style fractional metrics
+    // Atlas padding is not scaled with the texture scale, so a 2x glyph quad
+    // is 1 logical pixel smaller than its 1x equivalent. Fractional metrics
     // keep its center aligned with the 1x quad.
     // gtest: getGlyphQuads.DoubleResolutionGlyphPreservesLogicalQuadSize
     #[test]
-    fn get_glyph_quads_double_resolution_glyph_preserves_logical_quad_size() {
+    fn glyph_quads_double_resolution_glyph_preserves_logical_quad_size() {
         let metrics1x =
             GlyphMetrics { width: 24, height: 24, left: 0.0, top: -8.0, advance: 24, is_double_resolution: false };
 
@@ -519,10 +518,8 @@ mod tests {
 
         let layout = SymbolLayoutProperties::Values::default();
         let image_map = ImagePositions::default();
-        let quads1x =
-            get_glyph_quads(&shaped_text1x, [0.0, 0.0], &layout, SymbolPlacementType::Point, &image_map, false);
-        let quads2x =
-            get_glyph_quads(&shaped_text2x, [0.0, 0.0], &layout, SymbolPlacementType::Point, &image_map, false);
+        let quads1x = glyph_quads(&shaped_text1x, [0.0, 0.0], &layout, SymbolPlacementType::Point, &image_map, false);
+        let quads2x = glyph_quads(&shaped_text2x, [0.0, 0.0], &layout, SymbolPlacementType::Point, &image_map, false);
 
         assert_eq!(quads1x.len(), 1);
         assert_eq!(quads2x.len(), 1);
@@ -542,7 +539,7 @@ mod tests {
 
     // gtest: getIconQuads.normal
     #[test]
-    fn get_icon_quads_normal() {
+    fn icon_quads_normal() {
         let _layout = SymbolLayoutProperties::Values::default();
         let _anchor = Anchor::new(2.0, 3.0, 0.0, Some(0));
         let image = ImagePosition::new(rect(0, 0, 15, 11), &test_image_impl());
@@ -551,7 +548,7 @@ mod tests {
 
         let _line = GeometryCoordinates::new();
 
-        let quads = get_icon_quads(&shaped_icon, 0.0, SymbolContent::IconRGBA, false);
+        let quads = icon_quads(&shaped_icon, 0.0, SymbolContent::IconRGBA, false);
 
         assert_eq!(quads.len(), 1);
         let quad = &quads[0];
@@ -578,7 +575,7 @@ mod tests {
 
     // gtest: getIconQuads.style
     #[test]
-    fn get_icon_quads_style() {
+    fn icon_quads_style() {
         let _anchor = Anchor::new(0.0, 0.0, 0.0, Some(0));
         let image = ImagePosition::new(rect(0, 0, 20, 20), &test_image_impl());
 
@@ -594,7 +591,7 @@ mod tests {
         let fit = |text_fit: IconTextFitType, padding: [f32; 4], font_scale: f32| {
             let mut shaped_icon = PositionedIcon::shape_icon(&image, &[-9.5, -9.5], SymbolAnchorType::Center);
             shaped_icon.fit_icon_to_text(&shaped_text, text_fit, &padding, &[0.0, 0.0], font_scale);
-            let quads = get_icon_quads(&shaped_icon, 0.0, SymbolContent::IconRGBA, false);
+            let quads = icon_quads(&shaped_icon, 0.0, SymbolContent::IconRGBA, false);
             assert_eq!(quads.len(), 1);
             quads[0].clone()
         };
@@ -608,7 +605,7 @@ mod tests {
             assert_float_eq(-0.5, shaped_icon.bottom());
             assert_float_eq(-18.5, shaped_icon.left());
 
-            let quads = get_icon_quads(&shaped_icon, 0.0, SymbolContent::IconRGBA, false);
+            let quads = icon_quads(&shaped_icon, 0.0, SymbolContent::IconRGBA, false);
 
             assert_eq!(quads.len(), 1);
             assert_quad(&quads[0], -19.5, -19.5, 0.5, 0.5);
@@ -617,7 +614,7 @@ mod tests {
         // width
         assert_quad(&fit(IconTextFitType::Width, [0.0, 0.0, 0.0, 0.0], 24.0 / 24.0), -64.444_44, 0.0, 24.444_443, 20.0);
 
-        // width x textSize
+        // width x text size
         assert_quad(
             &fit(IconTextFitType::Width, [0.0, 0.0, 0.0, 0.0], 12.0 / 24.0),
             -32.222_22,
@@ -626,7 +623,7 @@ mod tests {
             15.0,
         );
 
-        // width x textSize + padding
+        // width x text size + padding
         assert_quad(
             &fit(IconTextFitType::Width, [5.0, 10.0, 5.0, 10.0], 12.0 / 24.0),
             -43.333_332,
@@ -644,7 +641,7 @@ mod tests {
             32.222_22,
         );
 
-        // height x textSize
+        // height x text size
         assert_quad(
             &fit(IconTextFitType::Height, [0.0, 0.0, 0.0, 0.0], 12.0 / 24.0),
             -20.0,
@@ -653,7 +650,7 @@ mod tests {
             16.111_11,
         );
 
-        // height x textSize + padding
+        // height x text size + padding
         assert_quad(
             &fit(IconTextFitType::Height, [5.0, 10.0, 5.0, 20.0], 12.0 / 24.0),
             -20.0,
@@ -671,7 +668,7 @@ mod tests {
             32.222_22,
         );
 
-        // both x textSize
+        // both x text size
         assert_quad(
             &fit(IconTextFitType::Both, [0.0, 0.0, 0.0, 0.0], 12.0 / 24.0),
             -32.222_22,
@@ -680,7 +677,7 @@ mod tests {
             16.111_11,
         );
 
-        // both x textSize + padding
+        // both x text size + padding
         assert_quad(
             &fit(IconTextFitType::Both, [5.0, 10.0, 5.0, 10.0], 12.0 / 24.0),
             -43.333_332,
@@ -689,8 +686,7 @@ mod tests {
             21.666_666,
         );
 
-        // both x textSize + padding t/r/b/l
-        // (C++ also sets `layout.get<TextSize>() = 12.0f` on an unused layout.)
+        // both x text size + padding t/r/b/l
         assert_quad(
             &fit(IconTextFitType::Both, [0.0, 5.0, 10.0, 15.0], 12.0 / 24.0),
             -48.333_332,

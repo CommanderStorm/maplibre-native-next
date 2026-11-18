@@ -3,30 +3,22 @@ use mln_gfx::shaders::segment::{MAX_SEGMENT_VERTICES, SegmentBase};
 use mln_util::constants;
 
 use crate::buckets::fill_extrusion_bucket::FillExtrusionStaticVertex;
+use crate::buckets::raster_bucket::RasterLayoutVertex;
 
 /// The most walls whose quads a segment draws: as many as its 16-bit
 /// indices reach.
 const FILL_EXTRUSION_SEGMENT_WALLS: usize = MAX_SEGMENT_VERTICES / 4;
 
+/// What every frame draws with: the shaders, made for the renderer's pixel
+/// ratio, and the vertices and indices of the geometry the layers share.
 pub(crate) struct RenderStaticData {
-    pub(crate) has_3d: bool,
-    pub(crate) uploaded: std::cell::Cell<bool>,
     pub(crate) shaders: Box<ShaderRegistry>,
 }
 
 impl RenderStaticData {
     #[must_use]
     pub(crate) fn new(shaders: Box<ShaderRegistry>) -> Self {
-        RenderStaticData { has_3d: false, uploaded: std::cell::Cell::new(false), shaders }
-    }
-
-    /// Uploads the static data. Takes `&self` (the flag is a `Cell`): the
-    /// renderer calls it while `PaintParameters` borrows the static data.
-    pub(crate) fn upload(&self, _context: &crate::gfx::context::Context) {
-        if !self.uploaded.get() {
-            // these are still used by stencil buffer rendering
-            self.uploaded.set(true);
-        }
+        RenderStaticData { shaders }
     }
 
     /// The tile's four corners, as position-only vertices (`a_pos`).
@@ -42,17 +34,16 @@ impl RenderStaticData {
     }
 
     #[must_use]
-    pub(crate) fn raster_vertices() -> Vec<crate::buckets::raster_bucket::RasterLayoutVertex> {
+    pub(crate) fn raster_vertices() -> Vec<RasterLayoutVertex> {
         use geometry::Point;
 
-        use crate::buckets::raster_bucket::RasterBucket;
         let e = constants::EXTENT as i16;
         let t = constants::EXTENT as u16;
         vec![
-            RasterBucket::layout_vertex(Point::new(0, 0), Point::new(0, 0)),
-            RasterBucket::layout_vertex(Point::new(e, 0), Point::new(t, 0)),
-            RasterBucket::layout_vertex(Point::new(0, e), Point::new(0, t)),
-            RasterBucket::layout_vertex(Point::new(e, e), Point::new(t, t)),
+            RasterLayoutVertex::new(Point::new(0, 0), Point::new(0, 0)),
+            RasterLayoutVertex::new(Point::new(e, 0), Point::new(t, 0)),
+            RasterLayoutVertex::new(Point::new(0, e), Point::new(0, t)),
+            RasterLayoutVertex::new(Point::new(e, e), Point::new(t, t)),
         ]
     }
 

@@ -1,7 +1,5 @@
-// The C++ `std::map<size_t, DashPatternTexture>` is keyed by a hash of the
-// two dash arrays and the cap ("We're not handling hash collisions here");
-// the port keys by the values themselves (the float bits), which is the same
-// map without the collisions. The hash is only a cache key.
+// The line atlas keys its textures by the dash arrays' values themselves
+// (their float bits) and the cap.
 
 use mln_gfx::gpu::TextureFormat;
 use mln_gfx::texture2d::SamplerState;
@@ -11,7 +9,7 @@ use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 
 use crate::gfx::context::Context;
-use crate::gfx::texture2d::Texture2DPtr;
+use crate::gfx::store::SharedTexture;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct LinePatternPos {
@@ -34,7 +32,7 @@ pub(crate) struct DashRange {
     pub(crate) is_zero_length: bool,
 }
 
-fn get_dash_ranges(dasharray: &[f32], stretch: f32) -> Vec<DashRange> {
+fn dash_ranges(dasharray: &[f32], stretch: f32) -> Vec<DashRange> {
     // If dasharray has an odd length, both the first and last parts are
     // dashes and should be joined seamlessly.
     let odd_dash_array = dasharray.len() % 2 == 1;
@@ -181,7 +179,7 @@ fn add_dash_pattern(
     }
 
     let stretch = image.size.width as f32 / length;
-    let mut ranges = get_dash_ranges(dasharray, stretch);
+    let mut ranges = dash_ranges(dasharray, stretch);
 
     if pattern_cap == LinePatternCap::Round {
         add_round_dash(&ranges, y_offset, stretch, i32::from(n), image);
@@ -196,15 +194,15 @@ fn add_dash_pattern(
     }
 }
 
-enum DashTexture {
-    Image(AlphaImage),
-    Texture(Texture2DPtr),
-}
-
+/// A texture of two dash patterns, a `line-dasharray`'s at the zooms a
+/// frame cross-fades between, and where each is in it.
 pub(crate) struct DashPatternTexture {
     from: LinePatternPos,
     to: LinePatternPos,
-    texture: DashTexture,
+    size: Size,
+    /// The patterns, until the texture uploads them.
+    image: Option<AlphaImage>,
+    texture: Option<SharedTexture>,
 }
 
 impl DashPatternTexture {
@@ -214,66 +212,58 @@ impl DashPatternTexture {
         let pattern_height: u32 = if cap == LinePatternCap::Round { 15 } else { 1 };
         let height: u32 = (if patterns_identical { 1 } else { 2 }) * pattern_height;
 
-        // The OpenGL ES 2.0 spec, section 3.8.2: non-power-of-two textures
-        // need CLAMP_TO_EDGE; the dash patterns repeat horizontally, so the
-        // texture is a power of two (15 -> 16, 30 -> 32).
+        // The patterns repeat horizontally, which a texture whose height
+        // isn't a power of two can't on OpenGL ES 2 (15 -> 16, 30 -> 32).
         let texture_height = height.next_power_of_two();
         let mut image = AlphaImage::new(Size::new(256, texture_height));
 
         let from_pos = add_dash_pattern(&mut image, 0, from, cap);
         let to_pos = if patterns_identical { from_pos } else { add_dash_pattern(&mut image, pattern_height, to, cap) };
 
-        DashPatternTexture { from: from_pos, to: to_pos, texture: DashTexture::Image(image) }
+        DashPatternTexture { from: from_pos, to: to_pos, size: image.size, image: Some(image), texture: None }
     }
 
-    /// Uploads the texture to the GPU to be available when we need it. This
-    /// is a lazy operation; the texture is only bound when the data is
-    /// uploaded for the first time.
-    pub(crate) fn upload(&mut self, context: &Context) {
-        if let DashTexture::Image(image) = &self.texture {
-            let temp_texture = context.create_texture_2d();
-            {
-                let mut texture = temp_texture.borrow_mut();
-                texture.set_format(TextureFormat::A8Unorm);
-                if let Err(error) = texture.upload_data(context, &image.data, image.size) {
-                    Log::error(Event::Render, format!("Uploading a dash pattern failed: {error}"));
-                }
-                texture.set_sampler(SamplerState {
-                    filter: TextureFilterType::Linear,
-                    wrap_u: TextureWrapType::Repeat,
-                    wrap_v: TextureWrapType::Clamp,
-                    ..Default::default()
-                });
-            }
-            self.texture = DashTexture::Texture(temp_texture);
+    /// Makes the texture and uploads the patterns to it, unless it did.
+    pub(crate) fn upload(&mut self, context: &mut Context) {
+        let Some(image) = self.image.take() else {
+            return;
+        };
+        let texture = context.add_texture_with(|texture| {
+            texture.set_format(TextureFormat::A8Unorm);
+            texture.set_sampler(SamplerState {
+                filter: TextureFilterType::Linear,
+                wrap_u: TextureWrapType::Repeat,
+                wrap_v: TextureWrapType::Clamp,
+                ..Default::default()
+            });
+        });
+        if let Err(error) = context.upload_texture_data(&texture, &image.data, image.size) {
+            Log::error(Event::Render, format!("Uploading a dash pattern failed: {error}"));
         }
+        self.texture = Some(texture);
     }
 
-    /// The uploaded texture, if `upload` ran.
+    /// The texture, once `upload` made it.
     #[must_use]
-    pub(crate) fn get_texture(&self) -> Option<Texture2DPtr> {
-        match &self.texture {
-            DashTexture::Texture(texture) => Some(std::rc::Rc::clone(texture)),
-            DashTexture::Image(_) => None,
-        }
+    pub(crate) fn texture(&self) -> Option<&SharedTexture> {
+        self.texture.as_ref()
     }
 
-    /// Returns the size of the texture image.
+    /// The size of the texture.
     #[must_use]
-    pub(crate) fn get_size(&self) -> Size {
-        match &self.texture {
-            DashTexture::Image(image) => image.size,
-            DashTexture::Texture(texture) => texture.borrow().size(),
-        }
+    pub(crate) fn size(&self) -> Size {
+        self.size
     }
 
+    /// Where the pattern of the zoom the frame fades from is.
     #[must_use]
-    pub(crate) fn get_from(&self) -> &LinePatternPos {
+    pub(crate) fn from(&self) -> &LinePatternPos {
         &self.from
     }
 
+    /// Where the pattern of the zoom the frame fades to is.
     #[must_use]
-    pub(crate) fn get_to(&self) -> &LinePatternPos {
+    pub(crate) fn to(&self) -> &LinePatternPos {
         &self.to
     }
 }
@@ -384,23 +374,26 @@ impl LineAtlas {
         Self::default()
     }
 
-    /// Obtains or creates a texture that has both line patterns in it
-    pub(crate) fn get_dash_pattern_texture(
-        &mut self,
-        from: &[f32],
-        to: &[f32],
-        cap: LinePatternCap,
-    ) -> &mut DashPatternTexture {
+    /// The texture of the dash patterns `from` and `to` with `cap` ends,
+    /// made if the atlas has none, which the next upload uploads.
+    pub(crate) fn add(&mut self, from: &[f32], to: &[f32], cap: LinePatternCap) -> &DashPatternTexture {
         let index = self.textures.iter().position(|(key, _)| is_dash_key(key, from, to, cap)).unwrap_or_else(|| {
             self.textures.push((dash_key(from, to, cap), DashPatternTexture::new(from, to, cap)));
             self.needs_upload.push(self.textures.len() - 1);
             self.textures.len() - 1
         });
-        &mut self.textures[index].1
+        &self.textures[index].1
+    }
+
+    /// The texture of the dash patterns `from` and `to` with `cap` ends, if
+    /// the atlas has it.
+    #[must_use]
+    pub(crate) fn get(&self, from: &[f32], to: &[f32], cap: LinePatternCap) -> Option<&DashPatternTexture> {
+        self.textures.iter().find(|(key, _)| is_dash_key(key, from, to, cap)).map(|(_, texture)| texture)
     }
 
     /// Uploads the textures to the GPU to be available when we need it.
-    pub(crate) fn upload(&mut self, context: &Context) {
+    pub(crate) fn upload(&mut self, context: &mut Context) {
         for index in self.needs_upload.drain(..) {
             self.textures[index].1.upload(context);
         }

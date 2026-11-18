@@ -19,10 +19,14 @@ use mln_util::projection::Projection;
 use mln_util::range::Range;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_vec_map::VecMap;
+use smallvec::SmallVec;
 
 use crate::algorithm::update_renderables::{PrefetchedTile, RenderablesContext, update_renderables};
 use crate::algorithm::update_tile_masks::update_tile_masks;
 use crate::bucket::UploadNeeds;
+use crate::bucket_geometry::BucketGeometry;
+use crate::gfx::context::Context;
+use crate::gfx::dynamic_texture_atlas::DynamicTextureAtlas;
 use crate::layer_drawing::ChangedBuckets;
 use crate::layer_type::ErasedEvaluatedLayer;
 use crate::layout::tile_layout::LayoutParams;
@@ -133,6 +137,11 @@ pub(crate) struct SourceTiles {
     cache_clock: u64,
     cache_size: usize,
     rendered: VecMap<UnwrappedTileID, Rendered>,
+    /// The raster or raster-dem tiles the last frame drew masked, in order,
+    /// whose quads go when they stop drawing, and the list before it, whose
+    /// memory the next frame's takes.
+    masked: Vec<OverscaledTileID>,
+    masked_before: Vec<OverscaledTileID>,
     prev_lng: f32,
     fading_tiles: bool,
     cache_enabled: bool,
@@ -227,7 +236,7 @@ impl CoverContext<'_, '_, '_> {
 }
 
 impl RenderablesContext for CoverContext<'_, '_, '_> {
-    fn get_tile(&mut self, id: &OverscaledTileID) -> Option<OverscaledTileID> {
+    fn existing_tile(&mut self, id: &OverscaledTileID) -> Option<OverscaledTileID> {
         if self.in_cover(id) {
             return Some(*id);
         }
@@ -272,11 +281,7 @@ impl RenderablesContext for CoverContext<'_, '_, '_> {
         // A flat map draws each world copy of a tile from a tile of its own,
         // which starts from a loaded copy rather than leave its world bare
         // until it has loaded and laid out the same data.
-        let copy = if parameters.transform_state.is_globe_rendering() {
-            None
-        } else {
-            self.source.world_copy(id, self.ctx.upload_needs)
-        };
+        let copy = if parameters.transform_state.is_globe_rendering() { None } else { self.source.world_copy(id) };
         self.source.insert(tile);
         let style = self.style;
         self.source.update(id, self.ctx, |tile| {
@@ -339,7 +344,7 @@ impl RenderablesContext for CoverContext<'_, '_, '_> {
 
     fn prefetched_tiles(&self) -> Vec<PrefetchedTile> {
         if !self.render {
-            // The pan pass: `emptyPrefetchedTiles`.
+            // The pan pass prefetches none.
             return Vec::new();
         }
         // The ideal pass: the cover's tiles.
@@ -367,6 +372,8 @@ impl SourceTiles {
             cache_clock: 0,
             cache_size: 0,
             rendered: VecMap::default(),
+            masked: Vec::new(),
+            masked_before: Vec::new(),
             prev_lng: 0.0,
             fading_tiles: false,
             cache_enabled: true,
@@ -392,11 +399,88 @@ impl SourceTiles {
     /// What tile `id` shows, whose buckets the frame changes, see
     /// `contents_at`.
     pub(crate) fn contents_at_mut(&mut self, id: &OverscaledTileID, slot: Option<usize>) -> Option<&mut Contents> {
-        let index = match slot.filter(|&slot| self.tiles.get_index(slot).is_some_and(|(key, _)| key == id)) {
-            Some(slot) => slot,
-            None => self.tiles.index_of(id)?,
-        };
+        let index = self.index_at(id, slot)?;
         self.tiles.get_index_mut(index)?.1.tile.contents_mut()
+    }
+
+    /// The index of tile `id` among the tiles, which is `slot` if they
+    /// haven't changed since `rendered` said so.
+    fn index_at(&self, id: &OverscaledTileID, slot: Option<usize>) -> Option<usize> {
+        match slot.filter(|&slot| self.tiles.get_index(slot).is_some_and(|(key, _)| key == id)) {
+            Some(slot) => Some(slot),
+            None => self.tiles.index_of(id),
+        }
+    }
+
+    /// Readies the buckets of what tile `id` shows, see `contents_at_mut`,
+    /// for the frame's draws, which read what `needs` says, finding its
+    /// atlas pages' textures in `atlas`. A geometry tile's buckets share
+    /// what those of its other world copies, copies of them or they of
+    /// its, moved into `context`'s stores; and the copies laid out from the
+    /// same data then take what it moved, freeing their own.
+    pub(crate) fn upload_at(
+        &mut self,
+        id: &OverscaledTileID,
+        slot: Option<usize>,
+        atlas: &DynamicTextureAtlas,
+        context: &mut Context,
+        needs: UploadNeeds,
+    ) {
+        let Some(index) = self.index_at(id, slot) else {
+            return;
+        };
+        let Some((&id, slot)) = self.tiles.get_index_mut(index) else {
+            return;
+        };
+        let feature_index = match slot.tile.contents_mut() {
+            Some(Contents::Geometry(geometry)) => {
+                geometry.textures.resolve(atlas);
+                if !geometry.needs_upload() {
+                    return;
+                }
+                Arc::clone(&geometry.result.feature_index)
+            }
+            Some(Contents::Raster(bucket)) => return bucket.upload(context),
+            Some(Contents::Dem(bucket)) => return bucket.upload(context),
+            Some(Contents::Empty) | None => return,
+        };
+        let mut same: SmallVec<[usize; 4]> = self.same_place(&id);
+        same.retain(|&mut at| at != index);
+        let slots = self.tiles.values_mut().into_slice();
+        upload_sharing(slots, index, &same, context, needs);
+        for &copy in &same {
+            let laid_out_alike =
+                slots.get(copy).and_then(|slot| slot.tile.contents()?.geometry()).is_some_and(|geometry| {
+                    geometry.needs_upload() && Arc::ptr_eq(&geometry.result.feature_index, &feature_index)
+                });
+            if laid_out_alike {
+                let others: SmallVec<[usize; 4]> =
+                    same.iter().copied().chain([index]).filter(|&other| other != copy).collect();
+                upload_sharing(slots, copy, &others, context, needs);
+            }
+        }
+    }
+
+    /// The indexes of the tiles that are `id` in any world copy, `id`'s own
+    /// among them if there is one. The tiles are in order of zoom, then
+    /// world copy, then place, so each world copy's tile is a search away.
+    fn same_place(&self, id: &OverscaledTileID) -> SmallVec<[usize; 4]> {
+        let keys = self.tiles.keys().as_slice();
+        let mut found = SmallVec::new();
+        let mut at = keys.partition_point(|key| key.overscaled_z < id.overscaled_z);
+        while let Some(&OverscaledTileID { overscaled_z, wrap, .. }) = keys.get(at) {
+            if overscaled_z != id.overscaled_z {
+                break;
+            }
+            let rest = keys.get(at..).unwrap_or_default();
+            let end = at + rest.partition_point(|key| key.overscaled_z == overscaled_z && key.wrap == wrap);
+            let place = OverscaledTileID { wrap, ..*id };
+            if let Ok(offset) = keys.get(at..end).unwrap_or_default().binary_search(&place) {
+                found.push(at + offset);
+            }
+            at = end;
+        }
+        found
     }
 
     pub(crate) fn slots(&self) -> impl Iterator<Item = &Slot> + '_ {
@@ -504,6 +588,11 @@ impl SourceTiles {
             // So are the tiles that went on loading in the cache.
             self.cache_release_loading(ctx, |_| false);
             self.rendered.clear();
+            if self.info.kind != TileKind::Geometry {
+                std::mem::swap(&mut self.masked, &mut self.masked_before);
+                self.masked.clear();
+                self.unmask_stopped();
+            }
             return;
         }
 
@@ -743,12 +832,33 @@ impl SourceTiles {
             let renderables: Vec<(UnwrappedTileID, bool)> =
                 self.rendered.iter().map(|(id, entry)| (*id, entry.needs_rendering)).collect();
             let masks = update_tile_masks(&renderables);
-            let SourceTiles { tiles, rendered, .. } = self;
+            let SourceTiles { tiles, rendered, masked, masked_before, .. } = self;
+            std::mem::swap(masked, masked_before);
+            masked.clear();
             for (entry, mask) in rendered.values().zip(masks) {
-                let contents = tiles.get_mut(&entry.key).and_then(|slot| slot.tile.contents_mut());
-                if let (Some(mask), Some(contents)) = (mask, contents) {
+                let Some(contents) = tiles.get_mut(&entry.key).and_then(|slot| slot.tile.contents_mut()) else {
+                    continue;
+                };
+                if let Some(mask) = mask {
                     contents.set_mask(mask);
                 }
+                if contents.is_masked() {
+                    masked.push(entry.key);
+                }
+            }
+            masked.sort_unstable();
+            self.unmask_stopped();
+        }
+    }
+
+    /// Unmasks the tiles the frame before drew masked and this frame
+    /// doesn't: a tile that stopped drawing drops its quads until it draws
+    /// again, which masks it anew. `masked` is sorted.
+    fn unmask_stopped(&mut self) {
+        let SourceTiles { tiles, masked, masked_before, .. } = self;
+        for key in masked_before.iter().filter(|key| masked.binary_search(key).is_err()) {
+            if let Some(contents) = tiles.get_mut(key).and_then(|slot| slot.tile.contents_mut()) {
+                contents.unmask();
             }
         }
     }
@@ -770,7 +880,7 @@ impl SourceTiles {
             let contents = self.cover().filter_map(Tile::contents);
             for contents in contents {
                 for layer in &expression_layers {
-                    if let Some(bucket) = contents.get_bucket(*layer) {
+                    if let Some(bucket) = contents.bucket(*layer) {
                         max = max.max(bucket.max_content_elevation());
                     }
                 }
@@ -844,20 +954,16 @@ impl SourceTiles {
         true
     }
 
-    /// A copy of a renderable tile that is `id` in another world copy. A
-    /// geometry tile's buckets upload for `needs` first, when the renderer
-    /// has uploaded any, so that the copy draws from their gfx vectors
-    /// rather than copying their data.
-    fn world_copy(&mut self, id: &OverscaledTileID, needs: Option<UploadNeeds>) -> Option<WorldCopy> {
-        let tile = self.tiles.values_mut().map(|slot| &mut slot.tile).find(|tile| {
-            tile.id.overscaled_z == id.overscaled_z
-                && tile.id.canonical == id.canonical
-                && tile.id.wrap != id.wrap
-                && tile.is_renderable()
-        })?;
-        if let (Some(needs), Some(Contents::Geometry(contents))) = (needs, tile.contents_mut()) {
-            contents.upload(needs);
-        }
+    /// A copy of a renderable tile that is `id` in another world copy. The
+    /// copy's buckets, copies of the tile's, draw the geometry that the
+    /// first of either to upload moves into the context's stores
+    /// (`upload_at`).
+    pub(crate) fn world_copy(&self, id: &OverscaledTileID) -> Option<WorldCopy> {
+        let tile = self
+            .same_place(id)
+            .into_iter()
+            .filter_map(|at| Some(&self.tiles.get_index(at)?.1.tile))
+            .find(|tile| tile.id.wrap != id.wrap && tile.is_renderable())?;
         WorldCopy::of(tile)
     }
 
@@ -865,14 +971,11 @@ impl SourceTiles {
     /// `id`'s: on the globe every wrap of a tile is the same piece of it.
     fn cache_pop_any_wrap(&mut self, id: &OverscaledTileID, ctx: &mut StoreContext) -> bool {
         let Some(found) = self
-            .tiles
-            .values()
-            .find(|slot| {
-                slot.place.is_cached()
-                    && slot.tile.id.overscaled_z == id.overscaled_z
-                    && slot.tile.id.canonical == id.canonical
-            })
-            .map(|slot| slot.tile.id)
+            .same_place(id)
+            .into_iter()
+            .filter_map(|at| self.tiles.get_index(at))
+            .find(|(_, slot)| slot.place.is_cached())
+            .map(|(&found, _)| found)
         else {
             return false;
         };
@@ -1005,8 +1108,7 @@ impl SourceTiles {
         let screen_geometry: &[mln_util::geo::ScreenCoordinate] = if traced.is_empty() { geometry } else { &traced };
         let mut query_geometry: Vec<geometry::Point<f64>> = screen_geometry.iter().map(to_world).collect();
 
-        // mapbox::geometry::envelope, of points the geometry has at least one
-        // of.
+        // The bounding box of points, of which the geometry has at least one.
         let envelope = |points: &mut dyn Iterator<Item = (f64, f64)>| {
             let (mut min, mut max) = ((f64::INFINITY, f64::INFINITY), (f64::NEG_INFINITY, f64::NEG_INFINITY));
             for (x, y) in points {
@@ -1017,10 +1119,10 @@ impl SourceTiles {
         };
 
         if globe {
-            // GL JS's `transformBbox`: the globe has no world copies, so a box
-            // across the antimeridian lands on the rest of the world, which
-            // shows when its slightly shrunken corners fall outside it. It
-            // moves to the copy west of the main world.
+            // The globe has no world copies, so a box across the
+            // antimeridian lands on the rest of the world, which shows when
+            // its slightly shrunken corners fall outside it. It moves to the
+            // copy west of the main world.
             let (mut screen_min, mut screen_max) = envelope(&mut geometry.iter().map(|p| (p.x, p.y)));
             let shrink = f64::min(screen_max.0 - screen_min.0, screen_max.1 - screen_min.1) * 0.001;
             screen_min.0 += shrink;
@@ -1029,10 +1131,11 @@ impl SourceTiles {
             screen_max.1 -= shrink;
             let (bounds_min, bounds_max) = envelope(&mut query_geometry.iter().map(|p| (p.x, p.y)));
             // A corner past the planet stands for the nearest point on the
-            // horizon, which tells nothing about the antimeridian, so GL JS's
-            // check lost boxes that reach into space, such as the whole view
-            // of a small globe. Such corners are left out, and the box's
-            // center, when it is on the planet, decides by longitude for them.
+            // horizon, which tells nothing about the antimeridian: a check of
+            // the corners alone would lose boxes that reach into space, such
+            // as the whole view of a small globe. Such corners are left out,
+            // and the box's center, when it is on the planet, decides by
+            // longitude for them.
             let mut covered = true;
             let mut reaches_into_space = false;
             for corner in [
@@ -1066,13 +1169,13 @@ impl SourceTiles {
             }
         }
 
-        // mapbox::geometry::envelope(queryGeometry)
+        // The bounding box of the query.
         let (box_min, box_max) = envelope(&mut query_geometry.iter().map(|p| (p.x, p.y)));
         let box_min = geometry::Point::new(box_min.0, box_min.1);
         let box_max = geometry::Point::new(box_max.0, box_max.1);
 
-        // Sorted by (z, y, wrap, x). GL JS sorts the globe's query tiles by
-        // their copy on the main world, so there the wrap only breaks ties.
+        // Sorted by (z, y, wrap, x); on the globe by their copy on the main
+        // world, (z, y, x, wrap), so that there the wrap only breaks ties.
         let mut sorted_tiles: Vec<(&UnwrappedTileID, &OverscaledTileID)> =
             self.rendered.iter().map(|(id, entry)| (id, &entry.key)).collect();
         sorted_tiles.sort_by(|(a, _), (b, _)| {
@@ -1094,9 +1197,9 @@ impl SourceTiles {
 
         let max_pitch_scale_factor = transform_state.max_pitch_scale_factor();
 
-        // The globe returns a feature once per tile, as GL JS does, though the
-        // tile is tested at three copies and can be rendered at two wraps:
-        // these are where this tile's features start in each layer's results.
+        // The globe returns a feature once per tile, though the tile is
+        // tested at three copies and can be rendered at two wraps: these are
+        // where this tile's features start in each layer's results.
         let mut canonical_tile: Option<mln_tile_id::CanonicalTileID> = None;
         let mut canonical_tile_start: mln_util::hash::HashMap<String, usize> = mln_util::hash::HashMap::default();
 
@@ -1108,7 +1211,7 @@ impl SourceTiles {
                 continue;
             };
 
-            // equivalent to std::pow(2, transformState.getZoom() - id.canonical.z);
+            // 2 to the power of the zoom's distance above the tile's.
             let scale = (transform_state.get_scale() / f64::from(1u32 << id.canonical.z)) as f32;
             let query_padding =
                 f64::from(max_pitch_scale_factor * contents.query_padding(layers) * constants::EXTENT as f32)
@@ -1126,9 +1229,8 @@ impl SourceTiles {
             // The query geometry lies on the main world or, across the
             // antimeridian, west of it, and its padding reaches past either
             // side of it: a globe tile is tested at its copies west of, on and
-            // east of the main world. GL JS leaves out the east copy and misses
-            // features just east of the antimeridian under a query just west
-            // of it.
+            // east of the main world, so that a query just west of the
+            // antimeridian finds the features just east of it.
             let globe_copies = [
                 UnwrappedTileID::with_wrap(-1, id.canonical),
                 UnwrappedTileID::with_wrap(0, id.canonical),
@@ -1247,7 +1349,7 @@ impl SourceTiles {
             };
             let rendered_id = loaded.to_unwrapped();
             self.rekey(&loaded, *id, ctx);
-            // `renderedTiles.insert(node)` keeps an entry already at the key.
+            // An entry already at the key stays.
             if let Some(entry) = self.rendered.remove(&rendered_id) {
                 self.rendered.entry(id.to_unwrapped()).or_insert(Rendered { key: *id, ..entry });
             }
@@ -1383,6 +1485,30 @@ impl SourceTiles {
     pub(crate) fn has_fading_tiles(&self) -> bool {
         self.fading_tiles
     }
+}
+
+/// Readies the buckets of the geometry tile at `at` of `slots` for the
+/// frame's draws, sharing what the buckets of the tiles at `copies`, its
+/// other world copies, moved into `context`'s stores.
+fn upload_sharing(slots: &mut [Slot], at: usize, copies: &[usize], context: &mut Context, needs: UploadNeeds) {
+    let Some((before, rest)) = slots.split_at_mut_checked(at) else {
+        return;
+    };
+    let Some((slot, after)) = rest.split_first_mut() else {
+        return;
+    };
+    let Some(geometry) = slot.tile.contents_mut().and_then(Contents::geometry_mut) else {
+        return;
+    };
+    let shared: SmallVec<[&BucketGeometry; 4]> = copies
+        .iter()
+        .filter_map(|&copy| match copy.checked_sub(at + 1) {
+            Some(after_at) => after.get(after_at),
+            None => before.get(copy),
+        })
+        .filter_map(|slot| Some(&slot.tile.contents()?.geometry()?.bucket_geometry))
+        .collect();
+    geometry.upload(&shared, context, needs);
 }
 
 #[cfg(test)]

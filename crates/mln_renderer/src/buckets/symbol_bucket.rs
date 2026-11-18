@@ -1,8 +1,6 @@
 // The bucket is built on a worker and then owned by its tile's contents on
 // the render thread, where placement, cross-tile indexing and sorting
-// change its `state` in the frame's prepare.
-//
-// Not ported: the MLN_SYMBOL_GUARDS `check` (memory-corruption guards).
+// change its `state` in the frame's update.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -28,7 +26,7 @@ use mln_util::serialization::payload::pod;
 use mln_vec_map::VecMap;
 
 use crate::bucket::{Bucket, BucketBase, FeatureStates, UploadNeeds};
-use crate::bucket_geometry::{BucketGeometry, GeometryVec};
+use crate::bucket_geometry::{GeometryUpload, GeometryVec};
 use crate::layer_type::EvaluatedLayer;
 use crate::layout::symbol_instance::{SymbolInstance, SymbolInstancePools};
 use crate::paint_property_binder::PaintPropertyBinder;
@@ -62,12 +60,11 @@ pub(crate) struct SymbolLayoutVertex {
     pub(crate) a1: [i16; 4],
     pub(crate) a2: [u16; 4],
     pub(crate) a3: [i16; 4],
-    /// Port-only: the top-left of the quad's atlas rectangle, the same on all
-    /// four of its vertices. The shaders interpolate the texture coordinate
-    /// relative to it and add it back per fragment, as interpolating the
-    /// absolute coordinate rounds differently at different atlas positions,
-    /// and which tile reserves an image first, and so its position, varies
-    /// from run to run.
+    /// The top-left of the quad's atlas rectangle, the same on all four of its
+    /// vertices. The shaders interpolate the texture coordinate relative to it
+    /// and add it back per fragment, as interpolating the absolute coordinate
+    /// rounds differently at different atlas positions, and which tile reserves
+    /// an image first, and so its position, varies from run to run.
     pub(crate) a4: [u16; 2],
     /// The symbol's `symbol-height-offset`, in meters.
     pub(crate) a5: f32,
@@ -193,7 +190,7 @@ impl SymbolSizeBinder {
         }
     }
 
-    pub(crate) fn get_vertex_size_data(&self, feature: &dyn GeometryTileFeature) -> Range<f32> {
+    pub(crate) fn vertex_size_data(&self, feature: &dyn GeometryTileFeature) -> Range<f32> {
         match self {
             SymbolSizeBinder::Constant { .. } => Range { min: 0.0, max: 0.0 },
             SymbolSizeBinder::SourceFunction { expression, default_value } => {
@@ -222,10 +219,10 @@ impl SymbolSizeBinder {
                 let is_zoom_constant = !(covering_ranges.is_some() || expression.is_some());
                 if let (Some((zoom_levels, size_levels)), Some(expression)) = (covering_ranges, expression) {
                     // Even though we could get the exact value of the camera
-                    // function at z = currentZoom, we intentionally do not:
+                    // function at the current zoom, we intentionally do not:
                     // instead, we interpolate between the camera function
-                    // values at a pair of zoom stops covering [tileZoom,
-                    // tileZoom + 1] in order to be consistent with this
+                    // values at a pair of zoom stops covering [tile zoom,
+                    // tile zoom + 1] in order to be consistent with this
                     // restriction on composite functions.
                     let t = mln_math::clamp_f32(expression.interpolation_factor(*zoom_levels, current_zoom), 0.0, 1.0);
                     size = size_levels.min + t * (size_levels.max - size_levels.min);
@@ -280,11 +277,10 @@ pub(crate) struct PlacedSymbol {
     pub(crate) glyph_offsets: PoolRange,
     pub(crate) hidden: bool,
     pub(crate) start_index: usize,
-    /// The crossTileID is only filled/used on the foreground for variable
-    /// text anchors
+    /// The symbol's id across tiles, which only variable text anchors read.
     pub(crate) cross_tile_id: Option<NonZeroU32>,
-    /// The placedOrientation is only used when symbol layer's property is
-    /// set to support placement for orientation variants.
+    /// The orientation the symbol was placed in, where the layer places
+    /// orientation variants.
     pub(crate) placed_orientation: Option<TextWritingModeType>,
     pub(crate) angle: f32,
     /// Reference to placed icon, only applicable for text symbols.
@@ -384,8 +380,7 @@ impl Buffer {
 
     /// The positions placement lays out, the leader's or, with a layer ID,
     /// that layer's (made on first use), with the placed symbols they are
-    /// for and their pools (C++ `positions(buffer)` in
-    /// `updateBucketDynamicAttributeData`).
+    /// for and their pools.
     pub(crate) fn positions_and_symbols(
         &mut self,
         layer_id: Option<&str>,
@@ -644,20 +639,20 @@ impl SymbolBucket {
         // If the symbols are allowed to overlap sort them by their vertical
         // screen position. The index array buffer is rewritten to reference
         // the (unchanged) vertices in the sorted order.
-        for index in get_sorted_symbols(&state.symbol_instances, angle) {
+        for index in symbols_by_viewport_y(&state.symbol_instances, angle) {
             let symbol_instance = &state.symbol_instances[index];
-            symbols_sort_order.push(symbol_instance.get_data_feature_index());
+            symbols_sort_order.push(symbol_instance.data_feature_index());
 
             if let Some(i) = symbol_instance.placed_right_text_index {
                 add_placed_symbol(&mut state.text.triangles, &state.text.placed_symbols[i]);
             }
             if let Some(i) = symbol_instance.placed_center_text_index
-                && !symbol_instance.get_single_line()
+                && !symbol_instance.single_line()
             {
                 add_placed_symbol(&mut state.text.triangles, &state.text.placed_symbols[i]);
             }
             if let Some(i) = symbol_instance.placed_left_text_index
-                && !symbol_instance.get_single_line()
+                && !symbol_instance.single_line()
             {
                 add_placed_symbol(&mut state.text.triangles, &state.text.placed_symbols[i]);
             }
@@ -681,7 +676,7 @@ impl SymbolBucket {
     /// The indices into `symbol_instances` of a sort key range, or all
     /// `count` of them if `range` is `None` or invalid.
     #[expect(clippy::unused_self, reason = "the bucket's view of its sort key ranges")]
-    pub(crate) fn get_symbols(&self, range: Option<&SortKeyRange>, count: usize) -> std::ops::Range<usize> {
+    pub(crate) fn symbols_in(&self, range: Option<&SortKeyRange>, count: usize) -> std::ops::Range<usize> {
         match range {
             Some(range) if range.start < range.end && range.end <= count => range.start..range.end,
             _ => 0..count,
@@ -782,14 +777,14 @@ fn add_placed_symbol(triangles: &mut Vec<u16>, placed_symbol: &PlacedSymbol) {
 /// `angle`, then by descending data feature index. Equal keys keep their
 /// index order.
 #[must_use]
-pub(crate) fn get_sorted_symbols(symbol_instances: &[SymbolInstance], angle: f32) -> Vec<usize> {
+pub(crate) fn symbols_by_viewport_y(symbol_instances: &[SymbolInstance], angle: f32) -> Vec<usize> {
     let mut result: Vec<usize> = (0..symbol_instances.len()).collect();
     let sin = angle.sin();
     let cos = angle.cos();
     result.sort_by_key(|&i| {
         let s = &symbol_instances[i];
-        let p = s.get_anchor().point;
-        ((sin * p.x + cos * p.y).round() as i64, Reverse(s.get_data_feature_index()))
+        let p = s.anchor().point;
+        ((sin * p.x + cos * p.y).round() as i64, Reverse(s.data_feature_index()))
     });
     result
 }
@@ -803,7 +798,7 @@ impl Bucket for SymbolBucket {
         self.max_height_offset
     }
 
-    fn upload(&mut self, geometry: &mut BucketGeometry, _needs: UploadNeeds) {
+    fn upload(&mut self, geometry: &mut GeometryUpload<'_>, _needs: UploadNeeds) {
         let state = &mut self.state;
         for buffer in [&mut state.text, &mut state.icon, &mut state.sdf_icon] {
             geometry.move_vertices(&mut buffer.attribute_data);

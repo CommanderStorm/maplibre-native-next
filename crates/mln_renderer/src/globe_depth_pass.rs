@@ -2,14 +2,12 @@
 // each covering tile's mesh into depth only, before the layers' 3D draws.
 // The draws' projections are entries of one storage buffer of the pass's.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use mln_gfx::color_mode::ColorMode;
 use mln_gfx::cull_face_mode::CullFaceMode;
 use mln_gfx::gpu::Gpu;
-use mln_gfx::index_vector::IndexVectorBase;
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shaders::layer_ubo::ProjectionUBO;
 use mln_gfx::shaders::segment::SegmentBase;
@@ -21,6 +19,7 @@ use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
 use crate::draw::{DrawGeometry, DrawObjects, Textures, raw_vertices};
 use crate::gfx::context::Context;
+use crate::gfx::indexes::DrawIndexes;
 use crate::globe_tile_mesh::{RawGlobeTileMesh, raw_globe_tile_mesh};
 use crate::layer_drawing::{DrawDepth, DrawList, FrameDraw, KeptDraw, LayerDraws, TileMap, tile_objects};
 use crate::paint_parameters::PaintParameters;
@@ -52,7 +51,7 @@ impl GlobeDepthPass {
     pub(crate) fn update(
         &mut self,
         shaders: &ShaderRegistry,
-        context: &Context,
+        context: &mut Context,
         state: &TransformState,
         update_parameters: &UpdateParameters,
         needed: bool,
@@ -114,7 +113,7 @@ impl GlobeDepthPass {
                     vertices,
                     vertex_count: mesh.vertex_count,
                     mode: DrawMode::Triangles(),
-                    indexes: Rc::new(RefCell::new(IndexVectorBase::new(mesh.indices.clone()))),
+                    indexes: DrawIndexes::new(mesh.indices.clone()),
                     segments: mesh.segments.iter().map(SegmentBase::copy).collect(),
                     instances: None,
                 };
@@ -143,7 +142,7 @@ impl GlobeDepthPass {
     }
 
     /// Uploads the GPU objects of the frame's draws.
-    pub(crate) fn upload(&mut self, context: &Context) {
+    pub(crate) fn upload(&mut self, context: &mut Context) {
         self.frame.upload(&mut self.tiles, tile_objects, context);
     }
 

@@ -33,7 +33,7 @@ use crate::layer_type::ErasedEvaluatedLayer;
 use crate::layers::render_symbol_layer::RenderSymbolLayer;
 use crate::layout::tile_layout::{Dependencies, LayoutParams, Resolved};
 use crate::paint_parameters::TransformParameters;
-use crate::render_layer::RenderLayer;
+use crate::render_layer::{LayerParts, RenderLayer};
 use crate::render_tile::RenderTile;
 use crate::text::cross_tile_symbol_index::CrossTileSymbolIndex;
 use crate::text::glyph_store::HBShapeResults;
@@ -245,7 +245,7 @@ impl SymbolView {
                 .ok_or_else(|| Error::invalid_argument(format!("no render layer for {}", layer.get_id())))?;
             let mut render_layer = RenderSymbolLayer::new(style);
             render_layer.evaluate(&parameters);
-            // As the layer's prepare adds its tiles' buckets.
+            // As the layer's update adds its tiles' buckets.
             let translates = render_layer.symbol_translates();
             for (tile_index, laid_out) in tiles.iter().enumerate() {
                 let Some(render_data) = laid_out.result.layer_render_data.get(layer.get_id()) else { continue };
@@ -554,7 +554,7 @@ mod tests {
         let mut on = mln_style::expression::expression::FeatureState::new();
         on.insert("on".to_owned(), Value::Bool(true));
         states.entry("l".to_owned()).or_default().insert("1".to_owned(), on);
-        let roads = laid_out.result.layer_render_data.get("roads").unwrap().bucket.get_id();
+        let roads = laid_out.result.layer_render_data.get("roads").unwrap().bucket.base().bucket_id;
         assert_eq!(laid_out.result.set_feature_state(&states, patterns), [roads]);
     }
 

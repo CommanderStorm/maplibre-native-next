@@ -1,12 +1,10 @@
-// The vertex and index vectors are `GeometryVec`s, which a worker fills
-// and the bucket's upload moves into the gfx vectors its draws reference.
+// The vertices and indices are `GeometryVec`s, which a worker fills and the
+// bucket's upload moves into the context's stores, which its draws read.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use geometry::Point;
 use mln_gfx::shaders::segment::{MAX_SEGMENT_VERTICES, SegmentBase};
-use mln_gfx::vertex_vector::{VertexVector, VertexVectorBasePtr};
 use mln_map_types::TransformState;
 use mln_style::PropertyEvaluationParameters;
 use mln_style::evaluated::Evaluated;
@@ -26,7 +24,7 @@ use mln_util::vectors::Vec3f;
 use mln_vec_map::VecMap;
 
 use crate::bucket::{Bucket, BucketBase, UploadNeeds};
-use crate::bucket_geometry::{BucketGeometry, GeometryVec};
+use crate::bucket_geometry::{GeometryUpload, GeometryVec};
 use crate::gfx::fill_large_mesh_arrays::fill_large_mesh_arrays;
 use crate::layer_type::EvaluatedLayer;
 use crate::layout::pattern_layout::{PatternLayerMap, PatternLayoutSpec};
@@ -72,19 +70,19 @@ pub(crate) use crate::render_light::EvaluatedLight;
 /// The quads of the walls of `vertices`: each vertex with each corner of the
 /// static quad, in its order. The quad of the wall from a vertex is its four
 /// corners, and the next four are the next vertex's.
-pub(crate) fn wall_quad_vertices(vertices: &[FillExtrusionLayoutVertex]) -> VertexVectorBasePtr {
+pub(crate) fn wall_quad_vertices(vertices: &[FillExtrusionLayoutVertex]) -> Vec<FillExtrusionWallVertex> {
     let corners = RenderStaticData::fill_extrusion_vertices();
     let quads: Vec<FillExtrusionWallVertex> = vertices
         .iter()
         .flat_map(|&vertex| corners.iter().map(move |&corner| FillExtrusionWallVertex { corner, vertex }))
         .collect();
-    Rc::new(VertexVector::from_vec_released(quads))
+    quads
 }
 
 /// The paint values of the quads of `wall_quad_vertices`: those of each of
 /// the first `walls` vertices in `paint`, `stride` bytes each, for each
 /// corner of its wall.
-pub(crate) fn wall_quad_paint(paint: &[u8], stride: usize, walls: usize) -> VertexVectorBasePtr {
+pub(crate) fn wall_quad_paint(paint: &[u8], stride: usize, walls: usize) -> Vec<u8> {
     let mut values = Vec::with_capacity(4 * stride * walls);
     if stride > 0 {
         for vertex in paint.chunks_exact(stride).take(walls) {
@@ -93,7 +91,7 @@ pub(crate) fn wall_quad_paint(paint: &[u8], stride: usize, walls: usize) -> Vert
             }
         }
     }
-    Rc::new(VertexVector::from_vec_released(values))
+    values
 }
 
 #[derive(Clone, mln_wire::Wire)]
@@ -111,9 +109,8 @@ pub(crate) struct FillExtrusionBucket {
 
 static EMPTY_FORMATTED_SECTION: Value = Value::Null;
 
-/// The distance from `a` to `b`, cast to `u16` as C++'s
-/// `static_cast<uint16_t>` does on x86-64: through a wider integer, keeping
-/// the low bits.
+/// The distance from `a` to `b`, cast to `u16` through a wider integer,
+/// keeping the low bits.
 fn dist_u16(a: Point<f64>, b: Point<f64>) -> u16 {
     let dx = b.x - a.x;
     let dy = b.y - a.y;
@@ -159,11 +156,10 @@ impl FillExtrusionBucket {
         FillExtrusionLayoutVertex {
             a1: [int_part.x as i16, int_part.y as i16],
             a2: [
-                // We pack a bool (`isDiscarded`) indicating whether this
-                // instance is discarded
+                // Packs whether this instance is discarded in the low bit.
                 ((i32::from(frac_x) * 256 + i32::from(frac_y)) * 2 + i32::from(is_discarded)) as u16,
-                // The edgeDistance attribute is used for wrapping
-                // fill_extrusion patterns
+                // The edge distance, which fill-extrusion patterns wrap
+                // along.
                 edge_distance,
             ],
         }
@@ -180,7 +176,6 @@ impl FillExtrusionBucket {
                 let p1 = Point::new(p.x.into(), p.y.into());
                 let p2 = ring.get(i + 1).map(|p| Point::new(p.x.into(), p.y.into()));
 
-                // processRingPoints(p1, p2, edgeDistance)
                 vertices.push(Self::layout_vertex(p1, edge_distance as u16, p2.is_none()));
 
                 if let Some(p2) = p2 {
@@ -345,12 +340,12 @@ impl Bucket for FillExtrusionBucket {
         Ok(())
     }
 
-    fn upload(&mut self, geometry: &mut BucketGeometry, needs: UploadNeeds) {
+    fn upload(&mut self, geometry: &mut GeometryUpload<'_>, needs: UploadNeeds) {
         // Walls that aren't instances of the static quad are quads of their
         // own, made of the vertices and paint values before those move.
         let walls = self.vertices.len().saturating_sub(1);
         if needs.wall_quads {
-            geometry.derive_vertices(&mut self.vertices, wall_quad_vertices);
+            geometry.derive_vertices(&self.vertices, wall_quad_vertices);
         }
         geometry.move_vertices(&mut self.vertices);
         geometry.move_indexes(&mut self.triangles);
@@ -359,8 +354,7 @@ impl Bucket for FillExtrusionBucket {
             let buffer = &mut binders.interleaved_vertex_buffer;
             if needs.wall_quads && !depends_on_feature_state {
                 let stride = buffer.stride;
-                geometry
-                    .derive_vertices(&mut buffer.shared_vertex_vector, |paint| wall_quad_paint(paint, stride, walls));
+                geometry.derive_vertices(&buffer.shared_vertex_vector, |paint| wall_quad_paint(paint, stride, walls));
             }
             geometry.move_paint(buffer, depends_on_feature_state);
         }
@@ -411,7 +405,7 @@ impl PatternLayoutSpec for FillExtrusionLayoutSpec {
     }
 
     fn sorted(_leader: &EvaluatedLayer<FillExtrusion>) -> bool {
-        // conformance: FillExtrusionLayerFactory::createLayout (no sort key)
+        // Fill extrusions have no sort key.
         false
     }
 
@@ -447,7 +441,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_vertex_packs_like_cpp() {
+    fn layout_vertex_packs_the_position_and_wall_data() {
         let v = FillExtrusionBucket::layout_vertex(Point::new(10.0, 20.0), 7, true);
         assert_eq!(v.a1, [10, 20]);
         assert_eq!(v.a2, [1, 7]);

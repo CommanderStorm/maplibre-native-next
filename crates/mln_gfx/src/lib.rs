@@ -8,11 +8,7 @@
 //! bind; the renderer keeps them in `mln_renderer`. Each program's
 //! attributes are in `shaders::program_info` and its variants come from
 //! `shader_group`.
-//!
-//! The renderer runs on one thread: shared pointers are `Rc`, mutation
-//! through them uses `RefCell`/`Cell`.
 
-pub mod attribute;
 pub mod backend;
 pub mod buffer;
 pub mod color_mode;
@@ -23,7 +19,6 @@ pub mod export;
 pub mod frame;
 pub mod gfx_types;
 pub mod gpu;
-pub mod index_vector;
 pub mod offscreen_target;
 pub mod polyline_generator;
 pub mod projection_variant;
@@ -38,8 +33,6 @@ pub mod stencil_mode;
 pub mod texture2d;
 pub mod types;
 pub mod util_hash;
-pub mod vertex_attribute;
-pub mod vertex_vector;
 pub mod window;
 
 pub use buffer::{Buffer, BufferPtr};
@@ -59,5 +52,4 @@ pub use shader_registry::ShaderRegistry;
 pub use shaders::shader_program::{ShaderProgram, ShaderProgramPtr};
 pub use stencil_mode::StencilMode;
 pub use types::DepthMaskType;
-pub use vertex_attribute::{VertexAttribute, VertexAttributeArray};
 pub use window::Window;

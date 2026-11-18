@@ -19,19 +19,19 @@ use mln_util::logging::{Event, Log};
 use mln_util::range::Range;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
-use crate::bucket::{Bucket, UploadNeeds};
-use crate::buckets::raster_bucket::RasterBucket;
+use crate::bucket::UploadNeeds;
+use crate::buckets::raster_bucket::{RasterBucket, RasterLayoutVertex};
+use crate::gfx::context::Context;
 use crate::layer_type::ErasedEvaluatedLayer;
-use crate::render_source::{RenderSource, RenderSourceBase, SourcePrepareParameters};
+use crate::render_source::{RenderSource, RenderSourceBase, RenderTileParameters};
 use crate::tile::store::TileStore;
 use crate::tile_parameters::TileParameters;
 use crate::util::tile_cover::{TileCoverParameters, tile_cover, tile_cover_bounds};
 
 // The mapping from the unit square onto the image's corners: the perspective
 // terms of the projective warp and how far it is blended towards the
-// bilinear one. Port of GL JS `calculateImageWarp` for the "auto" warp,
-// after Heckbert, "Fundamentals of Texture Mapping and Image Warping"
-// (1989), 2.2.3 and A.2.
+// bilinear one, as the "auto" warp blends them, after Heckbert,
+// "Fundamentals of Texture Mapping and Image Warping" (1989), 2.2.3 and A.2.
 #[derive(Clone, Copy, Debug)]
 struct ImageWarp {
     perspective_x: f64,
@@ -73,7 +73,7 @@ fn image_warp(corners: &GeometryCoordinates) -> ImageWarp {
     // the top left; its spread is the foreshortening, and it stays finite
     // and positive only while the quad is a perspective view of the image.
     let denominators = [1.0, 1.0 + perspective_x, 1.0 + perspective_x + perspective_y, 1.0 + perspective_y];
-    // std::max_element / std::min_element: the first largest and smallest.
+    // The first largest and smallest, which comparisons with a NaN keep.
     let mut largest = denominators[0];
     let mut smallest = denominators[0];
     for &denominator in &denominators[1..] {
@@ -85,7 +85,6 @@ fn image_warp(corners: &GeometryCoordinates) -> ImageWarp {
         }
     }
     let foreshortening = largest / smallest;
-    // std::max(0.0, x)
     let blend_term = (1.0 - PROJECTIVE_FORESHORTENING / foreshortening)
         / (1.0 - PROJECTIVE_FORESHORTENING / BILINEAR_FORESHORTENING);
     let blend = if 0.0 < blend_term { blend_term } else { 0.0 };
@@ -95,8 +94,9 @@ fn image_warp(corners: &GeometryCoordinates) -> ImageWarp {
     ImageWarp { perspective_x, perspective_y, blend }
 }
 
-// Where the unit-square point (u, v) lands on the corners; the same blend
-// GL JS's raster vertex shader evaluates per vertex.
+// Where the unit-square point (u, v) lands on the corners: where a
+// projective warp puts it, blended with where a bilinear one does by
+// `warp.blend`.
 fn warp_position(corners: &GeometryCoordinates, warp: &ImageWarp, u: f64, v: f64) -> Point<f64> {
     let point = |p: GeometryCoordinate| Point::new(f64::from(p.x), f64::from(p.y));
     let top_left = point(corners[0]);
@@ -105,7 +105,8 @@ fn warp_position(corners: &GeometryCoordinates, warp: &ImageWarp, u: f64, v: f64
     let bottom_left = point(corners[3]);
     let bilinear = top_left.interpolate(&top_right, u).interpolate(&bottom_left.interpolate(&bottom_right, u), v);
     let denominator = warp.perspective_x * u + warp.perspective_y * v + 1.0;
-    // The point arithmetic of mapbox::geometry, a coordinate at a time.
+    // The homography's columns: the top edge and the left edge, each scaled
+    // by the denominator's change along it.
     let across_top = Point::new(
         top_right.x - top_left.x + top_right.x * warp.perspective_x,
         top_right.y - top_left.y + top_right.y * warp.perspective_x,
@@ -136,8 +137,7 @@ fn build_image_mesh(bucket: &mut RasterBucket, corners: &GeometryCoordinates, ce
             let u = f64::from(i) / f64::from(cells);
             let v = f64::from(j) / f64::from(cells);
             let position = warp_position(corners, &warp, u, v);
-            // std::lround
-            vertices.push(RasterBucket::layout_vertex(
+            vertices.push(RasterLayoutVertex::new(
                 Point::new(to_vertex_coordinate(position.x), to_vertex_coordinate(position.y)),
                 Point::new(
                     (u * f64::from(constants::EXTENT)).round() as u16,
@@ -189,9 +189,9 @@ impl RenderImageSource {
         }
     }
 
-    /// Whether the source's image has arrived. Unlike C++, a source without
-    /// an image (one made without a url) has nothing to load, so a still
-    /// render of it finishes.
+    /// Whether the source's image has arrived. A source without an image
+    /// (one made without a url) has nothing to load, so a still render of it
+    /// finishes.
     fn loaded(&self) -> bool {
         self.bucket.is_some() || self.data().is_none_or(|data| data.description.is_none())
     }
@@ -246,7 +246,6 @@ impl RenderSource for RenderImageSource {
         for lat_lng in &coords {
             let point = TileCoordinate::from_lat_lng(0.0, lat_lng).p;
             tile_coordinates.push(point);
-            // std::min / std::max
             sw_point.x = if point.x < sw_point.x { point.x } else { sw_point.x };
             ne_point.x = if ne_point.x < point.x { point.x } else { ne_point.x };
             sw_point.y = if point.y < sw_point.y { point.y } else { sw_point.y };
@@ -342,37 +341,37 @@ impl RenderSource for RenderImageSource {
         };
 
         // The globe bends the quad over the sphere with the tile mesh
-        // granularity of its tile, like GL JS.
+        // granularity of its tile.
         let cells = if transform_state.is_globe_rendering() {
             SubdivisionGranularitySetting::globe().tile.get_granularity_for_zoom_level(self.tile_ids[0].canonical.z)
         } else {
             1
         };
-        if bucket.geometry().vertices.is_empty() || geom_coords != self.mesh_corners || cells != self.mesh_cells {
-            bucket.clear();
+        if !bucket.geometry().has_quads() || geom_coords != self.mesh_corners || cells != self.mesh_cells {
             build_image_mesh(bucket, &geom_coords, cells);
             self.mesh_corners = geom_coords;
             self.mesh_cells = cells;
         }
     }
 
-    fn prepare(&mut self, _store: &mut TileStore, _parameters: &SourcePrepareParameters<'_>) {}
+    fn update_render_tiles(&mut self, _store: &mut TileStore, _parameters: &RenderTileParameters<'_>) {}
 
-    fn upload(&mut self, _store: &mut TileStore, _needs: UploadNeeds) {
-        if let Some(bucket) = &mut self.bucket
-            && bucket.needs_upload()
-        {
-            bucket.upload_image();
+    fn upload(&mut self, _store: &mut TileStore, context: &mut Context, _needs: UploadNeeds) {
+        if let Some(bucket) = &mut self.bucket {
+            bucket.upload(context);
         }
     }
 
-    fn get_image_render_data(&self) -> Option<ImageSourceRenderData<'_>> {
+    fn image_render_data(&self) -> Option<ImageSourceRenderData<'_>> {
         let tile_ids: &[UnwrappedTileID] = if self.loaded() { &self.tile_ids } else { &[] };
         Some(ImageSourceRenderData { bucket: self.bucket.as_ref(), tile_ids })
     }
 
     fn dump_debug_logs(&self) {
-        Log::info(Event::General, format!("RenderImageSource::id: {}", self.base.style_source.id()));
-        Log::info(Event::General, format!("RenderImageSource::loaded: {}", if self.loaded() { "yes" } else { "no" }));
+        Log::info(Event::General, format!("Image source {}: loaded {}", self.base.style_source.id(), self.loaded()));
+    }
+
+    fn max_zoom(&self) -> Option<u8> {
+        None
     }
 }

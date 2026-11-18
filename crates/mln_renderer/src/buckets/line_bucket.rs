@@ -19,7 +19,7 @@ use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use mln_vec_map::VecMap;
 
 use crate::bucket::{Bucket, BucketBase, UploadNeeds};
-use crate::bucket_geometry::{BucketGeometry, GeometryVec};
+use crate::bucket_geometry::{GeometryUpload, GeometryVec};
 use crate::layer_type::EvaluatedLayer;
 use crate::layout::pattern_layout::PatternLayerMap;
 use crate::paint_property_binder::{CrossFadedPaintPropertyBinder, DashArrayBinder, PaintPropertyBinder};
@@ -103,17 +103,17 @@ impl LineBucket {
         let evaluated = &layer.paint;
         let binders = self.paint_property_binders.get(&layer.style.id);
         let translate = evaluated.line_translate.uniform();
-        let offset = get_or_max(
+        let offset = evaluated_or_max(
             evaluated.line_offset.constant(),
             LinePaintProperties::Defaults::line_offset(),
             binders.and_then(|b| b.line_offset.statistics.max()),
         );
-        let mut line_width = get_or_max(
+        let mut line_width = evaluated_or_max(
             evaluated.line_width.constant(),
             LinePaintProperties::Defaults::line_width(),
             binders.and_then(|b| b.line_width.statistics.max()),
         );
-        let gap_width = get_or_max(
+        let gap_width = evaluated_or_max(
             evaluated.line_gap_width.constant(),
             LinePaintProperties::Defaults::line_gap_width(),
             binders.and_then(|b| b.line_gap_width.statistics.max()),
@@ -271,9 +271,9 @@ impl LineBucket {
     }
 }
 
-/// The anonymous-namespace `get<Property>(evaluated, id, binders)` of
-/// `line_bucket.cpp`.
-fn get_or_max(evaluated_constant: Option<f32>, default_value: f32, statistics_max: Option<f32>) -> f32 {
+/// A data-driven property's largest value over the bucket's features, from
+/// its binder's `statistics_max`, or else its constant value or default.
+fn evaluated_or_max(evaluated_constant: Option<f32>, default_value: f32, statistics_max: Option<f32>) -> f32 {
     match statistics_max {
         Some(max) => max,
         None => evaluated_constant.unwrap_or(default_value),
@@ -315,7 +315,7 @@ impl Bucket for LineBucket {
         Ok(())
     }
 
-    fn upload(&mut self, geometry: &mut BucketGeometry, _needs: UploadNeeds) {
+    fn upload(&mut self, geometry: &mut GeometryUpload<'_>, _needs: UploadNeeds) {
         geometry.move_vertices(&mut self.vertices);
         geometry.move_indexes(&mut self.triangles);
         for binders in self.paint_property_binders.values_mut() {

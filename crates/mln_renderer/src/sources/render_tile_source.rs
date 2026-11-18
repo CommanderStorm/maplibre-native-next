@@ -1,16 +1,15 @@
-// layers: debug: the debug overlays of a source's tiles, the tile borders
-// and the parse status and timestamp text, drawn as polylines by the line
-// shader.
+// The render source of a source with tiles, and the debug overlays of its
+// tiles: the tile borders and the parse status and timestamp text, drawn as
+// polylines by the line shader.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::mem::offset_of;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use geometry::Point;
 use glam::Vec2;
 use mln_gfx::gpu::Gpu;
-use mln_gfx::index_vector::IndexVectorBase;
 use mln_gfx::polyline_generator::{PolylineGenerator, PolylineGeneratorOptions};
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shader_group::StringIDSetsPair;
@@ -24,8 +23,7 @@ use mln_gfx::shaders::shader_defines::{
     ID_PROJECTION_UBO,
 };
 use mln_gfx::shaders::shader_program::ShaderProgramPtr;
-use mln_gfx::vertex_vector::{VertexVector, VertexVectorBasePtr};
-use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode, VertexAttributeArray};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode};
 use mln_map_types::MapDebugOptions;
 use mln_style::Source;
 use mln_style_types::{LineCapType, LineJoinType, TranslateAnchorType};
@@ -37,31 +35,32 @@ use mln_util::error::Error;
 use mln_util::geometry::FeatureType;
 use mln_util::hash::{HashMap, HashSet};
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
+use mln_vec_map::VecMap;
 
 use crate::bucket::UploadNeeds;
 use crate::buckets::line_bucket::{LineBucket, LineLayoutVertex};
 use crate::draw::{DrawGeometry, DrawObjects, Textures};
 use crate::gfx::context::Context;
+use crate::gfx::indexes::DrawIndexes;
+use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::layer_drawing::{DrawDepth, DrawList, DrawObjectsMut, FrameDraw, KeptDraw, LayerDraws};
 use crate::layer_type::ErasedEvaluatedLayer;
 use crate::layers::cast_matrix;
 use crate::paint_parameters::PaintParameters;
 use crate::query::FeatureExtensionValue;
-use crate::render_source::{RenderSource, RenderSourceBase, SourcePrepareParameters, TileOrder};
+use crate::render_source::{RenderSource, RenderSourceBase, RenderTileParameters, TileOrder};
 use crate::render_tile::RenderTile;
-use crate::render_tree::{DebugLayers, DebugType, debug_layer};
 use crate::source_type::{OriginUpdate, TileOrigin};
 use crate::tile::job::SourceKey;
 use crate::tile::source_tiles::{CoverUpdate, SourceTiles};
 use crate::tile::store::TileStore;
 use crate::tile::tile::TileKind;
-// layers: debug
-use crate::tile_matrix::{get_projection_data, to_projection_ubo};
+use crate::tile_matrix::{projection_data, to_projection_ubo};
 use crate::tile_parameters::TileParameters;
 use crate::util::subdivision::subdivide_vertex_line;
 
 /// The line properties of a debug overlay's polylines: red tile borders, and
-/// black text over a white outline (layers: debug).
+/// black text over a white outline.
 #[must_use]
 fn debug_line_properties(type_: DebugType) -> LineEvaluatedPropsUBO {
     let (color, width) = match type_ {
@@ -85,6 +84,7 @@ fn debug_line_properties(type_: DebugType) -> LineEvaluatedPropsUBO {
 /// The GPU objects of `lines`, as polylines of `options` drawn with `shader`;
 /// `None` where they have no vertices.
 fn polyline_objects(
+    context: &mut Context,
     shader: &ShaderProgramPtr,
     lines: &[GeometryCoordinates],
     options: &PolylineGeneratorOptions,
@@ -109,23 +109,21 @@ fn polyline_objects(
 
     let vertex_count = vertices.len();
     let stride = size_of::<LineLayoutVertex>() as u32;
-    let shared: VertexVectorBasePtr = Rc::new(VertexVector::from_vec(vertices));
+    let shared = context.add_vertices(vertices);
     let mut attrs = VertexAttributeArray::new();
-    // The position and normal, then the extrusion data (offsetof(LineLayoutVertex, a2)).
+    // The position and normal, then the extrusion data.
     for (id, offset, data_type) in [
-        (ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, 0, AttributeDataType::Short2),
-        (ID_LINE_DATA_VERTEX_ATTRIBUTE, 4, AttributeDataType::UByte4),
+        (ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, offset_of!(LineLayoutVertex, a1) as u32, AttributeDataType::Short2),
+        (ID_LINE_DATA_VERTEX_ATTRIBUTE, offset_of!(LineLayoutVertex, a2) as u32, AttributeDataType::UByte4),
     ] {
-        if let Some(attr) = attrs.set(id, -1, AttributeDataType::Invalid, 0) {
-            attr.set_shared_raw_data(Some(Rc::clone(&shared)), offset, 0, stride, data_type);
-        }
+        attrs.set_shared(id, SharedAttribute::new(shared.clone(), data_type, offset, stride));
     }
 
     let geometry = DrawGeometry {
         vertices: attrs,
         vertex_count,
         mode: DrawMode::Triangles(),
-        indexes: Rc::new(RefCell::new(IndexVectorBase::new(indexes))),
+        indexes: DrawIndexes::new(indexes),
         segments,
         instances: None,
     };
@@ -138,7 +136,7 @@ fn polyline_objects(
     ))
 }
 
-// layers: debug --------------------------------------------------------------
+// Debug overlays -------------------------------------------------------------
 
 /// A draw of a debug overlay: polylines over a tile of a source.
 struct DebugDraw {
@@ -156,14 +154,30 @@ struct DebugUniforms {
     projection: ProjectionUBO,
 }
 
+/// The kinds of debug overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum DebugType {
+    TextOutline,
+    Text,
+    Border,
+}
+
+/// The debug overlays, by debug type.
+pub(crate) type DebugLayers = VecMap<DebugType, DebugLayer>;
+
+/// The debug overlay `type_` in `debug_layers`, made if it isn't there.
+fn debug_layer(debug_layers: &mut DebugLayers, type_: DebugType) -> &mut DebugLayer {
+    debug_layers.entry(type_).or_insert_with(|| DebugLayer::new(type_))
+}
+
 /// A debug overlay: polylines over the tiles of the sources, in the color
-/// and width of its type (layers: debug).
+/// and width of its type.
 pub(crate) struct DebugLayer {
     properties: LineEvaluatedPropsUBO,
     /// The overlay's draws, in the order they were made, which is the order
     /// they draw in.
     draws: Vec<DebugDraw>,
-    /// The frame's draws as `prepare` makes them.
+    /// The frame's draws as `update_draws` makes them.
     draw_list: DrawList<DebugUniforms, usize>,
     /// The frame's draws of the overlay, each of the overlay's draw at its
     /// index, with the buffers they read.
@@ -187,7 +201,7 @@ impl DebugLayer {
     }
 
     /// Uploads the GPU objects of the frame's draws.
-    pub(crate) fn upload(&mut self, context: &Context) {
+    pub(crate) fn upload(&mut self, context: &mut Context) {
         self.frame.upload(&mut self.draws[..], Self::objects, context);
     }
 
@@ -216,11 +230,11 @@ impl DebugLayer {
 
     /// Makes the frame's draws of the overlay, and writes the buffers they
     /// read.
-    pub(crate) fn prepare(&mut self, parameters: &PaintParameters<'_>) {
+    pub(crate) fn update_draws(&mut self, parameters: &mut PaintParameters<'_>) {
         let zoom = parameters.state.get_zoom();
         for (index, draw) in self.draws.iter().enumerate() {
             let tile_id = draw.tile.to_unwrapped();
-            let projection = get_projection_data(
+            let projection = projection_data(
                 &tile_id,
                 parameters,
                 [0.0, 0.0],
@@ -247,8 +261,8 @@ impl DebugLayer {
             self.draw_list.push_part(frame_draw, index, uniforms);
         }
 
-        let (properties, context) = (&self.properties, parameters.context);
-        self.draw_list.finish(&mut self.frame, context, |writer| {
+        let properties = &self.properties;
+        self.draw_list.finish(&mut self.frame, parameters.context, |writer| {
             writer.uniform(ID_LINE_EVALUATED_PROPS_UBO, properties);
             writer.storage(ID_LINE_DRAWABLE_UBO, |uniforms| uniforms.draw_ubo);
             writer.storage(ID_PROJECTION_UBO, |uniforms| uniforms.projection);
@@ -257,7 +271,8 @@ impl DebugLayer {
 }
 
 /// The render source of a source with tiles: a view into the tile store,
-/// which keeps the tiles, with the render tiles of the last `prepare`.
+/// which keeps the tiles, with the render tiles of the last
+/// `update_render_tiles`.
 pub(crate) struct RenderTileSource {
     pub(crate) base: RenderSourceBase,
     /// The source's id, which its debug overlays' draws carry.
@@ -269,7 +284,7 @@ pub(crate) struct RenderTileSource {
     /// The render tiles in [`TileOrder::ById`], as indexes into them.
     order_by_id: Vec<usize>,
     /// The render tiles in [`TileOrder::ByY`], where the frame's
-    /// [`SourcePrepareParameters::sort_by_y`] asked for them; empty
+    /// [`RenderTileParameters::sort_by_y`] asked for them; empty
     /// otherwise.
     order_by_y: Vec<usize>,
 }
@@ -354,14 +369,14 @@ impl RenderSource for RenderTileSource {
         source.update_cover(&update, ctx);
     }
 
-    fn prepare(&mut self, store: &mut TileStore, parameters: &SourcePrepareParameters<'_>) {
+    fn update_render_tiles(&mut self, store: &mut TileStore, parameters: &RenderTileParameters<'_>) {
         self.render_tiles.clear();
         if let Some(source) = store.source(self.key) {
             self.render_tiles.reserve(source.rendered_count());
             for rendered in source.rendered() {
                 let mut render_tile =
                     RenderTile::new(*rendered.id, rendered.tile, rendered.slot, rendered.hold_for_fade);
-                render_tile.prepare(rendered.tile, rendered.needs_rendering, parameters);
+                render_tile.update(rendered.tile, rendered.needs_rendering, parameters);
                 self.render_tiles.push(render_tile);
             }
         }
@@ -380,15 +395,15 @@ impl RenderSource for RenderTileSource {
         self.order_by_y = Vec::new();
     }
 
-    fn upload(&mut self, store: &mut TileStore, needs: UploadNeeds) {
-        store.upload(self.key, &self.render_tiles, needs);
+    fn upload(&mut self, store: &mut TileStore, context: &mut Context, needs: UploadNeeds) {
+        store.upload(self.key, &self.render_tiles, context, needs);
     }
 
-    /// Updates the source's draws of the debug overlays (layers: debug).
+    /// Updates the source's draws of the debug overlays.
     ///
     /// The text is polylines, like the tile borders: WebGPU draws line
     /// primitives one pixel wide.
-    fn update_debug_draws(&self, debug_layers: &mut DebugLayers, parameters: &PaintParameters<'_>) {
+    fn update_debug_draws(&self, debug_layers: &mut DebugLayers, parameters: &mut PaintParameters<'_>) {
         if !parameters
             .debug_options
             .contains(MapDebugOptions::TIMESTAMPS | MapDebugOptions::PARSE_STATUS | MapDebugOptions::TILE_BORDERS)
@@ -428,7 +443,7 @@ impl RenderSource for RenderTileSource {
         // the same shader and spell the tile's text: one of the other
         // projection keeps its shader.
         let new_tiles: HashMap<OverscaledTileID, &RenderTile> =
-            self.render_tiles.iter().map(|tile| (*tile.get_overscaled_tile_id(), tile)).collect();
+            self.render_tiles.iter().map(|tile| (*tile.overscaled_tile_id(), tile)).collect();
         let keep = |draw: &DebugDraw| {
             if draw.source != *source {
                 return true;
@@ -460,13 +475,14 @@ impl RenderSource for RenderTileSource {
                 // whose text changed
                 let mut of_tiles = layer.tiles_of(source);
                 for tile in &self.render_tiles {
-                    let tile_id = *tile.get_overscaled_tile_id();
+                    let tile_id = *tile.overscaled_tile_id();
                     let Some(debug_bucket) = &tile.debug_bucket else {
                         continue;
                     };
-                    if tile.get_needs_rendering()
+                    if tile.needs_rendering()
                         && !of_tiles.contains(&tile_id)
-                        && let Some(objects) = polyline_objects(&polyline_shader, &debug_bucket.strokes, &text_options)
+                        && let Some(objects) =
+                            polyline_objects(parameters.context, &polyline_shader, &debug_bucket.strokes, &text_options)
                     {
                         of_tiles.insert(tile_id);
                         layer.add(source, tile_id, Some(debug_bucket.text.clone()), objects);
@@ -499,8 +515,8 @@ impl RenderSource for RenderTileSource {
             let mut globe_borders: BTreeMap<u8, GeometryCoordinates> = BTreeMap::new();
             let border_options = PolylineGeneratorOptions { type_: FeatureType::Polygon, ..Default::default() };
             for tile in &self.render_tiles {
-                let tile_id = *tile.get_overscaled_tile_id();
-                if tile.debug_bucket.is_none() || !tile.get_needs_rendering() {
+                let tile_id = *tile.overscaled_tile_id();
+                if tile.debug_bucket.is_none() || !tile.needs_rendering() {
                     continue;
                 }
                 if of_tiles.contains(&tile_id) {
@@ -515,8 +531,12 @@ impl RenderSource for RenderTileSource {
                 } else {
                     &tile_border
                 };
-                if let Some(objects) = polyline_objects(&polyline_shader, std::slice::from_ref(border), &border_options)
-                {
+                if let Some(objects) = polyline_objects(
+                    parameters.context,
+                    &polyline_shader,
+                    std::slice::from_ref(border),
+                    &border_options,
+                ) {
                     of_tiles.insert(tile_id);
                     layer.add(source, tile_id, None, objects);
                 }
@@ -558,7 +578,7 @@ impl RenderSource for RenderTileSource {
 
     fn dump_debug_logs(&self) {}
 
-    fn get_max_zoom(&self) -> u8 {
-        self.origin.max_zoom()
+    fn max_zoom(&self) -> Option<u8> {
+        Some(self.origin.max_zoom())
     }
 }

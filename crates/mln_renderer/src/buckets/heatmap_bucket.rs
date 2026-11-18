@@ -1,6 +1,6 @@
-// As in circle_bucket.rs, the vertex/index vectors are plain `Vec`s (the
-// bucket is built on the worker thread and shared with `Arc`); the render
-// layer copies them into the shared gfx vectors its draws reference.
+// As in circle_bucket.rs, the vertices and indices are `GeometryVec`s, which
+// a worker fills and the bucket's upload moves into the context's stores,
+// which its draws read.
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use mln_util::error::Error;
 use mln_vec_map::VecMap;
 
 use crate::bucket::{Bucket, BucketBase, UploadNeeds};
-use crate::bucket_geometry::{BucketGeometry, GeometryVec};
+use crate::bucket_geometry::{GeometryUpload, GeometryVec};
 use crate::layer_type::EvaluatedLayer;
 use crate::layout::pattern_layout::PatternLayerMap;
 use crate::paint_property_binder::PaintPropertyBinder;
@@ -67,8 +67,8 @@ impl HeatmapBucket {
         }
     }
 
-    /// The layout vertex for `p` with extrusion (`ex`, `ey`). As in C++,
-    /// `p.x * 2` is an integer, added to a float and truncated to `i16`.
+    /// The layout vertex for `p` with extrusion (`ex`, `ey`): `p.x * 2` is
+    /// an integer, added to a float and truncated to `i16`.
     #[must_use]
     pub(crate) fn vertex(p: GeometryCoordinate, ex: f32, ey: f32) -> HeatmapLayoutVertex {
         HeatmapLayoutVertex {
@@ -176,7 +176,7 @@ impl Bucket for HeatmapBucket {
         true
     }
 
-    fn upload(&mut self, geometry: &mut BucketGeometry, _needs: UploadNeeds) {
+    fn upload(&mut self, geometry: &mut GeometryUpload<'_>, _needs: UploadNeeds) {
         geometry.move_vertices(&mut self.vertices);
         geometry.move_indexes(&mut self.triangles);
         for binders in self.paint_property_binders.values_mut() {

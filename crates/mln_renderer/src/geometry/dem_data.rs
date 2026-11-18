@@ -1,6 +1,5 @@
-// C++ keeps the image behind a `shared_ptr` that textures share; here the
-// image is owned and textures get a copy (`get_image`), because the DEM
-// lives in a bucket, which is Send, and textures are render-thread `Rc`s.
+// The DEM owns its image, and textures get a copy of it (`image`): the DEM
+// lives in a bucket, which is Send, and textures live on the render thread.
 
 use mln_util::image::PremultipliedImage;
 use mln_util::size::Size;
@@ -11,10 +10,10 @@ const UNPACK_MAPBOX: [f32; 4] = [6553.6, 25.6, 0.1, 10000.0];
 /// <https://aws.amazon.com/public-datasets/terrain>/
 const UNPACK_TERRARIUM: [f32; 4] = [256.0, 1.0, 1.0 / 256.0, 32768.0];
 
-/// The DEM unpack vector for an encoding (`DEMData::getUnpackVector`): the
-/// red, green and blue factors and the base shift.
+/// The DEM unpack vector for an encoding: the red, green and blue factors
+/// and the base shift.
 #[must_use]
-pub(crate) fn get_unpack_vector(encoding: RasterEncoding) -> [f32; 4] {
+pub(crate) fn unpack_vector(encoding: RasterEncoding) -> [f32; 4] {
     match encoding {
         RasterEncoding::Mapbox => UNPACK_MAPBOX,
         RasterEncoding::Terrarium => UNPACK_TERRARIUM,
@@ -24,7 +23,8 @@ pub(crate) fn get_unpack_vector(encoding: RasterEncoding) -> [f32; 4] {
     }
 }
 
-/// Port-only: only what `new` can make reads back (`from_parts`).
+/// A raster-dem tile's elevations, a pixel of border on each side. It reads
+/// back only as `new` can make it (`from_parts`).
 #[derive(Clone, Debug)]
 pub(crate) struct DEMData {
     pub(crate) dim: i32,
@@ -84,7 +84,7 @@ impl DEMData {
         // the data of the nearest pixel from the image. this data is
         // eventually replaced when the tile's neighboring tiles are loaded
         // and the accurate data can be backfilled using
-        // DEMData#backfillBorder
+        // `backfill_border`.
 
         let data = &mut out.data;
         for x in 0..dim_u {
@@ -106,8 +106,8 @@ impl DEMData {
         Ok(DEMData { dim, stride, encoding, image: out })
     }
 
-    /// Port-only: a DEM as another `DEMData` was (its members), as it
-    /// reads back. Fails unless the image is `stride` by `stride` pixels with
+    /// A DEM as another `DEMData` was (its members), as it reads back.
+    /// Fails unless the image is `stride` by `stride` pixels with
     /// `stride == dim + 2` and `dim >= 0`, as `new` makes them. The sizes are
     /// checked without overflow: on wasm32 `Image::bytes` would wrap for a
     /// large stride.
@@ -147,16 +147,15 @@ impl DEMData {
     pub(crate) fn backfill_border(&mut self, border_tile_data: &DEMData, dx: i8, dy: i8) {
         let o = border_tile_data;
 
-        // Tiles from the same source should always be of the same dimensions.
-        // C++ asserts it and reads out of bounds when they aren't (tiles of
-        // different sizes, or an empty one from a corrupt image); the port
-        // leaves the border as it is.
+        // Tiles from the same source should always be of the same
+        // dimensions. Where they aren't (tiles of different sizes, or an
+        // empty one from a corrupt image), the border stays as it is.
         if self.dim != o.dim || self.dim == 0 {
             return;
         }
 
         // We determine the pixel range to backfill based which corner/edge
-        // `borderTileData` represents. For example, dx = -1, dy = -1
+        // `border_tile_data` represents. For example, dx = -1, dy = -1
         // represents the upper left corner of the base tile, so we only
         // need to backfill one pixel at coordinates (-1, -1) of the tile
         // image.
@@ -195,19 +194,19 @@ impl DEMData {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn get(&self, x: i32, y: i32) -> i32 {
-        let unpack = self.get_unpack_vector();
+        let unpack = self.unpack_vector();
         let value = pixel(&self.image.data, self.idx(x, y));
         (f32::from(value[0]) * unpack[0] + f32::from(value[1]) * unpack[1] + f32::from(value[2]) * unpack[2]
             - unpack[3]) as i32
     }
 
     #[must_use]
-    pub(crate) fn get_unpack_vector(&self) -> [f32; 4] {
-        get_unpack_vector(self.encoding)
+    pub(crate) fn unpack_vector(&self) -> [f32; 4] {
+        unpack_vector(self.encoding)
     }
 
     #[must_use]
-    pub(crate) fn get_image(&self) -> &PremultipliedImage {
+    pub(crate) fn image(&self) -> &PremultipliedImage {
         &self.image
     }
 }
@@ -236,7 +235,7 @@ mod tests {
 
         assert_eq!(demdata.dim, 16);
         assert_eq!(demdata.stride, 18);
-        assert_eq!(demdata.get_image().bytes(), 18 * 18 * 4);
+        assert_eq!(demdata.image().bytes(), 18 * 18 * 4);
     }
 
     // gtest: DEMData.ConstructorTerrarium
@@ -247,7 +246,7 @@ mod tests {
 
         assert_eq!(demdata.dim, 16);
         assert_eq!(demdata.stride, 18);
-        assert_eq!(demdata.get_image().bytes(), 18 * 18 * 4);
+        assert_eq!(demdata.image().bytes(), 18 * 18 * 4);
     }
 
     #[test]
@@ -260,7 +259,7 @@ mod tests {
 
         // 10 * 100 + 20 * 10 + 30 * 0.5 - 1000
         assert_eq!(demdata.get(0, 0), 215);
-        assert_eq!(demdata.get_unpack_vector(), [100.0, 10.0, 0.5, 1000.0]);
+        assert_eq!(demdata.unpack_vector(), [100.0, 10.0, 0.5, 1000.0]);
     }
 
     #[test]
@@ -356,7 +355,7 @@ mod tests {
         assert_eq!(dem0.get(4, -1), dem1.get(0, 3));
     }
 
-    // Port-only: C++ reads out of bounds for neighbours of another size.
+    // A neighbour of another size leaves the border as it is.
     #[test]
     fn backfill_border_of_another_size() {
         let mut dem = DEMData::new(&fake_image(Size::new(4, 4)), RasterEncoding::Mapbox).unwrap();
