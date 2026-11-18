@@ -3817,7 +3817,9 @@ struct VertexStage {
 
 struct FragmentStage {
     float4 position [[position, invariant]];
+#if !defined(HAS_UNIFORM_u_weight)
     float weight;
+#endif
     float2 extrude;
 };
 
@@ -3885,7 +3887,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
 
     return {
         .position    = position,
+#if !defined(HAS_UNIFORM_u_weight)
         .weight      = weight,
+#endif
         .extrude     = extrude,
     };
 }
@@ -3898,7 +3902,12 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 
     // Kernel density estimation with a Gaussian kernel of size 5x5
     const float d = -0.5 * 3.0 * 3.0 * dot(in.extrude, in.extrude);
-    const float val = in.weight * props.intensity * GAUSS_COEF * exp(d);
+#if defined(HAS_UNIFORM_u_weight)
+    const float weight = props.weight;
+#else
+    const float weight = in.weight;
+#endif
+    const float val = weight * props.intensity * GAUSS_COEF * exp(d);
 
     return half4(val, 1.0, 1.0, 1.0);
 }
@@ -5426,7 +5435,9 @@ struct FragmentStage {
 #if !defined(HAS_UNIFORM_u_pattern_to)
     float4 pattern_to [[flat]];
 #endif
+#if !defined(HAS_UNIFORM_u_width)
     float floorwidth;
+#endif
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -5460,10 +5471,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const auto width    = unpack_mix_float(vertx.width, drawable.width_t);
 #endif
 
-#if defined(HAS_UNIFORM_u_width)
-    const auto exprFloorWidth = (props.expressionMask & LineExpressionMask::FloorWidth);
-    const auto floorwidth = exprFloorWidth ? expr.floorwidth.eval(paintParams.map_zoom) : props.floorwidth;
-#else
+#if !defined(HAS_UNIFORM_u_width)
     const auto floorwidth = unpack_mix_float(vertx.width, drawable.floorwidth_t);
 #endif
 
@@ -5535,7 +5543,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
 #if !defined(HAS_UNIFORM_u_pattern_to)
         .pattern_to   = float4(vertx.pattern_to),
 #endif
+#if !defined(HAS_UNIFORM_u_width)
         .floorwidth   = floorwidth,
+#endif
     };
 }
 
@@ -5602,8 +5612,14 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     const float2 pattern_size_a = float2(display_size_a.x * fromScale / tileZoomRatio, display_size_a.y);
     const float2 pattern_size_b = float2(display_size_b.x * toScale / tileZoomRatio, display_size_b.y);
 
-    const float aspect_a = display_size_a.y / in.floorwidth;
-    const float aspect_b = display_size_b.y / in.floorwidth;
+#if defined(HAS_UNIFORM_u_width)
+    const auto exprFloorWidth = (props.expressionMask & LineExpressionMask::FloorWidth);
+    const float floorwidth = exprFloorWidth ? expr.floorwidth.eval(paintParams.map_zoom) : props.floorwidth;
+#else
+    const float floorwidth = in.floorwidth;
+#endif
+    const float aspect_a = display_size_a.y / floorwidth;
+    const float aspect_b = display_size_b.y / floorwidth;
 
     // Calculate the distance of the pixel from the line in pixels.
     const float dist = length(in.normal) * in.width2.x;
@@ -7201,14 +7217,12 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 
     const float EDGE_GAMMA = 0.105 / DEVICE_PIXEL_RATIO;
     const float fontGamma = in.fontScale * tileProps.gamma_scale;
-    const float fillGamma = EDGE_GAMMA / fontGamma;
-    const float haloGamma = (halo_blur * 1.19 / SDF_PX + EDGE_GAMMA) / fontGamma;
-    const float gamma = tileProps.is_halo ? haloGamma : fillGamma;
-    const float gammaScaled = gamma * in.gamma_scale;
+    const float haloBlurGamma = tileProps.is_halo ? halo_blur * 1.19 / SDF_PX : 0.0;
+    const float gammaScaled = (haloBlurGamma + EDGE_GAMMA) / fontGamma * in.gamma_scale;
     const half4 color = tileProps.is_halo ? halo_color : fill_color;
+    // A halo's inner edge sits a gamma outside the fill's.
     const float fillInnerEdge = (256.0 - 64.0) / 256.0;
-    const float haloInnerEdge = fillInnerEdge + haloGamma * in.gamma_scale;
-    const float innerEdge = tileProps.is_halo ? haloInnerEdge : fillInnerEdge;
+    const float innerEdge = tileProps.is_halo ? fillInnerEdge + gammaScaled : fillInnerEdge;
     const float dist = image.sample(image_sampler, atlas_pos(in.tex_origin, in.tex)).a;
 
     float alpha = smoothstep(innerEdge - gammaScaled, innerEdge + gammaScaled, dist);
@@ -7566,14 +7580,12 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 
     const float EDGE_GAMMA = 0.105 / DEVICE_PIXEL_RATIO;
     const float fontGamma = in.fontScale * tileProps.gamma_scale;
-    const float fillGamma = EDGE_GAMMA / fontGamma;
-    const float haloGamma = (halo_blur * 1.19 / SDF_PX + EDGE_GAMMA) / fontGamma;
-    const float gamma = tileProps.is_halo ? haloGamma : fillGamma;
-    const float gammaScaled = gamma * in.gamma_scale;
+    const float haloBlurGamma = tileProps.is_halo ? halo_blur * 1.19 / SDF_PX : 0.0;
+    const float gammaScaled = (haloBlurGamma + EDGE_GAMMA) / fontGamma * in.gamma_scale;
     const half4 color = tileProps.is_halo ? halo_color : fill_color;
+    // A halo's inner edge sits a gamma outside the fill's.
     const float fillInnerEdge = (256.0 - 64.0) / 256.0;
-    const float haloInnerEdge = fillInnerEdge + haloGamma * in.gamma_scale;
-    const float innerEdge = tileProps.is_halo ? haloInnerEdge : fillInnerEdge;
+    const float innerEdge = tileProps.is_halo ? fillInnerEdge + gammaScaled : fillInnerEdge;
     const float dist = glyph_image.sample(glyph_sampler, pos).a;
 
     float alpha = smoothstep(innerEdge - gammaScaled, innerEdge + gammaScaled, dist);

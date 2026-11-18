@@ -2651,13 +2651,6 @@ void main() {
     const vec2 instancePos = vec2(in_outline_pos);
     const vec2 instanceDecimalsEd = vec2(in_decimals_ed);
 
-    bool isDiscarded = mod(instanceDecimalsEd.x, 2.0) > 0.0;
-    if (isDiscarded) {
-        gl_Position = vec4(0.0);
-        frag_color = vec4(0.0);
-        return;
-    }
-
     const FillExtrusionDrawableUBO drawable = drawableVector.drawable_ubo[constant.ubo_index];
 
 #if defined(HAS_UNIFORM_u_base)
@@ -2677,6 +2670,13 @@ void main() {
 #else
     vec4 color = unpack_mix_color(in_color, drawable.color_t);
 #endif
+    bool isDiscarded = mod(instanceDecimalsEd.x, 2.0) > 0.0;
+    if (isDiscarded) {
+        gl_Position = vec4(0.0);
+        frag_color = vec4(0.0);
+        return;
+    }
+
     const vec2 nextInstancePos = vec2(in_next_outline_pos);
     const vec2 nextInstanceDecimalsEd = vec2(in_next_decimals_ed);
 
@@ -3119,12 +3119,6 @@ void main() {
     const vec2 instancePos = vec2(in_outline_pos);
     const vec2 instanceDecimalsEd = vec2(in_decimals_ed);
 
-    bool isDiscarded = mod(instanceDecimalsEd.x, 2.0) > 0.0;
-    if (isDiscarded) {
-        gl_Position = vec4(0.0);
-        return;
-    }
-
     const FillExtrusionDrawableUBO drawable = drawableVector.drawable_ubo[constant.ubo_index];
     const FillExtrusionTilePropsUBO tileProps = tilePropsVector.tile_props_ubo[constant.ubo_index];
 
@@ -3139,6 +3133,12 @@ void main() {
 #else
     const float height = max(unpack_mix_float(in_height, drawable.height_t), 0.0);
 #endif
+    bool isDiscarded = mod(instanceDecimalsEd.x, 2.0) > 0.0;
+    if (isDiscarded) {
+        gl_Position = vec4(0.0);
+        return;
+    }
+
     const vec2 nextInstancePos = vec2(in_next_outline_pos);
     const vec2 nextInstanceDecimalsEd = vec2(in_next_decimals_ed);
 
@@ -3416,7 +3416,9 @@ layout(set = LAYER_SET_INDEX, binding = idHeatmapEvaluatedPropsUBO) uniform Heat
     float pad1;
 } props;
 
+#if !defined(HAS_UNIFORM_u_weight)
 layout(location = 0) out float frag_weight;
+#endif
 layout(location = 1) out vec2 frag_extrude;
 
 void main() {
@@ -3468,7 +3470,9 @@ void main() {
     gl_Position = drawable.matrix * vec4(floor(in_position * 0.5) + scaled_extrude, 0, 1);
 #endif
 
+#if !defined(HAS_UNIFORM_u_weight)
     frag_weight = weight;
+#endif
     frag_extrude = extrude;
 }
 "#,
@@ -3477,7 +3481,9 @@ void main() {
 // Gaussian kernel coefficient: 1 / sqrt(2 * PI)
 #define GAUSS_COEF 0.3989422804014327
 
+#if !defined(HAS_UNIFORM_u_weight)
 layout(location = 0) in float frag_weight;
+#endif
 layout(location = 1) in vec2 frag_extrude;
 
 layout(location = 0) out vec4 out_color;
@@ -3498,7 +3504,12 @@ void main() {
 
     // Kernel density estimation with a Gaussian kernel of size 5x5
     const float d = -0.5 * 3.0 * 3.0 * dot(frag_extrude, frag_extrude);
-    const float val = frag_weight * props.intensity * GAUSS_COEF * exp(d);
+#if defined(HAS_UNIFORM_u_weight)
+    const float weight = props.weight;
+#else
+    const float weight = frag_weight;
+#endif
+    const float val = weight * props.intensity * GAUSS_COEF * exp(d);
 
     out_color = vec4(val, 1.0, 1.0, 1.0);
 }
@@ -3793,16 +3804,14 @@ void multidirectional_hillshade(vec2 deriv, const HillshadeTilePropsUBO tileProp
     deriv = deriv * tileProps.exaggeration * 2.0;
     vec4 total_color = vec4(0, 0, 0, 0);
 
-    // Access altitude and azimuth from vec4 UBOs
-    float altitudes[4] = float[4](props.altitudes.x, props.altitudes.y, props.altitudes.z, props.altitudes.w);
-    float azimuths[4] = float[4](props.azimuths.x, props.azimuths.y, props.azimuths.z, props.azimuths.w);
-
     int num_lights = min(tileProps.num_lights, 4);
 
     // Iterate through all light sources
     for (int i = 0; i < num_lights; i++) {
-        float altitude = altitudes[i];
-        float azimuth = azimuths[i];
+        // Select the light's altitude and azimuth from the vec4 UBOs: a local
+        // array indexed by the loop can live in scratch memory.
+        float altitude = i == 0 ? props.altitudes.x : i == 1 ? props.altitudes.y : i == 2 ? props.altitudes.z : props.altitudes.w;
+        float azimuth = i == 0 ? props.azimuths.x : i == 1 ? props.azimuths.y : i == 2 ? props.azimuths.z : props.azimuths.w;
 
         float cos_alt = cos(altitude);
         float sin_alt = sin(altitude);
@@ -4632,7 +4641,9 @@ layout(location = 6) flat out vec4 frag_pattern_from;
 #if !defined(HAS_UNIFORM_u_pattern_to)
 layout(location = 7) flat out vec4 frag_pattern_to;
 #endif
+#if !defined(HAS_UNIFORM_u_width)
 layout(location = 8) out float frag_floorwidth;
+#endif
 
 #ifdef PROJECTION_GLOBE
 layout(location = 9) out float frag_tile_x;
@@ -4676,8 +4687,6 @@ void main() {
 #endif
 #ifndef HAS_UNIFORM_u_width
     frag_floorwidth = unpack_mix_float(in_width, drawable.floorwidth_t);
-#else
-    frag_floorwidth = props.floorwidth;
 #endif
 
     // the distance over which the line edge fades out.
@@ -4757,7 +4766,9 @@ layout(location = 6) flat in vec4 frag_pattern_from;
 #if !defined(HAS_UNIFORM_u_pattern_to)
 layout(location = 7) flat in vec4 frag_pattern_to;
 #endif
+#if !defined(HAS_UNIFORM_u_width)
 layout(location = 8) in float frag_floorwidth;
+#endif
 
 layout(location = 0) out vec4 out_color;
 
@@ -4851,8 +4862,13 @@ void main() {
     const vec2 pattern_size_a = vec2(display_size_a.x * fromScale / tileZoomRatio, display_size_a.y);
     const vec2 pattern_size_b = vec2(display_size_b.x * toScale / tileZoomRatio, display_size_b.y);
 
-    const float aspect_a = display_size_a.y / frag_floorwidth;
-    const float aspect_b = display_size_b.y / frag_floorwidth;
+#if defined(HAS_UNIFORM_u_width)
+    const float floorwidth = props.floorwidth;
+#else
+    const float floorwidth = frag_floorwidth;
+#endif
+    const float aspect_a = display_size_a.y / floorwidth;
+    const float aspect_b = display_size_b.y / floorwidth;
 
     // Calculate the distance of the pixel from the line in pixels.
     const float dist = length(frag_normal) * frag_width2.x;
@@ -6491,14 +6507,12 @@ void main() {
 
     const float EDGE_GAMMA = 0.105 / DEVICE_PIXEL_RATIO;
     const float fontGamma = frag_font_scale * tileProps.gamma_scale;
-    const float fillGamma = EDGE_GAMMA / fontGamma;
-    const float haloGamma = (halo_blur * 1.19 / SDF_PX + EDGE_GAMMA) / fontGamma;
-    const float gamma = tileProps.is_halo != 0 ? haloGamma : fillGamma;
-    const float gammaScaled = gamma * frag_gamma_scale;
+    const float haloBlurGamma = tileProps.is_halo != 0 ? halo_blur * 1.19 / SDF_PX : 0.0;
+    const float gammaScaled = (haloBlurGamma + EDGE_GAMMA) / fontGamma * frag_gamma_scale;
     const vec4 color = tileProps.is_halo != 0 ? halo_color : fill_color;
+    // A halo's inner edge sits a gamma outside the fill's.
     const float fillInnerEdge = (256.0 - 64.0) / 256.0;
-    const float haloInnerEdge = fillInnerEdge + haloGamma * frag_gamma_scale;
-    const float innerEdge = tileProps.is_halo != 0 ? haloInnerEdge : fillInnerEdge;
+    const float innerEdge = tileProps.is_halo != 0 ? fillInnerEdge + gammaScaled : fillInnerEdge;
     const float dist = texture(sampler2D(image0_texture, image0_sampler), atlas_pos(frag_tex_origin, frag_tex)).a;
     float alpha = smoothstep(innerEdge - gammaScaled, innerEdge + gammaScaled, dist);
     if (tileProps.is_halo != 0) {
@@ -6885,14 +6899,12 @@ void main() {
 
     const float EDGE_GAMMA = 0.105 / DEVICE_PIXEL_RATIO;
     const float fontGamma = frag_font_scale * tileProps.gamma_scale;
-    const float fillGamma = EDGE_GAMMA / fontGamma;
-    const float haloGamma = (halo_blur * 1.19 / SDF_PX + EDGE_GAMMA) / fontGamma;
-    const float gamma = tileProps.is_halo != 0 ? haloGamma : fillGamma;
-    const float gammaScaled = gamma * frag_gamma_scale;
+    const float haloBlurGamma = tileProps.is_halo != 0 ? halo_blur * 1.19 / SDF_PX : 0.0;
+    const float gammaScaled = (haloBlurGamma + EDGE_GAMMA) / fontGamma * frag_gamma_scale;
     const vec4 color = tileProps.is_halo != 0 ? halo_color : fill_color;
+    // A halo's inner edge sits a gamma outside the fill's.
     const float fillInnerEdge = (256.0 - 64.0) / 256.0;
-    const float haloInnerEdge = fillInnerEdge + haloGamma * frag_gamma_scale;
-    const float innerEdge = tileProps.is_halo != 0 ? haloInnerEdge : fillInnerEdge;
+    const float innerEdge = tileProps.is_halo != 0 ? fillInnerEdge + gammaScaled : fillInnerEdge;
     const float dist = texture(sampler2D(glyph_image_texture, glyph_image_sampler), pos).a;
     float alpha = smoothstep(innerEdge - gammaScaled, innerEdge + gammaScaled, dist);
     if (tileProps.is_halo != 0) {
