@@ -78,7 +78,7 @@ fn modf_fraction(x: f64) -> f64 {
 ///
 /// Setters ignore numbers that aren't finite, and a camera whose projection
 /// can't be inverted shows nothing, as an empty size does.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TransformState {
     bounds: LatLngBounds,
 
@@ -130,7 +130,18 @@ pub struct TransformState {
     bc: f64,
     cc: f64,
 
-    matrices: OnceLock<Matrices>,
+    matrices: MatrixCache,
+}
+
+/// The matrices a state computes from its other fields when a getter first
+/// needs them. Two states compare equal whatever their caches hold.
+#[derive(Clone, Debug, Default)]
+struct MatrixCache(OnceLock<Matrices>);
+
+impl PartialEq for MatrixCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// The matrices of a state, zero while its size is empty. The globe's are
@@ -190,7 +201,7 @@ impl TransformState {
             edge_insets: EdgeInsets::default(),
             bc: Projection::world_size(scale) / constants::DEGREES_MAX,
             cc: Projection::world_size(scale) / M2PI,
-            matrices: OnceLock::new(),
+            matrices: MatrixCache::default(),
         }
     }
 
@@ -556,7 +567,7 @@ impl TransformState {
     }
 
     fn matrices(&self) -> &Matrices {
-        self.matrices.get_or_init(|| {
+        self.matrices.0.get_or_init(|| {
             if self.size.is_empty() {
                 return Matrices::default();
             }
@@ -613,7 +624,7 @@ impl TransformState {
 
     /// Clears the matrices after a change that moves them.
     fn invalidate_matrices(&mut self) {
-        self.matrices.take();
+        self.matrices.0.take();
     }
 
     pub fn get_projection_matrix(&self) -> Mat4 {
