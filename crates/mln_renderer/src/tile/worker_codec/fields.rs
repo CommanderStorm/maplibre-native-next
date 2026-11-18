@@ -11,11 +11,10 @@ use mln_vec_map::VecSet;
 use mln_wire::{Context, Reader, Request, Wire, Writer};
 
 use crate::Registry;
-use crate::bucket::BucketPtr;
+use crate::bucket::Bucket;
 use crate::geometry::feature_index::FeatureIndex;
 use crate::layer_type::ErasedEvaluatedLayer;
-use crate::render_layer::LayerRenderData;
-use crate::tile::contents::LayoutResult;
+use crate::tile::contents::{LayoutBuckets, LayoutResult};
 use crate::tile::job::SourceStyle;
 
 /// The `shared::Kind` of layers' evaluated values: their type's name, then
@@ -151,22 +150,26 @@ impl Context for Tables {
     }
 }
 
-/// A bucket, and the ids of the layers that render it with the properties
+/// A bucket and the ids of the layers that render it with the properties
 /// they were laid out with.
-type RenderedBucket<'a> = (&'a BucketPtr, Vec<(&'a String, &'a Arc<dyn ErasedEvaluatedLayer>)>);
+type RenderedBucket<'a> = (&'a dyn Bucket, Vec<(&'a String, &'a Arc<dyn ErasedEvaluatedLayer>)>);
 
 impl LayoutResult {
     /// Each bucket with the layers that render it, in layer id order.
     fn buckets(&self) -> Vec<RenderedBucket<'_>> {
-        let mut layer_ids: Vec<&String> = self.layer_render_data.keys().collect();
-        layer_ids.sort_unstable();
+        let laid = &self.layer_render_data;
+        let mut layers: Vec<_> = laid.laid_layers().collect();
+        layers.sort_unstable_by_key(|(layer_id, ..)| *layer_id);
+        // Where each of the layout's buckets is among `buckets`.
+        let mut positions: Vec<Option<usize>> = vec![None; laid.bucket_count()];
         let mut buckets: Vec<RenderedBucket<'_>> = Vec::new();
-        for layer_id in layer_ids {
-            let LayerRenderData { bucket, layer } = &self.layer_render_data[layer_id];
-            match buckets.iter_mut().find(|(shared, _)| Arc::ptr_eq(shared, bucket)) {
-                Some((_, layers)) => layers.push((layer_id, layer)),
-                None => buckets.push((bucket, vec![(layer_id, layer)])),
-            }
+        for (layer_id, bucket_index, layer) in layers {
+            let Some(bucket) = laid.bucket(bucket_index) else { continue };
+            let position = *positions[bucket_index].get_or_insert_with(|| {
+                buckets.push((bucket, Vec::new()));
+                buckets.len() - 1
+            });
+            buckets[position].1.push((layer_id, layer));
         }
         buckets
     }
@@ -198,7 +201,7 @@ pub(crate) fn encode_buckets(result: &LayoutResult) -> Vec<u8> {
 }
 
 /// A `LayoutResult` crosses as each bucket once, after the layers that
-/// render it (a layer group's layers share their bucket, and their type is
+/// render it (the layers of a layout group share their bucket, and their type is
 /// the bucket's), and the feature index without its data.
 impl Wire for LayoutResult {
     fn write(&self, w: &mut Writer) {
@@ -207,7 +210,7 @@ impl Wire for LayoutResult {
     }
 
     fn read(r: &mut Reader<'_>) -> Option<Self> {
-        let mut layer_render_data = mln_util::hash::HashMap::default();
+        let mut layer_render_data = LayoutBuckets::default();
         let buckets = r.length()?;
         for _ in 0..buckets {
             let len = r.length()?;
@@ -219,9 +222,7 @@ impl Wire for LayoutResult {
                 return r.fail("a bucket that no layer renders");
             };
             let bucket = leader.entry().read_bucket(r)?;
-            for (layer_id, layer) in layers {
-                layer_render_data.insert(layer_id, LayerRenderData { bucket: Arc::clone(&bucket), layer });
-            }
+            layer_render_data.add(bucket, layers);
         }
         Some(LayoutResult { layer_render_data, feature_index: Arc::new(FeatureIndex::read(r)?) })
     }

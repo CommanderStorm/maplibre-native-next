@@ -1,8 +1,8 @@
-// C++ `RenderSource` is an abstract class with data members; the data is
-// `RenderSourceBase`. A source's tiles are in the renderer's tile store,
-// which the source's methods are given.
+// A render source is the renderer's side of a style source: what every one
+// has is `RenderSourceBase`, what each type does the `RenderSource` trait. A
+// source's tiles are in the renderer's tile store, which the source's
+// methods are given.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use mln_map_types::MapDebugOptions;
@@ -10,11 +10,13 @@ use mln_style::Source;
 use mln_util::constants;
 use mln_util::error::Error;
 
+use crate::bucket::UploadNeeds;
 use crate::layer_type::ErasedEvaluatedLayer;
-use crate::paint_parameters::TransformParameters;
+use crate::paint_parameters::{PaintParameters, TransformParameters};
 use crate::registry::Registry;
 use crate::render_tile::RenderTile;
-use crate::render_tree::RenderItem;
+use crate::render_tree::DebugLayers;
+use crate::sources::render_image_source::ImageSourceRenderData;
 use crate::tile::job::SourceKey;
 use crate::tile::store::TileStore;
 use crate::tile_parameters::TileParameters;
@@ -23,39 +25,12 @@ pub(crate) struct SourcePrepareParameters<'a> {
     pub(crate) transform: &'a TransformParameters,
     pub(crate) debug_options: MapDebugOptions,
     pub(crate) source_name: String,
+    /// Whether a layer of the frame draws the source's tiles in
+    /// [`TileOrder::ByY`], which `prepare` then sorts them in.
+    pub(crate) sort_by_y: bool,
 }
 
-/// A shared selection of the render tiles of an `Rc<Vec<RenderTile>>`,
-/// which it keeps alive.
-#[derive(Clone)]
-pub(crate) struct RenderTiles {
-    owner: Rc<Vec<RenderTile>>,
-    indices: Rc<Vec<usize>>,
-}
-
-impl RenderTiles {
-    #[must_use]
-    pub(crate) fn new(owner: Rc<Vec<RenderTile>>, indices: Vec<usize>) -> Self {
-        RenderTiles { owner, indices: Rc::new(indices) }
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &RenderTile> + '_ {
-        self.indices.iter().map(|&i| &self.owner[i])
-    }
-
-    #[must_use]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.indices.is_empty()
-    }
-
-    /// The tiles the selection points into.
-    #[must_use]
-    pub(crate) fn owner(&self) -> &Rc<Vec<RenderTile>> {
-        &self.owner
-    }
-}
-
-/// The data members of `RenderSource`.
+/// What every render source has, whatever its type.
 pub(crate) struct RenderSourceBase {
     pub(crate) style_source: Source,
     pub(crate) enabled: bool,
@@ -65,6 +40,16 @@ impl RenderSourceBase {
     pub(crate) fn new(style_source: Source) -> Self {
         RenderSourceBase { style_source, enabled: false }
     }
+}
+
+/// An order a layer draws its source's tiles in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TileOrder {
+    /// By tile id, without the tiles held for fade.
+    ById,
+    /// By opposite y position, so that the lower of two tiles' overlapping
+    /// symbols draw over the higher's.
+    ByY,
 }
 
 pub(crate) trait RenderSource {
@@ -82,11 +67,16 @@ pub(crate) trait RenderSource {
         parameters: &TileParameters<'_>,
     );
 
-    /// Note: calling of this method might reset the contained render data.
-    fn create_render_item(&mut self) -> Box<dyn RenderItem>;
-
-    /// Creates the render data to be passed to the render item.
+    /// Makes the source's render tiles of the frame.
     fn prepare(&mut self, store: &mut TileStore, parameters: &SourcePrepareParameters<'_>);
+
+    /// Readies the buckets the frame draws, before its layers make their
+    /// draws, which read what `needs` says.
+    fn upload(&mut self, store: &mut TileStore, needs: UploadNeeds);
+
+    /// Updates the source's draws of the debug overlays; a no-op for the
+    /// sources that have none (the image source) (layers: debug).
+    fn update_debug_draws(&self, _debug_layers: &mut DebugLayers, _parameters: &PaintParameters<'_>) {}
 
     /// Releases the render data from the last `prepare` while the source is
     /// disabled.
@@ -97,27 +87,20 @@ pub(crate) trait RenderSource {
         None
     }
 
-    /// If supported, returns a shared list of `RenderTiles`, sorted by tile id
-    /// and excluding tiles hold for fade; returns `None` otherwise.
-    fn get_render_tiles(&self) -> Option<RenderTiles> {
-        None
+    /// The source's render tiles, as of the last `prepare`.
+    fn render_tiles(&self) -> &[RenderTile] {
+        &[]
     }
 
-    /// If supported, returns a shared list of `RenderTiles`, sorted in
-    /// opposite y position, so tiles with overlapping symbols are drawn on
-    /// top of each other, with lower symbols being drawn on top of higher
-    /// symbols; returns `None` otherwise.
-    fn get_render_tiles_sorted_by_y_position(&self) -> Option<RenderTiles> {
+    /// The source's tiles in `order`, as indexes into `render_tiles`, as of
+    /// the last `prepare`; `None` for a source without tiles.
+    fn tile_order(&self, _order: TileOrder) -> Option<&[usize]> {
         None
     }
 
     /// conformance: `getImageRenderData()` (image sources).
-    fn get_image_render_data(&self) -> Option<Rc<crate::sources::render_image_source::ImageSourceRenderData>> {
+    fn get_image_render_data(&self) -> Option<ImageSourceRenderData<'_>> {
         None
-    }
-
-    fn get_raw_render_tiles(&self) -> Rc<Vec<RenderTile>> {
-        Rc::new(Vec::new())
     }
 
     /// Queries a feature extension; sources without extensions return a null
@@ -140,8 +123,6 @@ pub(crate) trait RenderSource {
         debug_assert!(false);
         constants::TERRAIN_RGB_MAXZOOM
     }
-
-    // Non-virtual members of the C++ class.
 
     fn is_enabled(&self) -> bool {
         self.base().enabled

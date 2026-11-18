@@ -20,6 +20,7 @@ use serde_json::json;
 
 use super::tile_jobs_test::{Manual, icons, layer, points};
 use crate::buckets::hillshade_bucket::HillshadeBucket;
+use crate::layer_drawing::ChangedBuckets;
 use crate::layer_type::ErasedEvaluatedLayer;
 use crate::query::SourceQueryOptions;
 use crate::tests::tile::{dem_png, png};
@@ -192,7 +193,11 @@ fn a_not_modified_reload_keeps_the_data() {
     tile.update();
     assert!(tile.tile().is_complete());
     let key = tile.layout().data.as_ref().expect("data").key;
-    let shown = std::rc::Rc::clone(&tile.tile().shown.as_ref().expect("contents").contents);
+    let shown_layout = |tile: &OneTile| {
+        let contents = tile.tile().contents().and_then(Contents::geometry).expect("contents");
+        Arc::clone(&contents.result.feature_index)
+    };
+    let shown = shown_layout(&tile);
 
     // Required again, the tile revalidates its data.
     tile.set_necessity(&id, TileNecessity::Optional);
@@ -207,7 +212,7 @@ fn a_not_modified_reload_keeps_the_data() {
     assert!(requesting_network(&tile, false));
     assert_eq!(tile.layout().data.as_ref().expect("data").key, key, "the same data");
     assert_eq!(manual.submitted(), 1, "nothing to lay out again");
-    assert!(std::rc::Rc::ptr_eq(&tile.tile().shown.as_ref().expect("contents").contents, &shown));
+    assert!(Arc::ptr_eq(&shown_layout(&tile), &shown), "the same contents");
     assert!(tile.tile().is_complete());
 
     // A revalidation that fails, retried and answered `not_modified`: the
@@ -333,14 +338,14 @@ fn queries_and_feature_state_read_the_shown_contents() {
     state.insert("hover".to_owned(), feature::Value::Bool(true));
     let (source, _) = tile.store.source_mut(key).expect("the source");
     source.info.feature_state.update_state(None, "1", &state);
-    source.coalesce_feature_state();
+    source.coalesce_feature_state(&mut ChangedBuckets::default());
     let version = source.info.feature_state.version();
     let shown_version = |tile: &OneTile| tile.tile().shown.as_ref().expect("contents").feature_state_version;
     // Not rendered, so the coalesce left it.
     assert_eq!(shown_version(&tile), 0);
     tile.with(|tile| {
         let (info, tile) = tile.parts();
-        info.feature_state.coalesce_changes(tile.shown.as_mut());
+        info.feature_state.coalesce_changes(tile.shown.as_mut(), &mut ChangedBuckets::default());
     });
     assert_eq!(shown_version(&tile), version);
 
@@ -485,9 +490,9 @@ fn dem_backfill_as_dems_arrive() {
 }
 
 /// The DEMs of tiles `left` and `right`, neighbours in a row.
-fn dems(tiles: &OneTile, left: &OverscaledTileID, right: &OverscaledTileID) -> [Arc<HillshadeBucket>; 2] {
+fn dems<'a>(tiles: &'a OneTile, left: &OverscaledTileID, right: &OverscaledTileID) -> [&'a HillshadeBucket; 2] {
     [left, right].map(|id| match tiles.tile_at(id).contents() {
-        Some(Contents::Dem(bucket)) => Arc::clone(bucket),
+        Some(Contents::Dem(bucket)) => bucket,
         _ => panic!("a DEM"),
     })
 }

@@ -3,40 +3,55 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use mln_gfx::index_vector::{IndexVectorBase, IndexVectorBasePtr};
+use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shader_group::{ShaderGroupPtr, StringIDSetsPair};
+use mln_gfx::shaders::fill_layer_ubo::{
+    FillDrawableUBO, FillDrawableUnionUBO, FillEvaluatedPropsUBO, FillOutlineDrawableUBO, FillPatternDrawableUBO,
+    FillPatternTilePropsUBO, FillTilePropsUnionUBO,
+};
+use mln_gfx::shaders::layer_ubo::ProjectionUBO;
+use mln_gfx::shaders::segment::SegmentBase;
 use mln_gfx::shaders::shader_defines::{
-    ID_FILL_COLOR_VERTEX_ATTRIBUTE, ID_FILL_IMAGE_TEXTURE, ID_FILL_OUTLINE_END_ATTRIBUTE,
-    ID_FILL_OUTLINE_POS_ATTRIBUTE, ID_FILL_POS_VERTEX_ATTRIBUTE,
+    ID_FILL_COLOR_VERTEX_ATTRIBUTE, ID_FILL_DRAWABLE_UBO, ID_FILL_EVALUATED_PROPS_UBO, ID_FILL_IMAGE_TEXTURE,
+    ID_FILL_OUTLINE_END_ATTRIBUTE, ID_FILL_OUTLINE_POS_ATTRIBUTE, ID_FILL_POS_VERTEX_ATTRIBUTE, ID_FILL_TILE_PROPS_UBO,
+    ID_PROJECTION_UBO,
 };
+use mln_gfx::shaders::shader_program::ShaderProgramPtr;
 use mln_gfx::vertex_vector::VertexVectorBasePtr;
-use mln_gfx::{
-    AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DrawMode, ShaderRegistry, VertexAttributeArray,
-    VertexAttributeArrayPtr,
-};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DrawMode, VertexAttributeArray};
 use mln_map_types::TransformState;
 use mln_style::PropertyEvaluationParameters;
 use mln_style::layer_type::LayerStyle;
 use mln_style::layers::Fill;
 use mln_style::layers::fill_layer_properties::FillPaintProperties;
+use mln_style_types::AlignmentType;
 use mln_util::Color;
+use mln_util::constants::TILE_SIZE_D;
 use mln_util::error::Error;
+use mln_util::identity::SimpleIdentity;
+use mln_util::size::Size;
 
-use super::fill_layer_tweaker::FillLayerTweaker;
-use super::{DrawableBinders, DrawableRenderTile, refresh_if_bucket_updated, shared_vertices, update_tile};
+use super::{cast_matrix, refresh_paint_attributes, shared_vertices};
+use crate::bucket::Bucket;
 use crate::bucket_geometry::{bucket_indexes, bucket_vertices, paint_vertices};
 use crate::buckets::fill_bucket::{FillBinders, FillBucket, FillLayoutVertex};
-use crate::drawable_builder::{DrawableBuilder, UniqueDrawableBuilder};
+use crate::draw::{DrawGeometry, DrawObjects, copy_shared_attributes};
+use crate::gfx::atlas_binding::AtlasBinding;
 use crate::gfx::context::Context;
 use crate::layer_composite::Composite;
-use crate::layer_group::LayerGroup;
+use crate::layer_drawing::{DrawDepth, DrawList, DrawObjectsMut, FrameDraw, TileDraws, TileObjects, UniformWriter};
 use crate::layer_type::{EvaluatedLayer, LayerType};
 use crate::layout::layout::{LayoutParameters, SourceLayer};
 use crate::layout::pattern_layout::{FillLayoutSpec, PatternLayout, uses_pattern};
 use crate::paint_parameters::PaintParameters;
 use crate::paint_property_binder::read_data_driven_paint_property;
-use crate::render_layer::{LayerValues, RenderLayer, RenderLayerBase, TypedLayer};
+use crate::render_layer::{
+    LayerParts, LayerSource, LayerValues, Parts, PartsMut, RenderLayer, RenderLayerBase, TypedLayer,
+};
 use crate::render_pass::RenderPass;
 use crate::render_static_data::RenderStaticData;
+use crate::render_tile::FrameTile;
+use crate::tile_matrix::{get_projection_data, to_projection_ubo};
 use crate::update_parameters::UpdateParameters;
 
 const FILL_SHADER_NAME: &str = "FillShader";
@@ -47,36 +62,266 @@ const FILL_OUTLINE_INSTANCED_SHADER_NAME: &str = "FillOutlineInstancedShader";
 const FILL_OUTLINE_PATTERN_INSTANCED_SHADER_NAME: &str = "FillOutlinePatternInstancedShader";
 
 /// The outlines' line width, which the style spec doesn't give. GL JS sets
-/// none, so it draws 1 px; C++ draws 2 px on OpenGL. The outline shaders
-/// fade the pixels on both sides of a fill's edge by their distance from it,
-/// and the render tests' expected images have both. A device that draws no
-/// lines this wide draws each segment of an outline as an instance of a
-/// quad, which the instanced outline shaders lay over the pixels such a line
-/// covers. One that rasterizes on the CPU, where an instance costs about as
-/// much as a draw, draws its 1 px lines instead.
+/// none, so it draws 1 px; MapLibre Native draws 2 px on OpenGL. The outline
+/// shaders fade the pixels on both sides of a fill's edge by their distance
+/// from it, and the render tests' expected images have both. A device that
+/// draws no lines this wide draws each segment of an outline as an instance
+/// of a quad, which the instanced outline shaders lay over the pixels such a
+/// line covers. One that rasterizes on the CPU, where an instance costs about
+/// as much as a draw, draws its 1 px lines instead.
 const LINE_WIDTH: f32 = 2.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum FillVariant {
-    Fill,
-    FillPattern,
-    FillOutline,
-    FillOutlinePattern,
+/// Whether the layer draws the outlines as instanced quads, which read the
+/// buckets' outline ends, rather than as lines (`LINE_WIDTH`).
+pub(crate) fn draws_outline_quads(context: &Context) -> bool {
+    let caps = context.caps();
+    caps.max_line_width < LINE_WIDTH && !caps.cpu_rasterizer
 }
 
-impl FillVariant {
-    /// The fill variant of a drawable type; `None` for other types, which the
-    /// tweaker handles in its fallback arm.
-    #[must_use]
-    pub(crate) fn from_type(type_: usize) -> Option<FillVariant> {
-        match type_ {
-            0 => Some(FillVariant::Fill),
-            1 => Some(FillVariant::FillPattern),
-            2 => Some(FillVariant::FillOutline),
-            3 => Some(FillVariant::FillOutlinePattern),
-            _ => None,
+/// The pass the layer's draws draw in.
+const RENDER_PASS: RenderPass = RenderPass::Translucent;
+
+/// A draw the layer keeps of a tile.
+struct FillDraw {
+    /// The id of the draw's GPU objects, made with them.
+    id: SimpleIdentity,
+    objects: DrawObjects,
+    /// The sub-layer of the layer's depth the draw is at.
+    sub_layer: u8,
+    depth: DepthMaskType,
+}
+
+impl FillDraw {
+    /// A draw of `geometry` with `shader` and the layer's color and cull
+    /// modes, which binds the textures of `atlases`.
+    fn new(
+        shader: ShaderProgramPtr,
+        sub_layer: u8,
+        depth: DepthMaskType,
+        geometry: DrawGeometry,
+        atlases: Option<&AtlasBinding>,
+    ) -> FillDraw {
+        let textures = atlases.map(|atlases| atlases.textures(&shader)).unwrap_or_default();
+        let objects =
+            DrawObjects::new(shader, ColorMode::alpha_blended(), CullFaceMode::disabled(), geometry, textures);
+        FillDraw { id: SimpleIdentity::new(), objects, sub_layer, depth }
+    }
+}
+
+/// The geometry of `vertex_count` vertices in `vertices`, and the `segments`
+/// of `indexes` drawn as `mode`, without instances; with no segments, it
+/// draws nothing and has no vertices.
+fn fill_geometry(
+    vertices: VertexAttributeArray,
+    vertex_count: usize,
+    mode: DrawMode,
+    indexes: IndexVectorBasePtr,
+    segments: &[SegmentBase],
+) -> DrawGeometry {
+    DrawGeometry {
+        vertices,
+        vertex_count: if segments.is_empty() { 0 } else { vertex_count },
+        mode,
+        indexes,
+        segments: segments.iter().map(SegmentBase::copy).collect(),
+        instances: None,
+    }
+}
+
+/// What the layer keeps of a tile: its fill and its outline, as they were
+/// built for the tile's bucket.
+pub(crate) struct FillTile {
+    /// Whether the draws fill with the layer's pattern.
+    pattern: bool,
+    /// The fill of the bucket's triangles, if it has any.
+    fill: Option<FillDraw>,
+    /// The outline of the bucket's lines, if the layer outlines and the
+    /// bucket has any.
+    outline: Option<FillDraw>,
+    /// Gives the pattern draws the texture of the tile's icon atlas.
+    atlases: Option<AtlasBinding>,
+}
+
+/// Which of a tile's draws a frame's draw draws.
+#[derive(Clone, Copy)]
+pub(crate) enum FillPart {
+    Fill,
+    Outline,
+}
+
+impl TileObjects for FillTile {
+    type Part = FillPart;
+
+    fn objects(&mut self, part: FillPart) -> Option<DrawObjectsMut<'_>> {
+        let draw = match part {
+            FillPart::Fill => &mut self.fill,
+            FillPart::Outline => &mut self.outline,
+        };
+        Some(DrawObjectsMut { objects: &mut draw.as_mut()?.objects, atlases: self.atlases.as_ref() })
+    }
+}
+
+/// A draw's entries in the layer's storage buffers.
+struct FillUniforms {
+    draw_ubo: FillDrawableUnionUBO,
+    tile_props: FillTilePropsUnionUBO,
+    projection: ProjectionUBO,
+}
+
+/// The instanced outlines' quad: its vertices and indexes, and the vertex
+/// attributes every instanced outline reads of it.
+struct OutlineQuad {
+    vertices: VertexVectorBasePtr,
+    indexes: IndexVectorBasePtr,
+    attributes: VertexAttributeArray,
+}
+
+impl OutlineQuad {
+    /// The quad, whose corners every instanced outline reads per vertex.
+    fn new() -> OutlineQuad {
+        let vertices = shared_vertices(&RenderStaticData::fill_outline_vertices());
+        let indexes = Rc::new(RefCell::new(IndexVectorBase::new(RenderStaticData::quad_triangle_indices())));
+        let mut attributes = VertexAttributeArray::new();
+        if let Some(attr) = attributes.set(ID_FILL_POS_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            let stride = size_of::<[i16; 2]>() as u32;
+            attr.set_shared_raw_data(Some(Rc::clone(&vertices)), 0, 0, stride, AttributeDataType::Short2);
         }
+        OutlineQuad { vertices, indexes, attributes }
+    }
+}
+
+/// What building the draws of an update's tiles reads of the layer.
+struct TileBuilder<'a> {
+    /// The shaders of the fills and the outlines, with or without a
+    /// pattern.
+    fill_shaders: &'a ShaderGroupPtr,
+    outline_shaders: &'a ShaderGroupPtr,
+    /// Whether the layer fills with a pattern.
+    pattern: bool,
+    /// Whether the layer's outline color is its fill color.
+    outline_is_fill_color: bool,
+    projection_variant: ProjectionVariant,
+    /// The quad of the instanced outlines, on a device that draws them.
+    outline_quad: Option<&'a OutlineQuad>,
+    /// The depth mask of the fills without a pattern, which the first tile
+    /// they are built for sets.
+    fill_depth: Option<DepthMaskType>,
+}
+
+impl TileBuilder<'_> {
+    /// The draws of `tile`'s `bucket`, laid out with `evaluated`, if it has
+    /// any to draw.
+    fn build(
+        &mut self,
+        tile: FrameTile<'_>,
+        bucket: &FillBucket,
+        binders: &FillBinders,
+        evaluated: &FillPaintProperties::PossiblyEvaluated,
+    ) -> Option<FillTile> {
+        let geometry = tile.bucket_geometry();
+        let mut properties_as_uniforms = StringIDSetsPair::default();
+        let paint = paint_vertices(geometry, &binders.interleaved_vertex_buffer, binders.depends_on_feature_state());
+        let mut vertex_attrs = VertexAttributeArray::new();
+        read_fill_attributes(&mut vertex_attrs, binders, &paint, evaluated, &mut properties_as_uniforms);
+
+        let fill_vertex_count = bucket.vertices.len();
+        if let Some(attr) = vertex_attrs.set(ID_FILL_POS_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
+            attr.set_shared_raw_data(
+                Some(bucket_vertices(geometry, &bucket.vertices)),
+                0, // offsetof(FillLayoutVertex, a1)
+                /*vertexOffset=*/ 0,
+                size_of::<FillLayoutVertex>() as u32,
+                AttributeDataType::Short2,
+            );
+        }
+
+        // The outline draws in the fill color unless it has one of its own,
+        // which a pattern doesn't default to.
+        let do_outline = *evaluated.fill_antialias.uniform() && (!self.pattern || self.outline_is_fill_color);
+        let fill_shader = self.fill_shaders.shader(&properties_as_uniforms, self.projection_variant);
+        let outline_shader =
+            do_outline.then(|| self.outline_shaders.shader(&properties_as_uniforms, self.projection_variant));
+
+        let (fill_depth, outline_sub_layer) = if self.pattern {
+            (DepthMaskType::ReadWrite, 2)
+        } else {
+            // Only opaque fills write depth, as `fillRenderPass` does in
+            // legacy rendering.
+            let opaque = evaluated.fill_color.constant_or(&Color::default()).a >= 1.0
+                && evaluated.fill_opacity.constant_or(&0.0) >= 1.0;
+            let depth = if opaque { DepthMaskType::ReadWrite } else { DepthMaskType::ReadOnly };
+            (*self.fill_depth.get_or_insert(depth), if self.outline_is_fill_color { 2 } else { 0 })
+        };
+        if fill_vertex_count == 0 {
+            return None;
+        }
+
+        let atlases = tile.atlas_textures().filter(|atlases| self.pattern && atlases.icon().is_some());
+        let atlases = atlases.map(|atlases| {
+            AtlasBinding::new(
+                Some(Rc::clone(atlases)),
+                None,
+                Some(ID_FILL_IMAGE_TEXTURE),
+                /*is_text*/ false,
+                /*sdf_icons*/ true, // to force linear filter
+                AlignmentType::Auto,
+                /*icon_scaled*/ false,
+                /*text_size_is_zoom_constant*/ false,
+            )
+        });
+
+        let fill = (!bucket.triangles.is_empty()).then(|| {
+            // The fill and a line outline read the same attributes.
+            let fill_geometry = fill_geometry(
+                copy_shared_attributes(&vertex_attrs),
+                fill_vertex_count,
+                DrawMode::Triangles(),
+                bucket_indexes(geometry, &bucket.triangles),
+                &bucket.triangle_segments,
+            );
+            FillDraw::new(fill_shader, 1, fill_depth, fill_geometry, atlases.as_ref())
+        });
+
+        // The bucket's lines, or an instance of the quad for each vertex,
+        // from it to its outline end.
+        let outline = outline_shader.filter(|_| !bucket.basic_lines.is_empty()).map(|shader| {
+            if let Some(quad) = self.outline_quad {
+                let stride = size_of::<FillLayoutVertex>() as u32;
+                let mut instance_attrs = VertexAttributeArray::new();
+                read_fill_attributes(&mut instance_attrs, binders, &paint, evaluated, &mut Default::default());
+                for (id, ends) in [
+                    (ID_FILL_OUTLINE_POS_ATTRIBUTE, &bucket.vertices),
+                    (ID_FILL_OUTLINE_END_ATTRIBUTE, &bucket.outline_ends),
+                ] {
+                    if let Some(attr) = instance_attrs.set(id, -1, AttributeDataType::Invalid, 0) {
+                        let ends = bucket_vertices(geometry, ends);
+                        attr.set_shared_raw_data(Some(ends), 0, 0, stride, AttributeDataType::Short2);
+                    }
+                }
+                let quad_geometry = DrawGeometry {
+                    instances: Some(instance_attrs),
+                    ..fill_geometry(
+                        copy_shared_attributes(&quad.attributes),
+                        quad.vertices.get_raw_count(),
+                        DrawMode::Triangles(),
+                        Rc::clone(&quad.indexes),
+                        &[RenderStaticData::fill_outline_segment(fill_vertex_count)],
+                    )
+                };
+                FillDraw::new(shader, outline_sub_layer, DepthMaskType::ReadOnly, quad_geometry, atlases.as_ref())
+            } else {
+                let line_geometry = fill_geometry(
+                    copy_shared_attributes(&vertex_attrs),
+                    fill_vertex_count,
+                    DrawMode::Lines(LINE_WIDTH),
+                    bucket_indexes(geometry, &bucket.basic_lines),
+                    &bucket.basic_line_segments,
+                );
+                FillDraw::new(shader, outline_sub_layer, DepthMaskType::ReadOnly, line_geometry, atlases.as_ref())
+            }
+        });
+
+        (fill.is_some() || outline.is_some()).then_some(FillTile { pattern: self.pattern, fill, outline, atlases })
     }
 }
 
@@ -162,6 +407,9 @@ impl LayerType for Fill {
 pub(crate) struct RenderFillLayer {
     base: RenderLayerBase,
     values: LayerValues<Fill>,
+    drawing: TileDraws<FillTile>,
+    /// The frame's draws as the update makes them.
+    draw_list: DrawList<FillUniforms, FillPart>,
 
     fill_shader_group: Option<ShaderGroupPtr>,
     /// The outline shaders: the line ones, or the instanced ones on a
@@ -170,9 +418,9 @@ pub(crate) struct RenderFillLayer {
     pattern_shader_group: Option<ShaderGroupPtr>,
     outline_pattern_shader_group: Option<ShaderGroupPtr>,
 
-    /// The instanced outlines' quad (`RenderStaticData::fill_outline_vertices`).
-    outline_quad_vertices: Option<VertexVectorBasePtr>,
-    outline_quad_indices: Option<IndexVectorBasePtr>,
+    /// The instanced outlines' quad (`RenderStaticData::fill_outline_vertices`),
+    /// from the first update on a device that draws them.
+    outline_quad: Option<OutlineQuad>,
 }
 
 impl RenderFillLayer {
@@ -181,25 +429,155 @@ impl RenderFillLayer {
         RenderFillLayer {
             base,
             values,
+            drawing: TileDraws::default(),
+            draw_list: DrawList::default(),
             fill_shader_group: None,
             outline_shader_group: None,
             pattern_shader_group: None,
             outline_pattern_shader_group: None,
-            outline_quad_vertices: None,
-            outline_quad_indices: None,
+            outline_quad: None,
         }
+    }
+
+    /// The entries in the layer's storage buffers of `draw`, the fill or the
+    /// `outline` of `tile`, with or without a `pattern`, of the layer
+    /// `layer_id` with the values `layer`: its matrix and the interpolation
+    /// of the layer's values, and for a pattern, where the pattern is in the
+    /// tile's atlas. `None` for a pattern while the tile has no atlas.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the layer, the draw, its tile and bucket, and the frame's parameters"
+    )]
+    fn uniforms(
+        layer_id: &str,
+        layer: &EvaluatedLayer<Fill>,
+        tile: FrameTile<'_>,
+        bucket: &FillBucket,
+        binders: &FillBinders,
+        pattern: bool,
+        draw: &FillDraw,
+        outline: bool,
+        parameters: &PaintParameters<'_>,
+    ) -> Option<FillUniforms> {
+        const IN_VIEWPORT_PIXEL_UNITS: bool = false; // from RenderTile::translatedMatrix
+        const NEAR_CLIPPED: bool = false;
+        let evaluated = &layer.paint;
+        let zoom = parameters.state.get_zoom() as f32;
+        let tile_id = tile.id().to_unwrapped();
+
+        let projection = get_projection_data(
+            &tile_id,
+            parameters,
+            *evaluated.fill_translate.uniform(),
+            *evaluated.fill_translate_anchor.uniform(),
+            NEAR_CLIPPED,
+            IN_VIEWPORT_PIXEL_UNITS,
+            None,
+            false,
+        );
+        let matrix = cast_matrix(&projection.fallback_matrix);
+        let mut uniforms = FillUniforms {
+            draw_ubo: FillDrawableUnionUBO::default(),
+            tile_props: FillTilePropsUnionUBO::default(),
+            projection: to_projection_ubo(&projection),
+        };
+
+        if !pattern {
+            if outline {
+                uniforms.draw_ubo.set_fill_outline(&FillOutlineDrawableUBO {
+                    matrix,
+                    outline_color_t: binders.fill_outline_color.interpolation_factor(zoom),
+                    opacity_t: binders.fill_opacity.interpolation_factor(zoom),
+                    pad1: 0.0,
+                    pad2: 0.0,
+                });
+            } else {
+                uniforms.draw_ubo.set_fill(&FillDrawableUBO {
+                    matrix,
+                    color_t: binders.fill_color.interpolation_factor(zoom),
+                    opacity_t: binders.fill_opacity.interpolation_factor(zoom),
+                    pad1: 0.0,
+                    pad2: 0.0,
+                });
+            }
+            return Some(uniforms);
+        }
+
+        // from FillPatternProgram::layoutUniformValues
+        let state = parameters.state;
+        let int_zoom = state.get_integer_zoom();
+        let tile_ratio = 1.0f32 / tile_id.pixels_to_tile_units(1.0, f32::from(int_zoom));
+        let tile_size_at_nearest_zoom =
+            (TILE_SIZE_D * state.zoom_scale(f64::from(int_zoom) - f64::from(tile_id.canonical.z))) as i32;
+        let pixel_x = (f64::from(tile_size_at_nearest_zoom)
+            * (f64::from(tile_id.canonical.x)
+                + f64::from(tile_id.wrap) * state.zoom_scale(f64::from(tile_id.canonical.z))))
+            as i32;
+        let pixel_y = tile_size_at_nearest_zoom.wrapping_mul(tile_id.canonical.y as i32);
+        uniforms.draw_ubo.set_fill_pattern(&FillPatternDrawableUBO {
+            matrix,
+            pixel_coord_upper: [(pixel_x >> 16) as f32, (pixel_y >> 16) as f32],
+            pixel_coord_lower: [(pixel_x & 0xFFFF) as f32, (pixel_y & 0xFFFF) as f32],
+            tile_ratio,
+            pattern_from_t: binders.fill_pattern.interpolation_factor(zoom).0,
+            pattern_to_t: binders.fill_pattern.interpolation_factor(zoom).0,
+            opacity_t: binders.fill_opacity.interpolation_factor(zoom),
+            color_t: binders.fill_color.interpolation_factor(zoom),
+            pad1: 0.0,
+            pad2: 0.0,
+            pad3: 0.0,
+        });
+
+        let faded = evaluated.fill_pattern.faded();
+        let tlbr = |id: &str| tile.pattern(id).map_or([0.0; 4], |position| position.tlbr().map(f32::from));
+        let texture = draw.objects.texture(ID_FILL_IMAGE_TEXTURE);
+        let texture_size = texture.map_or(Size::new(0, 0), |texture| texture.borrow().size());
+        // A pattern has nothing to sample before its tile has an atlas, and
+        // the shaders divide by the atlas size.
+        if texture_size.width == 0 || texture_size.height == 0 {
+            return None;
+        }
+        uniforms.tile_props.fill_pattern_tile_props_ubo = FillPatternTilePropsUBO {
+            pattern_from: tlbr(faded.from.id()),
+            pattern_to: tlbr(faded.to.id()),
+            texsize: [texture_size.width as f32, texture_size.height as f32],
+            sdf: if bucket.is_sdf_pattern(layer_id) { 1.0 } else { 0.0 },
+            pad2: 0.0,
+        };
+        Some(uniforms)
+    }
+
+    /// Writes the layer's buffers of the frame's draws.
+    fn write_uniforms(layer: &EvaluatedLayer<Fill>, writer: &mut UniformWriter<'_, FillUniforms>) {
+        let evaluated = &layer.paint;
+        let props = FillEvaluatedPropsUBO {
+            color: evaluated.fill_color.constant_or(&FillPaintProperties::Defaults::fill_color()).to_float_array(),
+            outline_color: evaluated
+                .fill_outline_color
+                .constant_or(&FillPaintProperties::Defaults::fill_outline_color())
+                .to_float_array(),
+            opacity: evaluated.fill_opacity.constant_or(&FillPaintProperties::Defaults::fill_opacity()),
+            fade: layer.crossfade.t,
+            from_scale: layer.crossfade.from_scale,
+            to_scale: layer.crossfade.to_scale,
+        };
+        writer.uniform(ID_FILL_EVALUATED_PROPS_UBO, &props);
+        writer.storage(ID_FILL_DRAWABLE_UBO, |uniforms| uniforms.draw_ubo);
+        writer.storage(ID_FILL_TILE_PROPS_UBO, |uniforms| uniforms.tile_props);
+        writer.storage(ID_PROJECTION_UBO, |uniforms| uniforms.projection);
     }
 }
 
 impl TypedLayer for RenderFillLayer {
     type Type = Fill;
+    type Drawing = TileDraws<FillTile>;
 
-    fn parts(&self) -> (&RenderLayerBase, &LayerValues<Fill>) {
-        (&self.base, &self.values)
+    fn parts(&self) -> Parts<'_, Self> {
+        Parts { base: &self.base, values: &self.values, drawing: &self.drawing }
     }
 
-    fn parts_mut(&mut self) -> (&mut RenderLayerBase, &mut LayerValues<Fill>) {
-        (&mut self.base, &mut self.values)
+    fn parts_mut(&mut self) -> PartsMut<'_, Self> {
+        PartsMut { base: &mut self.base, values: &mut self.values, drawing: &mut self.drawing }
     }
 }
 
@@ -253,395 +631,154 @@ impl RenderLayer for RenderFillLayer {
         )
     }
 
+    /// Makes the frame's draws of the layer, those of each of its tiles,
+    /// which it builds for a tile it keeps none of, and writes the layer's
+    /// buffers they read.
     fn update(
         &mut self,
-        shaders: &ShaderRegistry,
-        context: &Context,
-        state: &TransformState,
-        _update_parameters: &Arc<UpdateParameters>,
-        _paint_parameters: &PaintParameters<'_>,
+        paint_parameters: &PaintParameters<'_>,
+        _update_parameters: &UpdateParameters,
+        source: Option<LayerSource<'_>>,
     ) {
-        let Some(render_tiles) = self.base.render_tiles.clone().filter(|t| !t.is_empty()) else {
-            self.remove_all_drawables();
+        let tiles = source.and_then(LayerSource::tiles);
+        let (shaders, context, state) =
+            (&paint_parameters.static_data.shaders, paint_parameters.context, paint_parameters.state);
+        let Some(render_tiles) = tiles.filter(|tiles| !tiles.is_empty()) else {
+            self.remove_all_draws();
             return;
         };
 
-        if self.base.layer_tweaker.is_none() {
-            self.base.layer_tweaker = Some(Box::new(FillLayerTweaker::new(
-                self.get_id().to_owned(),
-                Arc::clone(&self.base.evaluated_properties),
-            )));
-        }
-
         self.update_projection_variant(state);
 
-        if self.fill_shader_group.is_none() {
-            self.fill_shader_group = shaders.shader_group(FILL_SHADER_NAME);
-        }
-        let caps = context.caps();
-        let outline_quads = caps.max_line_width < LINE_WIDTH && !caps.cpu_rasterizer;
+        let outline_quads = draws_outline_quads(context);
+        let pattern = !self.values.unevaluated.fill_pattern.is_undefined();
         let (outline_name, outline_pattern_name) = if outline_quads {
             (FILL_OUTLINE_INSTANCED_SHADER_NAME, FILL_OUTLINE_PATTERN_INSTANCED_SHADER_NAME)
         } else {
             (FILL_OUTLINE_SHADER_NAME, FILL_OUTLINE_PATTERN_SHADER_NAME)
         };
-        if self.outline_shader_group.is_none() {
-            self.outline_shader_group = shaders.shader_group(outline_name);
+        let (fill_group, fill_name, outline_group, outline_name) = if pattern {
+            let outline = &mut self.outline_pattern_shader_group;
+            (&mut self.pattern_shader_group, FILL_PATTERN_SHADER_NAME, outline, outline_pattern_name)
+        } else {
+            (&mut self.fill_shader_group, FILL_SHADER_NAME, &mut self.outline_shader_group, outline_name)
+        };
+        if fill_group.is_none() {
+            *fill_group = shaders.shader_group(fill_name);
         }
-        if self.pattern_shader_group.is_none() {
-            self.pattern_shader_group = shaders.shader_group(FILL_PATTERN_SHADER_NAME);
+        if outline_group.is_none() {
+            *outline_group = shaders.shader_group(outline_name);
         }
-        if self.outline_pattern_shader_group.is_none() {
-            self.outline_pattern_shader_group = shaders.shader_group(outline_pattern_name);
-        }
-        let (Some(fill_shader_group), Some(outline_shader_group), Some(_), Some(_)) = (
-            self.fill_shader_group.clone(),
-            self.outline_shader_group.clone(),
-            self.pattern_shader_group.clone(),
-            self.outline_pattern_shader_group.clone(),
-        ) else {
-            self.remove_all_drawables();
+        let (Some(fill_shaders), Some(outline_shaders)) = (&*fill_group, &*outline_group) else {
+            self.remove_all_draws();
             return;
         };
 
-        let mut fill_builder: Option<UniqueDrawableBuilder> = None;
-        let mut outline_builder: Option<UniqueDrawableBuilder> = None;
-        // conformance: fill-pattern
-        let mut pattern_builder: Option<UniqueDrawableBuilder> = None;
-        let mut outline_pattern_builder: Option<UniqueDrawableBuilder> = None;
-
-        let render_pass = RenderPass::Translucent;
-
-        let common_init = |builder: &mut DrawableBuilder| {
-            builder.set_cull_face_mode(CullFaceMode::disabled());
-            builder.set_enable_stencil(true);
-        };
-
-        // The layer's group, which this fills, and puts back when it's done.
-        let mut layer_group = self.base.layer_group.take().unwrap_or_else(LayerGroup::tiles);
-        {
-            let paint = &self.values.evaluated.paint;
-            layer_group.composite =
-                Composite::of(*paint.fill_layer_opacity.uniform(), *paint.fill_layer_blend.uniform());
-            let base = &self.base;
-            // If the render pass has changed or the tile has dropped out of
-            // the cover set, remove it.
-            layer_group.remove_drawables_if(|drawable| {
-                drawable.tile_id.is_some_and(|id| !base.render_tile_ids.contains_key(&id))
-            });
-
-            layer_group.stencil_tiles = Some(Rc::new(render_tiles.iter().map(|tile| tile.id).collect()));
+        if outline_quads && self.outline_quad.is_none() {
+            self.outline_quad = Some(OutlineQuad::new());
         }
 
-        // The quad's corners, which every instanced outline reads per vertex.
-        let outline_quad = outline_quads.then(|| {
-            let vertices = Rc::clone(
-                self.outline_quad_vertices
-                    .get_or_insert_with(|| shared_vertices(&RenderStaticData::fill_outline_vertices())),
-            );
-            let indices = Rc::clone(self.outline_quad_indices.get_or_insert_with(|| {
-                Rc::new(RefCell::new(IndexVectorBase::new(RenderStaticData::quad_triangle_indices())))
-            }));
-            let mut attributes = VertexAttributeArray::new();
-            if let Some(attr) = attributes.set(ID_FILL_POS_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0) {
-                let stride = size_of::<[i16; 2]>() as u32;
-                attr.set_shared_raw_data(Some(Rc::clone(&vertices)), 0, 0, stride, AttributeDataType::Short2);
-            }
-            (vertices, indices, Rc::new(RefCell::new(attributes)))
-        });
+        let mut builder = TileBuilder {
+            fill_shaders,
+            outline_shaders,
+            pattern,
+            outline_is_fill_color: self.values.unevaluated.fill_outline_color.is_undefined(),
+            projection_variant: self.base.projection_variant,
+            outline_quad: self.outline_quad.as_ref().filter(|_| outline_quads),
+            fill_depth: None,
+        };
 
-        let tweaker = self.base.layer_tweaker.as_ref().map(|tweaker| tweaker.base().key);
-        let mut properties_as_uniforms: StringIDSetsPair = Default::default();
+        let layer_id = self.base.style.base().id.as_str();
+        let layer = &*self.values.evaluated;
         for tile in render_tiles.iter() {
-            let tile_id = *tile.get_overscaled_tile_id();
-
-            let style = Arc::clone(&self.base.style);
-            let render_data = super::render_data_for_pass(tile, &*style, render_pass);
-            let Some(render_data) = render_data.filter(|r| r.bucket.has_data()) else {
-                layer_group.remove_drawables(render_pass, &tile_id);
+            let tile_id = tile.id();
+            let Some(mut entry) = self.drawing.tiles_mut().entry(&tile_id) else {
                 continue;
             };
 
+            let render_data = super::layer_bucket_for_pass(tile, &*self.base.style, RENDER_PASS);
+            let Some(render_data) = render_data.filter(|r| r.bucket.has_data()) else {
+                *entry.value = None;
+                continue;
+            };
             let Some(bucket) = render_data.bucket::<Fill>() else {
                 continue;
             };
-            let Some(binders_lock) = bucket.paint_property_binders.get(self.get_id()) else {
+            let Some(binders) = bucket.paint_property_binders.get(layer_id) else {
                 continue;
             };
-            let binders_guard = binders_lock.read();
-            let binders = &*binders_guard;
 
-            let prev_bucket_id = self.get_render_tile_bucket_id(&tile_id);
-            if prev_bucket_id.is_some_and(|prev| prev != bucket.base.bucket_id) {
-                // This tile was previously set up from a different bucket,
-                // drop and re-create any drawables for it.
-                layer_group.remove_drawables(render_pass, &tile_id);
-            }
-            self.set_render_tile_bucket_id(&tile_id, bucket.base.bucket_id);
+            // Draws built from another bucket go.
+            entry.set_bucket(bucket.base.bucket_id);
 
             let Some(evaluated) = render_data.layer::<Fill>().map(|layer| &layer.paint) else {
                 continue;
             };
-            let geometry = tile.get_bucket_geometry();
-            let paint_of = || {
-                paint_vertices(geometry, bucket, &binders.interleaved_vertex_buffer, binders.depends_on_feature_state())
-            };
 
-            // (getAtlasTweaker: in the pattern branch.)
-
-            // Drawables' stored attributes point directly into the bucket's
-            // shared vectors; the backend upload guard fires automatically
-            // when those change.
-            let update_existing = |drawable: &mut crate::drawable::Drawable| {
-                let current = drawable.tweaker == tweaker;
-                if current {
-                    refresh_if_bucket_updated(drawable, |attrs| {
-                        read_fill_attributes(attrs, binders, &paint_of(), evaluated, &mut Default::default());
-                    });
+            // The draws' attributes point into the bucket's shared vectors,
+            // which upload again when they change.
+            let changes = entry.take_changes();
+            if let Some(cached) = entry.value.as_mut() {
+                let geometry = tile.bucket_geometry();
+                let refresh = |attrs: &mut VertexAttributeArray| {
+                    let buffer = &binders.interleaved_vertex_buffer;
+                    let paint = paint_vertices(geometry, buffer, binders.depends_on_feature_state());
+                    read_fill_attributes(attrs, binders, &paint, evaluated, &mut Default::default());
+                };
+                if let Some(fill) = &mut cached.fill {
+                    refresh_paint_attributes(&mut fill.objects, changes, refresh);
                 }
-                current
-            };
-            if update_tile(&mut layer_group, render_pass, &tile_id, update_existing) {
-                continue;
-            }
-            if outline_quad.is_none() {
-                // Only the instanced outlines read the outline ends.
-                bucket.outline_ends.discard();
-            }
-
-            properties_as_uniforms.0.clear();
-            properties_as_uniforms.1.clear();
-
-            // `Fill*Program` all use `style::FillPaintProperties`
-            let paint = paint_of();
-            let vertex_attrs: VertexAttributeArrayPtr = VertexAttributeArray::new_ptr();
-            read_fill_attributes(
-                &mut vertex_attrs.borrow_mut(),
-                binders,
-                &paint,
-                evaluated,
-                &mut properties_as_uniforms,
-            );
-
-            // Outline always occurs in translucent pass, defaults to fill
-            // color. Outline does not default to fill in the pattern case
-            let do_outline = *evaluated.fill_antialias.uniform()
-                && (self.values.unevaluated.fill_pattern.is_undefined()
-                    || self.values.unevaluated.fill_outline_color.is_undefined());
-
-            let fill_vertex_count = bucket.vertices.len();
-
-            if let Some(attr) =
-                vertex_attrs.borrow_mut().set(ID_FILL_POS_VERTEX_ATTRIBUTE, -1, AttributeDataType::Invalid, 0)
-            {
-                attr.set_shared_raw_data(
-                    Some(bucket_vertices(geometry, bucket, &bucket.vertices)),
-                    0, // offsetof(FillLayoutVertex, a1)
-                    /*vertexOffset=*/ 0,
-                    size_of::<FillLayoutVertex>() as u32,
-                    AttributeDataType::Short2,
-                );
-            }
-
-            // The outline: the bucket's lines, or an instance of the quad for
-            // each vertex, from it to its outline end.
-            let set_outline_geometry = |builder: &mut DrawableBuilder| {
-                let stride = size_of::<FillLayoutVertex>() as u32;
-                if let Some((quad_vertices, quad_indices, quad_attributes)) = &outline_quad {
-                    let mut instance_attrs = VertexAttributeArray::new();
-                    read_fill_attributes(&mut instance_attrs, binders, &paint, evaluated, &mut Default::default());
-                    for (id, ends) in [
-                        (ID_FILL_OUTLINE_POS_ATTRIBUTE, &bucket.vertices),
-                        (ID_FILL_OUTLINE_END_ATTRIBUTE, &bucket.outline_ends),
-                    ] {
-                        if let Some(attr) = instance_attrs.set(id, -1, AttributeDataType::Invalid, 0) {
-                            let ends = bucket_vertices(geometry, bucket, ends);
-                            attr.set_shared_raw_data(Some(ends), 0, 0, stride, AttributeDataType::Short2);
+                if let Some(outline) = &mut cached.outline {
+                    match &cached.fill {
+                        // A line outline reads the fill's attributes, and so
+                        // binds the buffers the fill uploads.
+                        Some(fill) if changes.paint && !outline.objects.has_instances() => {
+                            outline.objects.share_vertex_attributes(&fill.objects);
                         }
+                        _ => refresh_paint_attributes(&mut outline.objects, changes, refresh),
                     }
-                    builder.set_raw_vertices(Vec::new(), quad_vertices.get_raw_count(), AttributeDataType::Short2);
-                    builder.set_vertex_attributes(Some(Rc::clone(quad_attributes)));
-                    builder.set_instance_attributes(Some(Rc::new(RefCell::new(instance_attrs))));
-                    builder.set_segments_shared(
-                        DrawMode::Triangles(),
-                        Some(Rc::clone(quad_indices)),
-                        &[RenderStaticData::fill_outline_segment(fill_vertex_count)],
-                    );
-                } else {
-                    builder.set_raw_vertices(Vec::new(), fill_vertex_count, AttributeDataType::Short2);
-                    builder.set_vertex_attributes(Some(Rc::clone(&vertex_attrs)));
-                    builder.set_segments_shared(
-                        DrawMode::Lines(LINE_WIDTH),
-                        Some(bucket_indexes(geometry, bucket, &bucket.basic_lines)),
-                        &bucket.basic_line_segments,
-                    );
                 }
+            } else if let Some(built) = builder.build(tile, bucket, binders, evaluated) {
+                *entry.value = Some(built);
+            }
+
+            let Some(cached) = entry.value.as_ref() else {
+                continue;
             };
-
-            let layer_id = self.base.style.base().id.clone();
-            let mut finish = |builder: &mut DrawableBuilder, type_: FillVariant| {
-                builder.flush();
-
-                for mut drawable in builder.clear_drawables() {
-                    drawable.tile_id = Some(tile_id);
-                    drawable.type_ = type_ as usize;
-                    drawable.tweaker = tweaker;
-                    drawable.binders = Some(DrawableBinders::new(&render_data.bucket, &layer_id));
-                    drawable.render_tile = DrawableRenderTile::new(render_tiles.owner(), tile);
-                    layer_group.add_tile_drawable(render_pass, &tile_id, drawable);
-                }
-            };
-
-            if self.values.unevaluated.fill_pattern.is_undefined() {
-                // Simple fill
-                let fill_shader = fill_shader_group.shader(&properties_as_uniforms, self.base.projection_variant);
-
-                let outline_shader = if do_outline {
-                    Some(outline_shader_group.shader(&properties_as_uniforms, self.base.projection_variant))
-                } else {
-                    None
-                };
-
-                if fill_builder.is_none() {
-                    let mut builder = DrawableBuilder::boxed();
-                    // Only write opaque fills to the depth buffer, matching
-                    // `fillRenderPass` in legacy rendering
-                    let opaque = evaluated.fill_color.constant_or(&Color::default()).a >= 1.0
-                        && evaluated.fill_opacity.constant_or(&0.0) >= 1.0;
-
-                    common_init(builder.as_mut());
-                    builder.set_depth_type(if opaque { DepthMaskType::ReadWrite } else { DepthMaskType::ReadOnly });
-                    builder.set_color_mode(&ColorMode::alpha_blended());
-                    builder.set_sub_layer_index(1);
-                    builder.set_render_pass(render_pass);
-                    fill_builder = Some(builder);
-                }
-                if do_outline && outline_builder.is_none() && outline_shader.is_some() {
-                    let mut builder = DrawableBuilder::boxed();
-                    common_init(builder.as_mut());
-                    builder.set_depth_type(DepthMaskType::ReadOnly);
-                    builder.set_sub_layer_index(if self.values.unevaluated.fill_outline_color.is_undefined() {
-                        2
-                    } else {
-                        0
-                    });
-                    builder.set_color_mode(&ColorMode::alpha_blended());
-                    builder.set_render_pass(RenderPass::Translucent);
-                    outline_builder = Some(builder);
-                }
-
-                if let Some(builder) = fill_builder.as_mut()
-                    && !bucket.triangles.is_empty()
-                {
-                    builder.set_shader(Some(Rc::clone(&fill_shader)));
-                    builder.set_vertex_attributes(Some(Rc::clone(&vertex_attrs)));
-
-                    builder.set_raw_vertices(Vec::new(), fill_vertex_count, AttributeDataType::Short2);
-                    builder.set_segments_shared(
-                        DrawMode::Triangles(),
-                        Some(bucket_indexes(geometry, bucket, &bucket.triangles)),
-                        &bucket.triangle_segments,
-                    );
-                    finish(builder.as_mut(), FillVariant::Fill);
-                }
-
-                if do_outline
-                    && let Some(builder) = outline_builder.as_mut()
-                    && !bucket.basic_lines.is_empty()
-                {
-                    builder.set_shader(outline_shader.clone());
-                    set_outline_geometry(builder.as_mut());
-                    finish(builder.as_mut(), FillVariant::FillOutline);
-                }
-            } else {
-                // Fill with pattern (conformance)
-                if (render_pass.underlying_type() & RenderPass::Translucent.underlying_type()) == 0 {
-                    continue;
-                }
-
-                let (Some(pattern_shader_group), Some(outline_pattern_shader_group)) =
-                    (self.pattern_shader_group.clone(), self.outline_pattern_shader_group.clone())
-                else {
+            let tile_draws = [(&cached.fill, FillPart::Fill), (&cached.outline, FillPart::Outline)];
+            for (draw, part) in tile_draws {
+                let Some(draw) = draw else {
                     continue;
                 };
-
-                let fill_shader = pattern_shader_group.shader(&properties_as_uniforms, self.base.projection_variant);
-                let outline_shader = if do_outline {
-                    Some(outline_pattern_shader_group.shader(&properties_as_uniforms, self.base.projection_variant))
-                } else {
-                    None
+                let Some(uniforms) = Self::uniforms(
+                    layer_id,
+                    layer,
+                    tile,
+                    bucket,
+                    binders,
+                    cached.pattern,
+                    draw,
+                    matches!(part, FillPart::Outline),
+                    paint_parameters,
+                ) else {
+                    continue;
                 };
-
-                // getAtlasTweaker()
-                let atlas_tweaker = tile.get_atlas_textures().filter(|a| a.icon().is_some()).map(|atlases| {
-                    Rc::new(crate::gfx::drawable_atlases_tweaker::DrawableAtlasesTweaker::new(
-                        Some(Rc::clone(atlases)),
-                        None,
-                        Some(ID_FILL_IMAGE_TEXTURE),
-                        /*is_text*/ false,
-                        /*sdf_icons*/ true, // to force linear filter
-                        /*rotation_alignment*/ mln_style_types::AlignmentType::Auto,
-                        /*icon_scaled*/ false,
-                        /*text_size_is_zoom_constant*/ false,
-                    ))
-                });
-
-                if pattern_builder.is_none() {
-                    let mut builder = DrawableBuilder::boxed();
-                    common_init(builder.as_mut());
-                    builder.set_shader(Some(Rc::clone(&fill_shader)));
-                    builder.set_depth_type(DepthMaskType::ReadWrite);
-                    builder.set_color_mode(&ColorMode::alpha_blended());
-                    builder.set_sub_layer_index(1);
-                    builder.set_render_pass(RenderPass::Translucent);
-                    pattern_builder = Some(builder);
-                }
-                if do_outline && outline_pattern_builder.is_none() {
-                    let mut builder = DrawableBuilder::boxed();
-                    common_init(builder.as_mut());
-                    builder.set_shader(outline_shader.clone());
-                    builder.set_depth_type(DepthMaskType::ReadOnly);
-                    builder.set_color_mode(&ColorMode::alpha_blended());
-                    builder.set_sub_layer_index(2);
-                    builder.set_render_pass(RenderPass::Translucent);
-                    outline_pattern_builder = Some(builder);
-                }
-
-                if let Some(builder) = pattern_builder.as_mut() {
-                    builder.set_atlases(atlas_tweaker.clone());
-                }
-                if do_outline && let Some(builder) = outline_pattern_builder.as_mut() {
-                    builder.set_atlases(atlas_tweaker.clone());
-                }
-
-                if let Some(builder) = pattern_builder.as_mut()
-                    && !bucket.triangles.is_empty()
-                {
-                    builder.set_shader(Some(Rc::clone(&fill_shader)));
-                    builder.set_render_pass(render_pass);
-                    builder.set_vertex_attributes(Some(Rc::clone(&vertex_attrs)));
-                    builder.set_raw_vertices(Vec::new(), fill_vertex_count, AttributeDataType::Short2);
-                    builder.set_segments_shared(
-                        DrawMode::Triangles(),
-                        Some(bucket_indexes(geometry, bucket, &bucket.triangles)),
-                        &bucket.triangle_segments,
-                    );
-
-                    finish(builder.as_mut(), FillVariant::FillPattern);
-                }
-
-                if do_outline
-                    && let Some(builder) = outline_pattern_builder.as_mut()
-                    && !bucket.basic_lines.is_empty()
-                {
-                    builder.set_shader(outline_shader.clone());
-                    builder.set_render_pass(render_pass);
-                    set_outline_geometry(builder.as_mut());
-
-                    finish(builder.as_mut(), FillVariant::FillOutlinePattern);
-                }
+                let tile_draw = FrameDraw {
+                    pass: RENDER_PASS,
+                    depth: DrawDepth::Layer { sub_layer: draw.sub_layer, mask: draw.depth },
+                    clip: true,
+                    ..FrameDraw::new(Some(tile_id), draw.id)
+                };
+                self.draw_list.push_part(tile_draw, part, uniforms);
             }
         }
-        self.base.layer_group = Some(layer_group);
+
+        let frame = self.drawing.frame_mut();
+        frame.set_composite(Composite::of(
+            *layer.paint.fill_layer_opacity.uniform(),
+            *layer.paint.fill_layer_blend.uniform(),
+        ));
+        frame.set_stencil_tiles(render_tiles.render_tiles().map(|tile| tile.id));
+        self.draw_list.finish(frame, context, |writer| Self::write_uniforms(layer, writer));
     }
 }

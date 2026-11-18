@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mln_gfx::ShaderRegistry;
+use mln_gfx::gpu::Gpu;
 use mln_map_types::{MapMode, TransformState};
 use mln_style::diff::{ItemChanges, LayerChange, LayerChanges, StyleDiff, sources_by_id};
 use mln_style::expression::{Dependency, GlobalStateMap};
@@ -26,22 +26,26 @@ use mln_util::logging::{Event, Log};
 use mln_util::pool::{Pool, TaskGroup};
 use mln_util::time::Instant;
 use mln_vec_map::{VecMap, VecSet};
+use smallvec::SmallVec;
 
 use crate::Registry;
 use crate::gfx::context::Context;
+use crate::globe_depth_pass::GlobeDepthPass;
 use crate::image_store::ImageStore;
-use crate::layer_group::LayerGroup;
-use crate::layer_tweaker::LayerTweaker;
+use crate::layer_drawing::{ChangedBuckets, DrawGroup, DrawOrder, SingleDraw};
 use crate::layer_type::ErasedEvaluatedLayer;
 use crate::line_atlas::LineAtlas;
 use crate::paint_parameters::PaintParameters;
 use crate::pattern_atlas::PatternAtlas;
-use crate::render_layer::{LayerPrepareParameters, RenderLayer};
-use crate::render_source::{self, RenderSource, SourcePrepareParameters};
-use crate::render_tree::{LayerRenderItem, RenderItem, RenderTree, RenderTreeParameters};
+use crate::render_layer::{LayerPrepareParameters, LayerSource, LayerTiles, RenderLayer};
+use crate::render_source::{self, RenderSource, SourcePrepareParameters, TileOrder};
+use crate::render_tile::RenderTile;
+use crate::render_tree::{DebugLayers, LayerRenderItem, RenderTree, RenderTreeParameters};
 use crate::renderer_event::RendererEvent;
+use crate::sources::render_tile_source::DebugLayer;
 use crate::text::glyph_store::GlyphStore;
 use crate::text::placement::Placement;
+use crate::tile::contents::Contents;
 use crate::tile::inbox::Waker;
 use crate::tile::source_tiles::SourceTiles;
 use crate::tile::store::{StoreEvent, TileStore};
@@ -180,14 +184,13 @@ pub(crate) struct RenderOrchestrator {
     global_state: Option<Arc<GlobalStateMap>>,
 
     /// The debug overlays (layers: debug).
-    debug_layer_groups: crate::render_tree::DebugLayerGroupMap,
+    debug_layers: DebugLayers,
 
-    globe_depth_pass: crate::globe_depth_pass::GlobeDepthPass,
+    globe_depth_pass: GlobeDepthPass,
     sky_pass: crate::sky_pass::SkyPass,
 
-    /// Last, so that it drops after the fields above: the render layers,
-    /// layer groups and placement hold render tiles, whose layouts free
-    /// their data on the thread pool (`drop_on_workers`).
+    /// Last, so that it drops after the fields above: the render sources'
+    /// tiles free their data on the thread pool (`drop_on_workers`).
     _wait_for_thread_pool: WaitOnDrop,
 }
 
@@ -247,9 +250,9 @@ impl RenderOrchestrator {
             _wait_for_thread_pool: WaitOnDrop(thread_pool.clone()),
             thread_pool,
             global_state: None,
-            globe_depth_pass: crate::globe_depth_pass::GlobeDepthPass::default(),
+            globe_depth_pass: GlobeDepthPass::default(),
             sky_pass: crate::sky_pass::SkyPass::default(),
-            debug_layer_groups: VecMap::new(), // layers: debug
+            debug_layers: VecMap::new(), // layers: debug
         }
     }
 
@@ -363,7 +366,7 @@ impl RenderOrchestrator {
 
         // The sources' tiles are in other world copies once the center has
         // crossed the antimeridian (`SourceTiles::handle_wrap_jump`), and
-        // the layers' drawables go with them.
+        // the layers' draws go with them.
         let longitude =
             update_parameters.transform_state.get_lat_lng(mln_util::geo::WrapMode::Unwrapped).longitude() as f32;
         let wrap_delta = ((longitude - self.longitude) / 360.0).round() as i16;
@@ -395,34 +398,61 @@ impl RenderOrchestrator {
         update_parameters: &Arc<UpdateParameters>,
         frame_layers: FrameLayers,
     ) -> RenderTree {
-        let FrameLayers { mut parameters, layer_render_items, start_time } = frame_layers;
+        let FrameLayers { mut parameters, mut layer_render_items, start_time } = frame_layers;
+
+        // The buckets whose vertex data the frame's feature state and symbol
+        // placement change, which the draws that copied it copy again.
+        let mut changed_buckets = ChangedBuckets::default();
+
+        // The sources whose tiles a layer of the frame draws in
+        // `TileOrder::ByY`.
+        let mut sorted_by_y: SmallVec<[&str; 4]> = SmallVec::new();
+        for (&index, render_item) in &layer_render_items {
+            if let Some(source) = render_item.source.as_deref()
+                && self.layers[index as usize].tile_order() == TileOrder::ByY
+                && !sorted_by_y.contains(&source)
+            {
+                sorted_by_y.push(source);
+            }
+        }
 
         // Update all matrices and generate data that we should upload to the
         // GPU.
         for (name, render_source) in &mut self.render_sources {
             if render_source.is_enabled() {
+                // layers: feature state
+                if let Some((tiles, _)) = render_source.tiles().and_then(|key| self.tile_store.source_mut(key)) {
+                    tiles.coalesce_feature_state(&mut changed_buckets);
+                }
                 render_source.prepare(
                     &mut self.tile_store,
                     &SourcePrepareParameters {
                         transform: &parameters.transform_params,
                         debug_options: update_parameters.debug_options,
                         source_name: name.clone(),
+                        sort_by_y: sorted_by_y.contains(&name.as_str()),
                     },
                 );
             } else {
                 render_source.release_render_data();
             }
         }
+        drop(sorted_by_y);
 
         let mut layers_need_placement: Vec<usize> = Vec::new();
         let mut layers_following_placement: Vec<usize> = Vec::new();
         let mut opaque_pass_cut_off_estimation = layer_render_items.len();
-        for (&index, render_item) in &layer_render_items {
+        let mut contents = SourceContents::default();
+        for (&index, render_item) in &mut layer_render_items {
             let index = index as usize;
             let render_layer = &mut self.layers[index];
-            let source = render_item.source.as_ref().and_then(|id| self.render_sources.get(id)).map(AsRef::as_ref);
-            render_layer.prepare(&mut LayerPrepareParameters {
+            let source = render_item.source.as_ref().and_then(|id| self.render_sources.get_key_value(id));
+            let source = source.map(|(id, source)| (id.as_str(), &**source));
+            let source_contents = contents.of(source, &self.tile_store);
+            let source = source.map(|(_, source)| source);
+            render_item.tile_order = render_layer.prepare(&LayerPrepareParameters {
                 source,
+                contents: source_contents,
                 images: self.tile_store.images(), // conformance
                 pattern_atlas: &self.pattern_atlas,
                 line_atlas: &self.line_atlas,
@@ -454,13 +484,6 @@ impl RenderOrchestrator {
             }
         }
 
-        let mut source_render_items: Vec<Box<dyn RenderItem>> = Vec::new();
-        for render_source in self.render_sources.values_mut() {
-            if render_source.is_enabled() {
-                source_render_items.push(render_source.create_render_item());
-            }
-        }
-
         // The symbol buckets of the layers that need placement, then the
         // positions of the layers that draw buckets other layers place.
         let placement = self.placement_controller.get_placement();
@@ -469,13 +492,25 @@ impl RenderOrchestrator {
                 &*self.layers[index],
                 &parameters.transform_params.state,
                 update_symbol_opacities,
+                &mut changed_buckets,
+                &mut self.tile_store,
             );
         }
         for &index in &layers_following_placement {
-            placement.update_follower_buckets(&*self.layers[index], &parameters.transform_params.state);
+            placement.update_follower_buckets(
+                &*self.layers[index],
+                &parameters.transform_params.state,
+                &mut changed_buckets,
+                &mut self.tile_store,
+            );
+        }
+        if !changed_buckets.is_empty() {
+            for layer in &mut self.layers {
+                layer.mark_changed(&changed_buckets);
+            }
         }
 
-        RenderTree::new(parameters, layer_render_items, source_render_items, start_time, symbols_start)
+        RenderTree::new(parameters, layer_render_items, start_time, symbols_start)
     }
 
     /// Advances the zoom history and the global state to the update's, and
@@ -882,7 +917,7 @@ impl RenderOrchestrator {
                                 let source_id = style_source.id().to_owned();
                                 layer_render_items
                                     .entry(index as u32)
-                                    .or_insert_with(|| LayerRenderItem { source: Some(source_id) });
+                                    .or_insert_with(|| LayerRenderItem { source: Some(source_id), tile_order: None });
                                 update_list[index] = true;
                             }
                         }
@@ -910,7 +945,9 @@ impl RenderOrchestrator {
                             // and it shall not be added to render items.
                         }
                     }
-                    layer_render_items.entry(index as u32).or_insert_with(|| LayerRenderItem { source: None });
+                    layer_render_items
+                        .entry(index as u32)
+                        .or_insert_with(|| LayerRenderItem { source: None, tile_order: None });
                     update_list[index] = true;
                 }
             }
@@ -955,7 +992,12 @@ impl RenderOrchestrator {
         let longitude =
             update_parameters.transform_state.get_lat_lng(mln_util::geo::WrapMode::Unwrapped).longitude() as f32;
         for layer in layers_need_placement.iter().rev() {
-            let result = self.cross_tile_symbol_index.add_layer(*layer, longitude, &update_parameters.transform_state);
+            let result = self.cross_tile_symbol_index.index_layer(
+                *layer,
+                longitude,
+                &update_parameters.transform_state,
+                &mut self.tile_store,
+            );
             if continuous {
                 used_symbol_layers.insert(layer.get_id().to_owned());
                 symbol_buckets_added |= result.buckets_added;
@@ -997,7 +1039,7 @@ impl RenderOrchestrator {
             if parameters.placement_changed {
                 let prev = self.placement_controller.take_placement();
                 let mut placement = Placement::create(Arc::clone(update_parameters), Some(prev));
-                placement.place_layers(&layers_need_placement);
+                placement.place(&layers_need_placement, &mut self.tile_store);
                 self.placement_controller.set_placement(placement);
                 self.cross_tile_symbol_index.prune_unused_layers(&used_symbol_layers);
                 self.tile_store.update_fading_tiles();
@@ -1013,7 +1055,7 @@ impl RenderOrchestrator {
             if parameters.placement_changed {
                 let mut placement = Placement::create(Arc::clone(update_parameters), None);
                 placement.collect_placed_symbol_data(self.placed_symbol_data_collected);
-                placement.place_layers(&layers_need_placement);
+                placement.place(&layers_need_placement, &mut self.tile_store);
                 self.placement_controller.set_placement(placement);
             }
             self.cross_tile_symbol_index.reset();
@@ -1067,7 +1109,7 @@ impl RenderOrchestrator {
         self.style = None;
         self.sources_by_id.clear();
 
-        self.debug_layer_groups.clear(); // layers: debug
+        self.debug_layers.clear(); // layers: debug
         self.render_sources.clear();
         self.tile_store.clear();
         self.layers.clear();
@@ -1087,14 +1129,14 @@ impl RenderOrchestrator {
     }
 
     /// Drops what holds the renderer's shaders: the render layers, the sky
-    /// and globe depth passes, and the debug drawables. The next update
+    /// and globe depth passes, and the debug overlays. The next update
     /// makes them again, from the shaders the renderer has then. The
     /// sources keep their tiles, and the tiles their layout.
     pub(crate) fn release_shaders(&mut self) {
         self.remake_render_layers = true;
-        self.debug_layer_groups.clear(); // layers: debug
+        self.debug_layers.clear(); // layers: debug
         self.sky_pass = crate::sky_pass::SkyPass::default();
-        self.globe_depth_pass = crate::globe_depth_pass::GlobeDepthPass::default();
+        self.globe_depth_pass = GlobeDepthPass::default();
     }
 
     /// Makes the atlas's GPU textures and uploads what its pages queued.
@@ -1145,43 +1187,69 @@ impl RenderOrchestrator {
         Some(self.tile_store.source_mut(key)?.0)
     }
 
-    /// The groups of the layers that draw, in drawing order.
-    pub(crate) fn layer_groups(&mut self) -> Vec<&mut LayerGroup> {
-        let mut groups = Vec::new();
+    /// Visits the layers' draw groups of the frame, in drawing order.
+    pub(crate) fn visit_draw_groups<'a>(&'a self, mut visit: impl FnMut(DrawGroup<'a>)) {
+        for layer in &self.layers {
+            layer.visit_draw_groups(&mut visit);
+        }
+    }
+
+    /// Uploads the GPU objects of the layers' draw groups, in drawing order.
+    pub(crate) fn upload_draw_groups(&mut self, context: &Context) {
         for layer in &mut self.layers {
-            layer.layer_groups(&mut groups);
-        }
-        groups
-    }
-
-    /// The number of the layers' groups that draw.
-    pub(crate) fn num_layer_groups(&mut self) -> usize {
-        self.layer_groups().len()
-    }
-
-    /// Updates the debug layer groups (layers: debug).
-    pub(crate) fn update_debug_layer_groups(&mut self, render_tree: &RenderTree, parameters: &PaintParameters<'_>) {
-        for item in render_tree.get_source_render_items() {
-            item.update_debug_drawables(&mut self.debug_layer_groups, parameters);
+            layer.upload(context);
         }
     }
 
-    /// The debug layer groups, in `DebugType` order (`visitDebugLayerGroups`)
-    /// (layers: debug).
-    pub(crate) fn debug_layer_groups(&mut self) -> impl Iterator<Item = &mut LayerGroup> {
-        self.debug_layer_groups.values_mut().map(|debug| &mut debug.group)
+    /// Draws the pass's draws of the layers' draw groups into the open pass
+    /// of `gpu`, the context's, in `order`, each at the depth of
+    /// `parameters.current_layer`, which `order` steps after each group.
+    pub(crate) fn render_draw_groups(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        parameters: &mut PaintParameters<'_>,
+        order: DrawOrder,
+    ) {
+        match order {
+            DrawOrder::BottomUp => {
+                for layer in &mut self.layers {
+                    layer.render(gpu, parameters, order);
+                }
+            }
+            DrawOrder::TopDown => {
+                for layer in self.layers.iter_mut().rev() {
+                    layer.render(gpu, parameters, order);
+                }
+            }
+        }
     }
 
-    /// Runs the tweakers of the layers' groups that draw, and of the debug
-    /// layer groups, before the groups upload.
-    pub(crate) fn tweak(&mut self, parameters: &PaintParameters<'_>) {
-        for layer in &mut self.layers {
-            layer.tweak(parameters);
+    /// Readies the buckets of the frame's sources for the frame's draws.
+    pub(crate) fn upload_sources(&mut self, context: &Context) {
+        let needs = crate::layers::upload_needs(context);
+        for source in self.render_sources.values_mut() {
+            if source.is_enabled() {
+                source.upload(&mut self.tile_store, needs);
+            }
         }
-        // layers: debug
-        for debug in self.debug_layer_groups.values_mut() {
-            debug.tweaker.execute(&mut debug.group, parameters);
+    }
+
+    /// Updates the debug overlays' draws from the sources' tiles, and makes
+    /// their draws of the frame (layers: debug).
+    pub(crate) fn update_debug_layers(&mut self, parameters: &PaintParameters<'_>) {
+        for source in self.render_sources.values() {
+            if source.is_enabled() {
+                source.update_debug_draws(&mut self.debug_layers, parameters);
+            }
         }
+        for debug in self.debug_layers.values_mut() {
+            debug.prepare(parameters);
+        }
+    }
+
+    /// The debug overlays, in `DebugType` order (layers: debug).
+    pub(crate) fn debug_layers(&mut self) -> impl Iterator<Item = &mut DebugLayer> {
+        self.debug_layers.values_mut()
     }
 
     /// Visits every render layer, in no order.
@@ -1191,25 +1259,34 @@ impl RenderOrchestrator {
         }
     }
 
-    /// Updates the drawables of the layers the frame draws, and the sky and
+    /// Makes the draws of the layers the frame draws, and of the sky and
     /// globe depth passes.
     pub(crate) fn update_layers(
         &mut self,
-        shaders: &ShaderRegistry,
-        context: &Context,
-        state: &TransformState,
-        update_parameters: &Arc<UpdateParameters>,
+        update_parameters: &UpdateParameters,
         paint_parameters: &PaintParameters<'_>,
         render_tree: &RenderTree,
     ) {
         let mut has_3d = false;
-        for &index in render_tree.get_layer_render_item_map().keys() {
+        let mut contents = SourceContents::default();
+        for (&index, render_item) in render_tree.get_layer_render_item_map() {
             let render_layer = &mut self.layers[index as usize];
-            // C++ catches exceptions from update() and reports them through
-            // onRenderError; the Rust layers don't throw.
-            render_layer.update(shaders, context, state, update_parameters, paint_parameters);
+            let source = render_item.source.as_ref().and_then(|id| self.render_sources.get_key_value(id));
+            let source = source.map(|(id, source)| (id.as_str(), &**source));
+            let source_contents = contents.of(source, &self.tile_store);
+            let layer_source = source.and_then(|(_, source)| {
+                match render_item.tile_order.and_then(|order| source.tile_order(order)) {
+                    Some(order) => {
+                        Some(LayerSource::Tiles(LayerTiles::new(source.render_tiles(), source_contents, order)))
+                    }
+                    None => source.get_image_render_data().map(LayerSource::Image),
+                }
+            });
+            render_layer.update(paint_parameters, update_parameters, layer_source);
             has_3d = has_3d || render_layer.needs_globe_depth();
         }
+        let shaders = &paint_parameters.static_data.shaders;
+        let (context, state) = (paint_parameters.context, paint_parameters.state);
 
         let tree_parameters = render_tree.get_parameters();
         self.sky_pass.update(
@@ -1235,16 +1312,20 @@ impl RenderOrchestrator {
         &mut *self.layers[index]
     }
 
-    pub(crate) fn sky_layer_group(&mut self) -> Option<&mut LayerGroup> {
-        self.sky_pass.sky_layer_group()
+    /// The planar sky, which draws before the layers, if the frame draws it.
+    pub(crate) fn sky(&mut self) -> Option<&mut SingleDraw> {
+        self.sky_pass.sky()
     }
 
-    pub(crate) fn atmosphere_layer_group(&mut self) -> Option<&mut LayerGroup> {
-        self.sky_pass.atmosphere_layer_group()
+    /// The globe's atmosphere, which draws after the layers, if the frame
+    /// draws it.
+    pub(crate) fn atmosphere(&mut self) -> Option<&mut SingleDraw> {
+        self.sky_pass.atmosphere()
     }
 
-    pub(crate) fn globe_depth_layer_group(&mut self) -> Option<&mut LayerGroup> {
-        self.globe_depth_pass.layer_group()
+    /// The pass that draws the planet's depth.
+    pub(crate) fn globe_depth(&mut self) -> &mut GlobeDepthPass {
+        &mut self.globe_depth_pass
     }
 
     // query
@@ -1501,6 +1582,32 @@ impl RenderOrchestrator {
     /// orchestrator's drop waits for it.
     pub(crate) fn drop_on_workers<T: Send + 'static>(&self, value: T) {
         drop_on_workers(&self.thread_pool, value);
+    }
+}
+
+/// What the render tiles of a source show, at their indexes, for the layers
+/// of a phase of the frame, which go through their sources in runs.
+#[derive(Default)]
+struct SourceContents<'a> {
+    source: Option<&'a str>,
+    contents: Vec<Option<&'a Contents>>,
+}
+
+impl<'a> SourceContents<'a> {
+    /// What the render tiles of `source`, an id and its render source,
+    /// show, from `store`; none for no source.
+    fn of(&mut self, source: Option<(&'a str, &'a dyn RenderSource)>, store: &'a TileStore) -> &[Option<&'a Contents>] {
+        let Some((id, source)) = source else {
+            return &[];
+        };
+        if self.source != Some(id) {
+            self.source = Some(id);
+            self.contents.clear();
+            let tiles = source.tiles().and_then(|key| store.source(key));
+            let contents_of = |tile: &RenderTile| tiles?.contents_at(tile.get_overscaled_tile_id(), tile.slot());
+            self.contents.extend(source.render_tiles().iter().map(contents_of));
+        }
+        &self.contents
     }
 }
 

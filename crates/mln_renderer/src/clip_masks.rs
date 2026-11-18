@@ -21,7 +21,7 @@ use mln_tile_id::UnwrappedTileID;
 use mln_util::logging::{Event, Log};
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
-use crate::drawable::clamped_scissor;
+use crate::draw::clamped_scissor;
 use crate::gfx::context::Context;
 use crate::gfx::owned::Owned;
 use crate::gfx::uniform_buffer::UniformBufferPtr;
@@ -87,7 +87,7 @@ impl Mesh {
     }
 }
 
-/// The tile clipping masks: for each tile that the frame's layer groups can
+/// The tile clipping masks: for each tile that the frame's draw groups can
 /// clip to, a mesh of the clipping mask shader that writes a stencil value
 /// over the tile and nothing else.
 #[derive(Default)]

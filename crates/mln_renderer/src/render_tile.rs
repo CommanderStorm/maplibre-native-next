@@ -1,10 +1,13 @@
-// C++ `RenderTile` keeps a `Tile&`. A Rust RenderTile cannot borrow the tile
-// out of the tile store for the frame, so it copies what it reads from the
-// tile and its render entry (its id, hold-for-fade state and whether it
-// draws a visible layer) when it is created and prepared, and shares the
-// tile's contents; the store changes them only between frames.
+// A render tile is a tile as a frame draws it: where it draws, its
+// matrices, and what it copies of the tile and its render entry (its id,
+// hold-for-fade state and whether it draws a visible layer) when it is
+// created and prepared. It lives in its render source, apart from the tile
+// store. The frame's phases look the tile's contents up in the store by the
+// tile's slot and id (`FrameTile`); the store changes them only between
+// frames.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use glam::Vec2;
 use mln_map_types::{MapDebugOptions, ProjectionData, TransformState};
@@ -13,15 +16,15 @@ use mln_style_types::TranslateAnchorType;
 use mln_style_types::image::ImagePosition;
 use mln_tile_id::{OverscaledTileID, UnwrappedTileID};
 use mln_util::mat4::Mat4;
-use mln_util::pool::TaskGroup;
 
-use crate::bucket::BucketPtr;
+use crate::bucket::Bucket;
+use crate::bucket_geometry::BucketGeometry;
 use crate::buckets::debug_bucket::DebugBucket; // layers: debug
-use crate::gfx::context::Context;
+use crate::geometry::feature_index::FeatureIndex;
 use crate::paint_parameters::TransformParameters;
-use crate::render_layer::LayerRenderData;
+use crate::render_layer::LayerBucket;
 use crate::render_source::SourcePrepareParameters;
-use crate::tile::contents::{Contents, TileRenderData};
+use crate::tile::contents::Contents;
 use crate::tile::tile::Tile;
 use crate::tile_render_data::TileAtlasTextures;
 
@@ -36,30 +39,30 @@ pub(crate) struct RenderTile {
     /// `tile.id`.
     tile_id: OverscaledTileID,
     tile_hold_for_fade: bool,
-    // The following members are reset at placement stage.
-    render_data: Option<TileRenderData>,
-    /// The bucket of a raster or raster-dem tile, which all its layers draw.
-    shared_bucket: Option<BucketPtr>,
+    /// Where the tile is among its source's, which finds its contents
+    /// first; `None` for a tile that isn't among a source's.
+    slot: Option<usize>,
     needs_rendering: bool,
 }
 
 impl RenderTile {
-    pub(crate) fn new(id: UnwrappedTileID, tile: &Tile, hold_for_fade: bool) -> Self {
-        RenderTile::of_tile_id(id, tile.id, hold_for_fade)
+    /// The render tile of `tile`, at `slot` of its source's tiles, drawn as
+    /// `id`, before it is prepared.
+    pub(crate) fn new(id: UnwrappedTileID, tile: &Tile, slot: usize, hold_for_fade: bool) -> Self {
+        RenderTile { slot: Some(slot), ..RenderTile::of_tile_id(id, tile.id, hold_for_fade) }
     }
 
     /// The render tile of the tile `tile_id`, drawn as `id`, before it is
-    /// prepared.
+    /// prepared, which isn't among a source's tiles.
     pub(crate) fn of_tile_id(id: UnwrappedTileID, tile_id: OverscaledTileID, hold_for_fade: bool) -> Self {
         RenderTile {
             id,
             projection: ProjectionData::default(),
-            // C++ default-constructs `mat4` (uninitialized); prepare sets it.
+            // `set_projection` sets it.
             matrix: [0.0; 16],
             tile_id,
             tile_hold_for_fade: hold_for_fade,
-            render_data: None,
-            shared_bucket: None,
+            slot: None,
             needs_rendering: false,
             debug_bucket: None, // layers: debug
         }
@@ -86,45 +89,16 @@ impl RenderTile {
         &self.tile_id
     }
 
+    /// Where the tile is among its source's, as of `prepare`; `None` for a
+    /// tile that isn't among a source's.
+    #[must_use]
+    pub(crate) fn slot(&self) -> Option<usize> {
+        self.slot
+    }
+
     #[must_use]
     pub(crate) fn hold_for_fade(&self) -> bool {
         self.tile_hold_for_fade
-    }
-
-    /// What the tile draws, as of the last `prepare`.
-    fn contents(&self) -> Option<&Contents> {
-        self.render_data.as_ref().and_then(TileRenderData::contents)
-    }
-
-    pub(crate) fn get_bucket(&self, impl_: &dyn ErasedLayerStyle) -> Option<&BucketPtr> {
-        self.shared_bucket.as_ref().or_else(|| self.contents()?.get_bucket(impl_))
-    }
-
-    /// symbols: the feature index of the tile's layout result.
-    #[must_use]
-    pub(crate) fn get_feature_index(&self) -> Option<std::sync::Arc<crate::geometry::feature_index::FeatureIndex>> {
-        self.contents()?.geometry().map(|contents| std::sync::Arc::clone(&contents.result.feature_index))
-    }
-
-    /// Port-only: the render thread's copies of the tile's bucket geometry
-    /// (`bucket_geometry.rs`).
-    #[must_use]
-    pub(crate) fn get_bucket_geometry(&self) -> Option<&crate::bucket_geometry::BucketGeometry> {
-        self.contents()?.geometry().map(|contents| &*contents.bucket_geometry)
-    }
-
-    pub(crate) fn get_layer_render_data(&self, impl_: &dyn ErasedLayerStyle) -> Option<&LayerRenderData> {
-        self.contents()?.geometry()?.result.get_layer_render_data(impl_)
-    }
-
-    #[must_use]
-    pub(crate) fn get_pattern(&self, pattern: &str) -> Option<ImagePosition> {
-        self.contents()?.get_pattern(pattern)
-    }
-
-    #[must_use]
-    pub(crate) fn get_atlas_textures(&self) -> Option<&Rc<TileAtlasTextures>> {
-        self.contents()?.geometry().map(|contents| &contents.textures)
     }
 
     #[must_use]
@@ -132,25 +106,9 @@ impl RenderTile {
         self.needs_rendering
     }
 
-    pub(crate) fn upload(&self, context: &Context) {
-        if let Some(contents) = self.contents() {
-            contents.upload(context);
-        }
-    }
-
     /// Prepares the render tile for drawing; `tile` is the tile it was
-    /// created for, whose contents the last reference frees on `pool`.
-    pub(crate) fn prepare(
-        &mut self,
-        tile: &Tile,
-        needs_rendering: bool,
-        pool: &TaskGroup,
-        parameters: &SourcePrepareParameters<'_>,
-    ) {
-        self.shared_bucket = tile.contents().and_then(Contents::shared_bucket);
-        self.render_data =
-            tile.shown.as_ref().map(|shown| TileRenderData::new(Rc::clone(&shown.contents), pool.clone()));
-
+    /// created for.
+    pub(crate) fn prepare(&mut self, tile: &Tile, needs_rendering: bool, parameters: &SourcePrepareParameters<'_>) {
         self.needs_rendering = needs_rendering;
         let (modified, expires) = tile.load.freshness();
 
@@ -186,5 +144,62 @@ impl RenderTile {
     pub(crate) fn set_projection(&mut self, transform: &TransformParameters) {
         self.projection = transform.state.get_projection_data_with(&self.id, &transform.proj_matrix);
         self.matrix = self.projection.main_matrix;
+    }
+}
+
+/// A render tile of a frame, with what its tile shows.
+#[derive(Clone, Copy)]
+pub(crate) struct FrameTile<'a> {
+    pub(crate) tile: &'a RenderTile,
+    contents: Option<&'a Contents>,
+}
+
+impl<'a> FrameTile<'a> {
+    #[must_use]
+    pub(crate) fn new(tile: &'a RenderTile, contents: Option<&'a Contents>) -> Self {
+        FrameTile { tile, contents }
+    }
+
+    /// The tile's id.
+    #[must_use]
+    pub(crate) fn id(self) -> OverscaledTileID {
+        *self.tile.get_overscaled_tile_id()
+    }
+
+    /// The bucket of `impl_`'s layer; a raster or raster-dem tile's for any
+    /// layer.
+    pub(crate) fn bucket(self, impl_: &dyn ErasedLayerStyle) -> Option<&'a dyn Bucket> {
+        self.contents?.get_bucket(impl_)
+    }
+
+    /// symbols: the feature index of the tile's layout.
+    #[must_use]
+    pub(crate) fn feature_index(self) -> Option<&'a Arc<FeatureIndex>> {
+        self.contents?.geometry().map(|contents| &contents.result.feature_index)
+    }
+
+    /// The vertex and index data of the tile's buckets, which the frame's
+    /// draws bind (`bucket_geometry.rs`).
+    #[must_use]
+    pub(crate) fn bucket_geometry(self) -> Option<&'a BucketGeometry> {
+        self.contents?.geometry().map(|contents| &contents.bucket_geometry)
+    }
+
+    /// The bucket of `impl_`'s layer in the tile's layout, if it was laid out
+    /// as a layer of the same type.
+    pub(crate) fn layer_bucket(self, impl_: &dyn ErasedLayerStyle) -> Option<LayerBucket<'a>> {
+        self.contents?.geometry()?.result.layer_bucket(impl_)
+    }
+
+    /// Where the pattern `pattern` is in the tile's icon atlas.
+    #[must_use]
+    pub(crate) fn pattern(self, pattern: &str) -> Option<ImagePosition> {
+        self.contents?.get_pattern(pattern)
+    }
+
+    /// The textures of the tile's glyph and icon atlases.
+    #[must_use]
+    pub(crate) fn atlas_textures(self) -> Option<&'a Rc<TileAtlasTextures>> {
+        self.contents?.geometry().map(|contents| &contents.textures)
     }
 }
