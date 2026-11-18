@@ -799,7 +799,7 @@ void main() {
 
     highp vec2 epsilon = 1.0 / u_dimension;
     float scale = (u_dimension.x - 2.0) / u_dimension.x;
-    v_pos = (a_texture_pos / 8192.0) * scale + epsilon;
+    v_pos = (a_pos / 8192.0) * scale + epsilon;
 
     // Handle poles
     if (a_pos.y < -32767.5) v_pos.y = 0.0;
@@ -2871,7 +2871,7 @@ void main() {
     fragColor = color * u_opacity;
 
 #ifdef OVERDRAW_INSPECTOR
-    fragColor = vec4(0.0);
+    fragColor = vec4(1.0);
 #endif
 }
 ",
@@ -4853,7 +4853,7 @@ out highp vec4 fragColor;
 // on where the image sits in the atlas. Adding an unsnapped offset rounds it
 // to a precision that depends on the origin.
 highp vec2 atlas_pos(highp vec2 origin, highp vec2 offset) {
-    return origin + round(offset * 16777216.0) / 16777216.0;
+    return origin + roundEven(offset * 16777216.0) / 16777216.0;
 }
 
 #ifdef PROJECTION_GLOBE

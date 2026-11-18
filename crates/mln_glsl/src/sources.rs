@@ -1389,6 +1389,11 @@ layout(set = LAYER_SET_INDEX, binding = idFillEvaluatedPropsUBO) uniform FillEva
 
 void main() {
 
+#if defined(OVERDRAW_INSPECTOR)
+    out_color = vec4(1.0);
+    return;
+#endif
+
 #if defined(HAS_UNIFORM_u_color)
     const vec4 color = props.color;
 #else
@@ -2428,6 +2433,7 @@ pub(crate) const FILL_EXTRUSION_SHADER: GlslShaderSource = GlslShaderSource {
     name: "FillExtrusionShader",
     prelude: FILL_EXTRUSION_SHADER_PRELUDE,
     vertex: r"
+invariant gl_Position;
 
 layout(location = 0) in ivec2 in_position;
 layout(location = 1) in uvec2 in_decimals_ed;
@@ -2491,13 +2497,13 @@ void main() {
     const FillExtrusionDrawableUBO drawable = drawableVector.drawable_ubo[constant.ubo_index];
 
 #if defined(HAS_UNIFORM_u_base)
-    const float base = props.light_position_base.w;
+    const float base = max(props.light_position_base.w, 0.0);
 #else
     const float base = max(unpack_mix_float(in_base, drawable.base_t), 0.0);
 #endif
 
 #if defined(HAS_UNIFORM_u_height)
-    const float height = props.height;
+    const float height = max(props.height, 0.0);
 #else
     const float height = max(unpack_mix_float(in_height, drawable.height_t), 0.0);
 #endif
@@ -2574,6 +2580,7 @@ pub(crate) const FILL_EXTRUSION_INSTANCED_SHADER: GlslShaderSource = GlslShaderS
     name: "FillExtrusionInstancedShader",
     prelude: FILL_EXTRUSION_SHADER_PRELUDE,
     vertex: r"
+invariant gl_Position;
 
 layout(location = 0) in ivec2 in_position;
 
@@ -2654,13 +2661,13 @@ void main() {
     const FillExtrusionDrawableUBO drawable = drawableVector.drawable_ubo[constant.ubo_index];
 
 #if defined(HAS_UNIFORM_u_base)
-    const float base = props.light_position_base.w;
+    const float base = max(props.light_position_base.w, 0.0);
 #else
     const float base = max(unpack_mix_float(in_base, drawable.base_t), 0.0);
 #endif
 
 #if defined(HAS_UNIFORM_u_height)
-    const float height = props.height;
+    const float height = max(props.height, 0.0);
 #else
     const float height = max(unpack_mix_float(in_height, drawable.height_t), 0.0);
 #endif
@@ -2742,6 +2749,7 @@ pub(crate) const FILL_EXTRUSION_PATTERN_SHADER: GlslShaderSource = GlslShaderSou
     name: "FillExtrusionPatternShader",
     prelude: FILL_EXTRUSION_SHADER_PRELUDE,
     vertex: r"
+invariant gl_Position;
 
 layout(location = 0) in ivec2 in_position;
 layout(location = 1) in uvec2 in_decimals_ed;
@@ -2832,13 +2840,13 @@ void main() {
     const FillExtrusionTilePropsUBO tileProps = tilePropsVector.tile_props_ubo[constant.ubo_index];
 
 #if defined(HAS_UNIFORM_u_base)
-    const float base = props.light_position_base.w;
+    const float base = max(props.light_position_base.w, 0.0);
 #else
     const float base = max(unpack_mix_float(in_base, drawable.base_t), 0.0);
 #endif
 
 #if defined(HAS_UNIFORM_u_height)
-    const float height = props.height;
+    const float height = max(props.height, 0.0);
 #else
     const float height = max(unpack_mix_float(in_height, drawable.height_t), 0.0);
 #endif
@@ -3015,6 +3023,7 @@ pub(crate) const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER: GlslShaderSource = Gls
     name: "FillExtrusionPatternInstancedShader",
     prelude: FILL_EXTRUSION_SHADER_PRELUDE,
     vertex: r"
+invariant gl_Position;
 
 layout(location = 0) in ivec2 in_position;
 
@@ -3120,13 +3129,13 @@ void main() {
     const FillExtrusionTilePropsUBO tileProps = tilePropsVector.tile_props_ubo[constant.ubo_index];
 
 #if defined(HAS_UNIFORM_u_base)
-    const float base = props.light_position_base.w;
+    const float base = max(props.light_position_base.w, 0.0);
 #else
     const float base = max(unpack_mix_float(in_base, drawable.base_t), 0.0);
 #endif
 
 #if defined(HAS_UNIFORM_u_height)
-    const float height = props.height;
+    const float height = max(props.height, 0.0);
 #else
     const float height = max(unpack_mix_float(in_height, drawable.height_t), 0.0);
 #endif
