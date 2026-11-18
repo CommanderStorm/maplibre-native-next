@@ -1,14 +1,12 @@
 // Surface sessions that present to X11 windows: the frames they render,
 // releasing the surface, and moving to another window. It needs an X server
 // that the GPU can present to, so it is ignored by default: run
-// `cargo test -p mln-rs-runtime --test surfaces_window -- --ignored` in a
+// `cargo test -p mln-rs-runtime --test integration surfaces_window:: -- --ignored` in a
 // desktop session, or in a headless compositor such as
 // `kwin_wayland --virtual --xwayland --exit-with-session <script>`. Xvfb has
 // no DRI3, which Mesa's Vulkan drivers need to present.
 
 #![cfg(target_os = "linux")]
-
-mod support;
 
 use std::sync::Arc;
 
@@ -18,11 +16,12 @@ use mln_runtime::{
     RenderSession, RenderTarget, Runtime, Surface,
 };
 use mln_util::size::Size;
-use support::{TIMEOUT, eventually, runtime, wait};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::EventLoop;
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::Window;
+
+use crate::support::{TIMEOUT, eventually, runtime, wait};
 
 const STYLE: &str =
     r##"{"version":8,"sources":{},"layers":[{"id":"bg","type":"background","paint":{"background-color":"#00ff00"}}]}"##;
