@@ -20,8 +20,8 @@ mln_text.workspace = true
 mln_util.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-fontdb.workspace = true
 memmap2.workspace = true
+parking_lot.workspace = true
 skrifa.workspace = true
 sys-locale.workspace = true
 
@@ -40,7 +40,7 @@ objc2-core-foundation = { workspace = true, features = [
   "CFData",
   "CFString",
 ] }
-objc2-core-text = { workspace = true }
+objc2-core-text = { workspace = true, features = ["CTFontTraits"] }
 
 # DirectWrite.
 [target.'cfg(windows)'.dependencies]

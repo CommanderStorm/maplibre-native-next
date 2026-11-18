@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use skrifa::{Font, HintOptions, ScalerFont};
+use skrifa::{Font, GlyphId, HintOptions, ScalerFont};
 
 use crate::glyph::{FontData, Glyph, GlyphID};
 
@@ -23,9 +23,9 @@ impl FreeTypeLibrary {
 
 #[derive(Clone)]
 pub(crate) struct Face {
-    /// The font at regular weight (`weight::at_regular_weight`), or `None`
-    /// when the data holds no font this can read or the font maps no
-    /// characters.
+    /// The font at its weight (`weight::REGULAR_WEIGHT`, unless
+    /// made with [`Face::from_memory_at_weight`]), or `None` when the data
+    /// holds no font this can read or the font maps no characters.
     font: Option<Font>,
     /// The hinted glyph loader at `SDF_FONT_SIZE`, made on first use.
     scaler: Arc<OnceLock<ScalerFont>>,
@@ -41,11 +41,17 @@ impl Face {
     /// or WOFF2 file: then it reads the font decoded from it, and isn't valid
     /// when that fails.
     pub(crate) fn from_memory(font_data: impl Into<FontData>) -> Self {
+        Self::from_memory_at_weight(font_data, crate::weight::REGULAR_WEIGHT)
+    }
+
+    /// [`Face::from_memory`], with a variable font at `weight` within its
+    /// `wght` axis rather than at regular weight.
+    pub(crate) fn from_memory_at_weight(font_data: impl Into<FontData>, weight: f32) -> Self {
         let font = crate::woff::to_sfnt(font_data.into())
             .ok()
             .and_then(|data| Font::new(data.shared(), data.face_index()))
             .filter(|font| font.charmap().has_unicode())
-            .map(crate::weight::at_regular_weight);
+            .map(|font| crate::weight::at_weight(font, weight));
         Face { font, scaler: Arc::default() }
     }
 
@@ -54,7 +60,7 @@ impl Face {
         self.font.is_some()
     }
 
-    /// The font at regular weight, `None` when not valid.
+    /// The font at the face's weight, `None` when not valid.
     #[must_use]
     pub(crate) fn font(&self) -> Option<&Font> {
         self.font.as_ref()
@@ -73,5 +79,57 @@ impl Face {
     #[must_use]
     pub(crate) fn rasterize_glyph(&self, glyph: GlyphID) -> Glyph {
         crate::rasterize::rasterize_glyph(self, glyph)
+    }
+}
+
+/// A font file that the map draws single characters from, unshaped, as it
+/// draws the glyphs of a glyph PBF: a local font.
+#[derive(Clone)]
+pub struct FontFile {
+    face: Face,
+}
+
+impl FontFile {
+    /// The font in `data`, as a font face reads it, at the OpenType `weight`
+    /// within a variable font's `wght` axis (a static font draws at its own):
+    /// `None` when it isn't a font the map can draw.
+    #[must_use]
+    pub fn new(data: FontData, weight: u16) -> Option<Self> {
+        let face = Face::from_memory_at_weight(data, f32::from(weight));
+        face.is_valid().then_some(FontFile { face })
+    }
+
+    /// Whether the map can draw `c` from the font: the font maps it to a
+    /// glyph whose outline the map reads. A font whose outlines are in a
+    /// format the map doesn't read has none.
+    #[must_use]
+    pub fn has_char(&self, c: char) -> bool {
+        self.glyph_index(c).is_some()
+    }
+
+    /// The glyph of `c`, with the ID `id`: its coverage at 24 px, before the
+    /// signed distance field. `None` when the map can't draw `c` from the
+    /// font ([`has_char`](Self::has_char)).
+    #[must_use]
+    pub fn rasterize_char(&self, c: char, id: GlyphID) -> Option<Glyph> {
+        let index = self.glyph_index(c)?;
+        let mut glyph = self.face.rasterize_glyph(GlyphID::with_type(index, id.type_));
+        glyph.id = id;
+        Some(glyph)
+    }
+
+    /// The index of `c`'s glyph, if the font maps it to a glyph the map can
+    /// draw and the index fits a glyph ID.
+    fn glyph_index(&self, c: char) -> Option<u16> {
+        let glyph = self.face.font()?.charmap().map_unicode(c)?;
+        let index = u16::try_from(glyph.to_u32()).ok().filter(|&index| index != 0)?;
+        self.face.scaler()?.outline(GlyphId::new(u32::from(index)))?;
+        Some(index)
+    }
+}
+
+impl std::fmt::Debug for FontFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FontFile").finish_non_exhaustive()
     }
 }
