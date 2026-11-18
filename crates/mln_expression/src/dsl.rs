@@ -1,10 +1,6 @@
-// This convenience API does little to no expression validation or
-// type-checking, and is intended for use only by test and other non-production
-// code.
+// Functions that build expressions for tests: they check little of what they
+// build. Dependents' tests reach them through the `dsl` feature.
 
-use std::sync::Arc;
-
-use mln_conversion::Convertible;
 use mln_util::ColorSpace;
 
 use crate::assertion::Assertion;
@@ -24,27 +20,11 @@ use crate::stops::Stops;
 use crate::type_::Type;
 use crate::value::Value;
 
-/// The call of the built-in function `op` with `args`.
-#[must_use]
-pub fn compound(op: &str, args: Vec<Expr>) -> Expr {
+/// The call of the built-in function `op` with `args`, for the calls this
+/// module makes, which are always valid.
+fn compound(op: &str, args: Vec<Expr>) -> Expr {
     let mut ctx = ParsingContext::new(&Functions::with_builtins());
-    let result = create_compound_expression(op, args, &mut ctx);
-    result.expect("dsl::compound")
-}
-
-/// Parses an expression from JSON text against `functions`.
-#[must_use]
-pub fn create_expression_from_str(expr: &str, functions: &Arc<Functions>) -> Option<Expr> {
-    let document: serde_json::Value = serde_json::from_str(expr).ok()?;
-    let mut ctx = ParsingContext::new(functions);
-    ctx.parse_expression(&Convertible::from(&document), None)
-}
-
-/// Parses an expression against `functions`.
-#[must_use]
-pub fn create_expression(expr: &Convertible<'_>, functions: &Arc<Functions>) -> Option<Expr> {
-    let mut ctx = ParsingContext::new(functions);
-    ctx.parse_expression(expr, None)
+    create_compound_expression(op, args, &mut ctx).expect("the dsl builds only valid built-in calls")
 }
 
 #[must_use]
@@ -169,17 +149,21 @@ pub fn linear() -> Interpolator {
     ExponentialInterpolator::new(1.0).into()
 }
 
-/// The `dsl::interpolate` overloads: stops as (input, output) pairs.
+/// An `interpolate` expression with stops as (input, output) pairs, or
+/// `None` when the input isn't a number, there are no stops, or they can't be
+/// interpolated.
 #[must_use]
-pub fn interpolate(interpolator: Interpolator, input: Expr, stops_in: Vec<(f64, Expr)>) -> Expr {
-    let type_ = stops_in.first().expect("at least one stop").1.get_type();
+pub fn interpolate(interpolator: Interpolator, input: Expr, stops_in: Vec<(f64, Expr)>) -> Option<Expr> {
+    if input.get_type() != Type::Number {
+        return None;
+    }
+    let type_ = stops_in.first()?.1.get_type();
     let mut stops = Stops::new();
     for (k, v) in stops_in {
         stops.insert_or_assign(k, v);
     }
     let mut ctx = ParsingContext::without_functions();
-    let result = create_interpolate(type_, interpolator, ColorSpace::Rgb, input, stops, &mut ctx);
-    result.expect("dsl::interpolate")
+    create_interpolate(type_, interpolator, ColorSpace::Rgb, input, stops, &mut ctx)
 }
 
 #[must_use]
