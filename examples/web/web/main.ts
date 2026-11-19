@@ -10,7 +10,8 @@
 // The map draws with WebGPU. A browser without it gets the module's other
 // build, which draws with WebGL2 (pkg/webgl, worker-webgl.ts). So does one
 // whose WebGPU can't start the map: the page then loads again with WebGL2,
-// and the tab remembers that.
+// and the tab remembers that. The control at the bottom left shows the
+// backend and, where the other one can draw, loads the page again with it.
 //
 // URL parameters:
 //   style=<key|url>        a style of styles.ts, or any style's URL
@@ -119,7 +120,7 @@ const banner = element("error", HTMLElement);
 const mapBox = element("map-box", HTMLElement);
 const canvas = element("map", HTMLCanvasElement);
 // The debug overlay (debug.ts), wired up at the end.
-const debug = createDebugOverlay(document.body);
+const debug = createDebugOverlay(element("bottom-left", HTMLElement));
 
 if (params.has("width") && params.has("height")) {
   mapBox.style.width = `${number("width", 0)}px`;
@@ -145,21 +146,43 @@ fitCanvas();
 
 const localFamily = params.get("localIdeographFontFamily");
 
-// What a tab whose WebGPU couldn't start the map draws with from then on.
-const BACKEND_KEY = "mln-backend";
-function rememberedBackend(): string | null {
+const BACKEND_NAME: Record<Backend, string> = {
+  webgpu: "WebGPU",
+  webgl2: "WebGL2",
+};
+const OTHER_BACKEND: Record<Backend, Backend> = {
+  webgpu: "webgl2",
+  webgl2: "webgpu",
+};
+
+// The backends that couldn't start the map in this tab: the page neither
+// starts with nor offers them again.
+const FAILED_KEY = "mln-failed-backends";
+function failedBackends(): Backend[] {
   try {
-    return sessionStorage.getItem(BACKEND_KEY);
+    return (sessionStorage.getItem(FAILED_KEY)?.split(",") ?? []).filter(
+      (name): name is Backend => name in BACKEND_NAME,
+    );
   } catch {
-    return null; // no storage for this page
+    return []; // no storage for this page
   }
 }
+const failed = failedBackends();
+function hasApi(backend: Backend): boolean {
+  return backend === "webgpu"
+    ? "gpu" in navigator
+    : "WebGL2RenderingContext" in window;
+}
+function canDraw(backend: Backend): boolean {
+  return hasApi(backend) && !failed.includes(backend);
+}
+const requested = params.get("backend");
 const backend: Backend =
-  (params.get("backend") ??
-    rememberedBackend() ??
-    ("gpu" in navigator ? "webgpu" : "webgl2")) === "webgl2"
-    ? "webgl2"
-    : "webgpu";
+  requested === "webgpu" || requested === "webgl2"
+    ? requested
+    : canDraw("webgpu")
+      ? "webgpu"
+      : "webgl2";
 
 const compiling = WebAssembly.compileStreaming(
   fetch(backend === "webgl2" ? webglWasmUrl : wasmUrl),
@@ -265,24 +288,31 @@ function showBanner(text: string) {
   banner.hidden = false;
 }
 
-// The browser's API couldn't start the map. After WebGPU the page loads
-// again to draw with WebGL2, in this tab from now on; after WebGL2 there is
-// nothing left to draw with.
+// The browser's API couldn't start the map. The tab remembers that, and the
+// page loads again with the other backend unless it can't draw either.
 function unsupported(message: string) {
-  if (backend === "webgl2") {
+  const other = OTHER_BACKEND[backend];
+  if (!canDraw(other)) {
     stop(
       `this browser has neither WebGPU nor WebGL2 for the map to draw with (${message})`,
     );
     return;
   }
+  // Without storage the URL carries the choice; with it, the page drops a
+  // `?backend=` that would pick the failed backend again.
+  const url = new URL(location.href);
   try {
-    sessionStorage.setItem(BACKEND_KEY, "webgl2");
-    location.reload();
+    sessionStorage.setItem(
+      FAILED_KEY,
+      [...new Set([...failed, backend])].join(","),
+    );
+    url.searchParams.delete("backend");
   } catch {
-    const url = new URL(location.href);
-    url.searchParams.set("backend", "webgl2");
-    location.replace(url);
+    url.searchParams.set("backend", other);
   }
+  // Replacing a URL with itself and a hash wouldn't load the page again.
+  if (url.href === location.href) location.reload();
+  else location.replace(url);
 }
 
 let markLoaded: (loaded: Loaded) => void = () => {};
@@ -790,11 +820,52 @@ freeBearingToggle.addEventListener("change", () =>
 );
 if (params.has("freeBearing")) setFreeBearing(true);
 
+// The backend control, at the bottom left: the backend's logo and name, and a
+// button to load the page again with the other backend where it can draw.
+const backendButton = element("backend-button", HTMLButtonElement);
+element("backend-name", HTMLElement).textContent = BACKEND_NAME[backend];
+for (const [id, shown] of [
+  ["backend-logo-webgpu", backend === "webgpu"],
+  ["backend-logo-webgl", backend === "webgl2"],
+] as const)
+  element(id, SVGElement).toggleAttribute("hidden", !shown);
+// The attribution keeps clear of the control (page.css).
+new ResizeObserver(() =>
+  document.documentElement.style.setProperty(
+    "--backend-width",
+    `${backendButton.offsetWidth}px`,
+  ),
+).observe(backendButton);
+backendButton.addEventListener("click", () => {
+  const url = new URL(location.href);
+  url.searchParams.set("backend", OTHER_BACKEND[backend]);
+  url.hash = hashFromCamera(latestCamera);
+  location.assign(url);
+});
+async function otherBackendCanDraw(): Promise<boolean> {
+  const other = OTHER_BACKEND[backend];
+  if (!canDraw(other)) return false;
+  // A browser can have WebGPU's API but no adapter for it, as Chromium on
+  // Linux often does; WebGL2 that fails falls back to WebGPU.
+  if (other !== "webgpu") return true;
+  try {
+    const options = { powerPreference: "high-performance" } as const;
+    return (await navigator.gpu.requestAdapter(options)) !== null;
+  } catch {
+    return false;
+  }
+}
+void otherBackendCanDraw().then((can) => {
+  if (!can) return;
+  backendButton.disabled = false;
+  backendButton.title = `Switch to ${BACKEND_NAME[OTHER_BACKEND[backend]]}`;
+});
+
 // The debug overlay (debug.ts), off as the page starts unless `?debug`.
 const debugToggle = element("debug-toggle", HTMLInputElement);
 function showDebugPage() {
   debug.page({
-    backend: backend === "webgl2" ? "WebGL2" : "WebGPU",
+    backend: BACKEND_NAME[backend],
     width: size[0],
     height: size[1],
     ratio,

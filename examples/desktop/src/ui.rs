@@ -204,9 +204,7 @@ impl Controls {
             about_panel(ctx, &palette, shown, &mut actions);
         }
         camera_controls(ctx, &palette, shown, &mut actions);
-        if Kind::ALL.len() > 1 {
-            backend_label(ctx, &palette, shown.backend, &mut actions);
-        }
+        backend_label(ctx, &palette, shown.backend, &mut actions);
         attribution(ctx, &palette, shown.attributions);
         if let Some(corners) = shown.box_zoom {
             box_zoom(ctx, &palette, corners);
@@ -373,18 +371,13 @@ fn about_panel(ctx: &egui::Context, palette: &Palette, shown: &Shown<'_>, action
             }
             ui.add_space(4.0);
             ui.hyperlink_to("Source on GitHub", "https://github.com/louwers/mln-rs");
-            if Kind::ALL.len() > 1 {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.label(RichText::new("WebGPU logo by ").size(11.0).color(palette.muted));
-                    ui.hyperlink_to(RichText::new("W3C").size(11.0), "https://www.w3.org/2023/02/webgpu-logos.html");
-                    ui.label(RichText::new(", ").size(11.0).color(palette.muted));
-                    ui.hyperlink_to(
-                        RichText::new("CC BY 4.0").size(11.0),
-                        "https://creativecommons.org/licenses/by/4.0/",
-                    );
-                });
-            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.label(RichText::new("WebGPU logo by ").size(11.0).color(palette.muted));
+                ui.hyperlink_to(RichText::new("W3C").size(11.0), "https://www.w3.org/2023/02/webgpu-logos.html");
+                ui.label(RichText::new(", ").size(11.0).color(palette.muted));
+                ui.hyperlink_to(RichText::new("CC BY 4.0").size(11.0), "https://creativecommons.org/licenses/by/4.0/");
+            });
             #[cfg(not(target_vendor = "apple"))]
             ui.add(
                 egui::Label::new(
@@ -454,8 +447,8 @@ enum Piece {
     Link { text: String, url: String },
 }
 
-/// The backend's logo and name, at the bottom left; a click switches to the
-/// next backend.
+/// The backend's logo and name, at the bottom left; where the platform has
+/// another backend, a click switches to the next one.
 fn backend_label(ctx: &egui::Context, palette: &Palette, backend: Kind, actions: &mut Vec<Action>) {
     // The logos are 18 points high; Vulkan's is 708 by 570, and OpenGL's is a
     // wordmark of 12 by 5. D3D12 shows its name alone.
@@ -470,7 +463,9 @@ fn backend_label(ctx: &egui::Context, palette: &Palette, backend: Kind, actions:
         #[cfg(target_os = "linux")]
         Kind::OpenGl => Some((egui::include_image!("../assets/opengl.svg"), 43.2)),
     };
-    layer("backend", Align2::LEFT_BOTTOM, vec2(GAP, -GAP)).show(ctx, |ui| {
+    let switchable = Kind::ALL.len() > 1;
+    // A label alone lets the map's gestures through.
+    layer("backend", Align2::LEFT_BOTTOM, vec2(GAP, -GAP)).interactable(switchable).show(ctx, |ui| {
         let response = palette
             .control()
             .inner_margin(Margin::symmetric(8, 4))
@@ -485,9 +480,8 @@ fn backend_label(ctx: &egui::Context, palette: &Palette, backend: Kind, actions:
                     );
                 });
             })
-            .response
-            .interact(Sense::click());
-        if response.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+            .response;
+        if switchable && response.interact(Sense::click()).on_hover_cursor(CursorIcon::PointingHand).clicked() {
             actions.push(Action::SetBackend(backend.next()));
         }
     });
