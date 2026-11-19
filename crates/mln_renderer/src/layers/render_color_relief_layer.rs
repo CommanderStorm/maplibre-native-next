@@ -8,7 +8,7 @@ use std::mem::offset_of;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_gfx::gpu::TextureFormat;
+use mln_gfx::gpu::{Gpu, TextureFormat};
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shaders::color_relief_layer_ubo::{
     ColorReliefDrawableUBO, ColorReliefEvaluatedPropsUBO, ColorReliefTilePropsUBO,
@@ -22,7 +22,7 @@ use mln_gfx::shaders::shader_defines::{
 };
 use mln_gfx::texture2d::SamplerState;
 use mln_gfx::types::{TextureFilterType, TextureWrapType};
-use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode, ShaderProgramPtr};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode};
 use mln_style::color_ramp_property_value::ColorRampPropertyValue;
 use mln_style::expression::{
     Dependency, EvaluationContext, GlobalStateMap, from_expression_value, global_state_refs_intersect,
@@ -45,6 +45,7 @@ use crate::buckets::hillshade_bucket::HillshadeBucket;
 use crate::buckets::raster_bucket::RasterLayoutVertex;
 use crate::draw::{DrawGeometry, DrawObjects, Textures};
 use crate::gfx::indexes::{DrawIndexes, Indexes, SharedIndexes};
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::gfx::store::SharedTexture;
 use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::gfx::vertices::SharedVertices;
@@ -77,6 +78,10 @@ impl TileObjects for ReliefTile {
 
     fn objects(&mut self, (): ()) -> Option<DrawObjectsMut<'_>> {
         self.draw.objects(())
+    }
+
+    fn drop_bindings(&mut self) {
+        self.draw.drop_bindings();
     }
 }
 
@@ -346,6 +351,7 @@ impl TypedLayer for RenderColorReliefLayer {
     /// buffers they read.
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         paint_parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         render_tiles: &[FrameTile<'_, ColorRelief>],
@@ -400,7 +406,8 @@ impl TypedLayer for RenderColorReliefLayer {
                 });
             });
             let data = bytemuck::cast_slice(elevation_stops_data.as_slice());
-            if let Err(error) = context.upload_texture_data(&elevation_stops, data, Size::new(*color_ramp_size, 1)) {
+            if let Err(error) = context.upload_texture_data(gpu, &elevation_stops, data, Size::new(*color_ramp_size, 1))
+            {
                 Log::error(Event::Render, format!("Uploading the elevation stops failed: {error}"));
             }
             *elevation_stops_texture = Some(elevation_stops);
@@ -569,9 +576,8 @@ impl TypedLayer for RenderColorReliefLayer {
             draw_list.push(draw, uniforms);
         }
 
-        let frame = drawing.frame_mut();
         let opacity = *values.evaluated.paint.color_relief_opacity.uniform();
-        draw_list.finish(frame, paint_parameters.context, |writer| {
+        drawing.finish(draw_list, gpu, paint_parameters.context, |writer| {
             let props = ColorReliefEvaluatedPropsUBO { opacity, pad_eval0: 0.0, pad_eval1: 0.0, pad_eval2: 0.0 };
             writer.uniform(ID_COLOR_RELIEF_EVALUATED_PROPS_UBO, &props);
             writer.storage(ID_COLOR_RELIEF_DRAWABLE_UBO, |uniforms| uniforms.draw_ubo);

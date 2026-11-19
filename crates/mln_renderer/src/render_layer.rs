@@ -29,6 +29,7 @@ use crate::geometry::feature_index::FeatureIndex;
 use crate::gfx::context::Context;
 use crate::layer_drawing::{ChangedBuckets, DrawGroup, DrawOrder, LayerDrawing};
 use crate::layer_type::{ErasedEvaluatedLayer, EvaluatedLayer, LayerType};
+use crate::layers::render_custom_layer::EndedHosts;
 use crate::line_atlas::LineAtlas;
 use crate::paint_parameters::PaintParameters;
 use crate::pattern_atlas::PatternAtlas;
@@ -539,6 +540,7 @@ pub(crate) trait TypedLayer {
     /// with the values of their uniforms.
     fn update_draws(
         &mut self,
+        _gpu: &mut dyn Gpu,
         _parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         _tiles: &[FrameTile<'_, Self::Type>],
@@ -549,6 +551,7 @@ pub(crate) trait TypedLayer {
     /// image source, from its image.
     fn update_image_draws(
         &mut self,
+        _gpu: &mut dyn Gpu,
         _parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         _image: ImageSourceRenderData<'_>,
@@ -557,7 +560,13 @@ pub(crate) trait TypedLayer {
 
     /// [`update_draws`](Self::update_draws) of a layer of a type without a
     /// source.
-    fn update_draws_without_source(&mut self, _parameters: &mut PaintParameters<'_>, _atlases: &Atlases) {}
+    fn update_draws_without_source(
+        &mut self,
+        _gpu: &mut dyn Gpu,
+        _parameters: &mut PaintParameters<'_>,
+        _atlases: &Atlases,
+    ) {
+    }
 
     /// Drops what the layer keeps for its draws besides their GPU objects
     /// and its tiles' entries, when it stops rendering.
@@ -568,8 +577,10 @@ pub(crate) trait TypedLayer {
     fn nothing_to_draw(&mut self) {}
 
     /// Called when the layer's style changed to another of the same id and
-    /// type, once it is the layer's and before its values transition.
-    fn style_changed(&mut self) {}
+    /// type, once it is the layer's and before its values transition. A
+    /// custom layer whose host the style replaced puts the old host that
+    /// drew in `ended`.
+    fn style_changed(&mut self, _ended: &mut EndedHosts) {}
 }
 
 /// What the engine does with a render layer's parts, whatever its type: its
@@ -593,8 +604,9 @@ pub(crate) trait LayerParts {
     /// type), the layer's, drops the draws, which were built for the
     /// previous style's values, and begins transitions to the new values.
     /// A style of another type leaves the layer's. The next encode builds
-    /// the draws again from the tiles' buckets.
-    fn restyle(&mut self, parameters: &TransitionParameters, style: &Arc<dyn ErasedLayerStyle>);
+    /// the draws again from the tiles' buckets. A custom layer's host that
+    /// drew and that the style replaced goes to `ended`.
+    fn restyle(&mut self, parameters: &TransitionParameters, style: &Arc<dyn ErasedLayerStyle>, ended: &mut EndedHosts);
 
     /// Begins transitions for the paint values that changed since the last
     /// frame, to those of the layer's style.
@@ -631,6 +643,7 @@ pub(crate) trait LayerParts {
     /// its [`TypedLayer::update_draws_without_source`].
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         parameters: &mut PaintParameters<'_>,
         atlases: &Atlases,
         source: Option<LayerSource<'_>>,
@@ -664,7 +677,7 @@ pub(crate) trait LayerParts {
 
     /// Uploads the GPU objects of the layer's draw groups, before the frame
     /// draws them.
-    fn upload(&mut self, context: &mut Context);
+    fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context);
 
     /// Draws the pass's draws of the layer's draw groups into the open pass
     /// of `gpu`, the context's, in `order`, each at its depth.
@@ -706,14 +719,19 @@ impl<L: TypedLayer> LayerParts for L {
         L::TILE_ORDER
     }
 
-    fn restyle(&mut self, parameters: &TransitionParameters, style: &Arc<dyn ErasedLayerStyle>) {
+    fn restyle(
+        &mut self,
+        parameters: &TransitionParameters,
+        style: &Arc<dyn ErasedLayerStyle>,
+        ended: &mut EndedHosts,
+    ) {
         self.remove_all_draws();
         let PartsMut { base, values, .. } = self.parts_mut();
         if let Some(recovered) = LayerStyle::recover(style) {
             values.style = recovered;
             base.style = Arc::clone(style);
         }
-        self.style_changed();
+        self.style_changed(ended);
         self.transition(parameters);
     }
 
@@ -764,6 +782,7 @@ impl<L: TypedLayer> LayerParts for L {
 
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         parameters: &mut PaintParameters<'_>,
         atlases: &Atlases,
         source: Option<LayerSource<'_>>,
@@ -780,7 +799,7 @@ impl<L: TypedLayer> LayerParts for L {
             if self.parts_mut().drawing.tiles().is_some_and(|tiles| tiles.is_empty()) {
                 self.remove_all_draws();
             } else if begin_frame(self) {
-                TypedLayer::update_draws_without_source(self, parameters, atlases);
+                TypedLayer::update_draws_without_source(self, gpu, parameters, atlases);
             }
             return;
         }
@@ -790,12 +809,12 @@ impl<L: TypedLayer> LayerParts for L {
             {
                 let tiles = source.at::<L::Type>(found, self.id());
                 if begin_frame(self) {
-                    TypedLayer::update_draws(self, parameters, atlases, &tiles);
+                    TypedLayer::update_draws(self, gpu, parameters, atlases, &tiles);
                 }
             }
             Some(LayerSource::Image(image)) => {
                 if begin_frame(self) {
-                    TypedLayer::update_image_draws(self, parameters, atlases, image);
+                    TypedLayer::update_image_draws(self, gpu, parameters, atlases, image);
                 }
             }
             _ => {
@@ -839,10 +858,10 @@ impl<L: TypedLayer> LayerParts for L {
         }
     }
 
-    fn upload(&mut self, context: &mut Context) {
+    fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
         let PartsMut { base, drawing, .. } = self.parts_mut();
         if base.is_renderable {
-            drawing.upload(context);
+            drawing.upload(gpu, context);
         }
     }
 
@@ -890,7 +909,7 @@ pub(crate) trait RenderLayer: LayerParts {
 
     /// Uploads what draws into the layer's render targets, which draw before
     /// the frame's passes.
-    fn upload_render_targets(&mut self, _context: &mut Context) {}
+    fn upload_render_targets(&mut self, _gpu: &mut dyn Gpu, _context: &mut Context) {}
 
     /// Draws the layer's render targets through `gpu`, the context's, ahead
     /// of the frame's passes, which sample them.
@@ -899,6 +918,11 @@ pub(crate) trait RenderLayer: LayerParts {
     /// Runs a custom layer's prerender through `gpu`, the context's, after
     /// the layers' draws upload and before the frame's first pass.
     fn prerender(&mut self, _gpu: &mut dyn Gpu, _parameters: &PaintParameters<'_>) {}
+
+    /// Lets go of a custom layer's host as the layer leaves the renderer: a
+    /// host that drew goes to `ended`, to hear that the renderer stopped.
+    /// The orchestrator calls it before it drops the layer.
+    fn leave(&mut self, _ended: &mut EndedHosts) {}
 
     /// Tells a custom layer's host that the renderer's graphics objects are
     /// lost, and lets go of it.

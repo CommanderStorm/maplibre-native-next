@@ -12,7 +12,7 @@ use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shaders::layer_ubo::ProjectionUBO;
 use mln_gfx::shaders::segment::SegmentBase;
 use mln_gfx::shaders::shader_defines::{ID_GLOBE_DEPTH_POS_VERTEX_ATTRIBUTE, ID_PROJECTION_UBO};
-use mln_gfx::{AttributeDataType, DepthMaskType, DrawMode, ShaderProgramPtr, ShaderRegistry};
+use mln_gfx::{AttributeDataType, DepthMaskType, DrawMode};
 use mln_map_types::TransformState;
 use mln_util::range::Range;
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
@@ -20,8 +20,10 @@ use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 use crate::draw::{DrawGeometry, DrawObjects, Textures, raw_vertices};
 use crate::gfx::context::Context;
 use crate::gfx::indexes::DrawIndexes;
+use crate::gfx::shader_program::ShaderProgramPtr;
+use crate::gfx::shader_registry::ShaderRegistry;
 use crate::globe_tile_mesh::{RawGlobeTileMesh, raw_globe_tile_mesh};
-use crate::layer_drawing::{DrawDepth, DrawList, FrameDraw, KeptDraw, LayerDraws, TileMap, tile_objects};
+use crate::layer_drawing::{DrawDepth, DrawList, FrameDraw, KeptDraw, LayerDraws, TileMap, finish_tiles, tile_objects};
 use crate::paint_parameters::PaintParameters;
 use crate::tile_matrix::to_projection_ubo;
 use crate::update_parameters::UpdateParameters;
@@ -50,6 +52,7 @@ impl GlobeDepthPass {
     /// one the planet's depth is never read.
     pub(crate) fn update(
         &mut self,
+        gpu: &mut dyn Gpu,
         shaders: &ShaderRegistry,
         context: &mut Context,
         state: &TransformState,
@@ -136,14 +139,14 @@ impl GlobeDepthPass {
             self.draw_list.push(FrameDraw { depth, ..draw.frame_draw(Some(*tile_id)) }, projection);
         }
         // The draws draw in the order their GPU objects were made.
-        self.draw_list.finish(&mut self.frame, context, |writer| {
+        finish_tiles(&mut self.draw_list, &mut self.frame, &mut self.tiles, gpu, context, |writer| {
             writer.storage(ID_PROJECTION_UBO, |projection| *projection);
         });
     }
 
     /// Uploads the GPU objects of the frame's draws.
-    pub(crate) fn upload(&mut self, context: &mut Context) {
-        self.frame.upload(&mut self.tiles, tile_objects, context);
+    pub(crate) fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
+        self.frame.upload(gpu, &mut self.tiles, tile_objects, context);
     }
 
     /// Draws the frame's draws of the pass into the open pass of `gpu`, the

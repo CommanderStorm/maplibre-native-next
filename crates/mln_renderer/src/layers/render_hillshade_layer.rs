@@ -25,7 +25,7 @@ use mln_gfx::shaders::shader_defines::{
 };
 use mln_gfx::texture2d::SamplerState;
 use mln_gfx::types::{TextureChannelDataType, TextureFilterType, TextureWrapType};
-use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode, ShaderProgramPtr};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode};
 use mln_math::deg2radf;
 use mln_style::layer_type::LayerStyle;
 use mln_style::layers::Hillshade;
@@ -49,6 +49,7 @@ use crate::draw::{DrawGeometry, DrawObjects, Textures};
 use crate::geometry::dem_data::unpack_vector;
 use crate::gfx::context::Context;
 use crate::gfx::indexes::{DrawIndexes, Indexes, SharedIndexes};
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::gfx::store::SharedTexture;
 use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::gfx::vertices::SharedVertices;
@@ -106,6 +107,10 @@ impl TileObjects for HillshadeTile {
 
     fn objects(&mut self, (): ()) -> Option<DrawObjectsMut<'_>> {
         self.draw.objects(())
+    }
+
+    fn drop_bindings(&mut self) {
+        self.draw.drop_bindings();
     }
 }
 
@@ -326,6 +331,7 @@ impl TypedLayer for RenderHillshadeLayer {
     /// none of, and writes the layer's buffers they read.
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         paint_parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         render_tiles: &[FrameTile<'_, Hillshade>],
@@ -389,6 +395,7 @@ impl TypedLayer for RenderHillshadeLayer {
                 entry => {
                     let attrs = hillshade_vertex_attributes(static_data_shared_vertices);
                     let target = BucketTarget::new(
+                        gpu,
                         paint_parameters.context,
                         bucket,
                         &tile_id.to_unwrapped(),
@@ -483,8 +490,7 @@ impl TypedLayer for RenderHillshadeLayer {
             self.draw_list.push(draw, uniforms);
         }
 
-        let frame = self.drawing.frame_mut();
-        self.draw_list.finish(frame, paint_parameters.context, |writer| {
+        self.drawing.finish(&mut self.draw_list, gpu, paint_parameters.context, |writer| {
             if let Some(Illumination { props, .. }) = &illumination {
                 writer.uniform(ID_HILLSHADE_EVALUATED_PROPS_UBO, props);
             }
@@ -507,10 +513,10 @@ impl TypedLayer for RenderHillshadeLayer {
 }
 
 impl RenderLayer for RenderHillshadeLayer {
-    fn upload_render_targets(&mut self, context: &mut Context) {
+    fn upload_render_targets(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
         if self.base.is_renderable {
             for target in self.bucket_render_targets.values_mut() {
-                target.prepare.upload(context);
+                target.prepare.upload(gpu, context);
             }
         }
     }
@@ -537,7 +543,12 @@ impl BucketTarget {
     /// prepares from its DEM, drawn over `attrs` with the `quad` of the
     /// static data, with the uniforms of `tile_id`, the tile it is made for,
     /// of a source of `maxzoom`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the frame's GPU and context, and the tile's bucket, source, program and geometry"
+    )]
     fn new(
+        gpu: &mut dyn Gpu,
         context: &mut Context,
         bucket: &HillshadeBucket,
         tile_id: &UnwrappedTileID,
@@ -584,17 +595,16 @@ impl BucketTarget {
         matrix::ortho(&mut m, 0.0, extent, -extent, 0.0, -1.0, 1.0);
         let a = m;
         matrix::translate(&mut m, &a, 0.0, -extent, 0.0);
-        let buffers = &mut prepare.frame.uniform_buffers;
-        bind_no_projection(buffers, context);
+        bind_no_projection(gpu, &mut prepare.frame.uniform_buffers, context);
         let draw_ubo = HillshadePrepareDrawableUBO { matrix: cast_matrix(&m) };
-        buffers.create_or_update_pod(ID_HILLSHADE_PREPARE_DRAWABLE_UBO, &draw_ubo, context.device());
+        prepare.write_pod(gpu, ID_HILLSHADE_PREPARE_DRAWABLE_UBO, &draw_ubo, context);
         let tile_props = HillshadePrepareTilePropsUBO {
             unpack: unpack_vector(encoding),
             dimension: [stride as f32, stride as f32],
             zoom: f32::from(tile_id.canonical.z),
             maxzoom: f32::from(maxzoom),
         };
-        buffers.create_or_update_pod(ID_HILLSHADE_PREPARE_TILE_PROPS_UBO, &tile_props, context.device());
+        prepare.write_pod(gpu, ID_HILLSHADE_PREPARE_TILE_PROPS_UBO, &tile_props, context);
 
         BucketTarget { render_target, _dem: dem, prepare, generation: bucket.render_target_generation() }
     }

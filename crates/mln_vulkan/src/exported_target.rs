@@ -12,31 +12,29 @@
 // that D3D11 opens as a texture: a D3D11 device on the GPU's adapter makes
 // the texture and its NT handle.
 //
-// A resize makes a new generation of images; the frames that the host holds
-// keep the old generation's images until they are given back.
+// The ring target (mln_gfx::ring) keeps the generations of images that a
+// resize leaves to the frames the host holds.
 
-use std::cell::RefCell;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-use std::rc::Rc;
 
 use ash::vk;
 #[cfg(unix)]
 use mln_gfx::DmaBufPlane;
 use mln_gfx::export::{
-    DMA_BUF_MAX_PLANES, DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR, DmaBufChoice, Generations,
+    DMA_BUF_MAX_PLANES, DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR, DmaBufChoice,
     choose_dma_buf_format,
 };
-use mln_gfx::frame::{FrameImage, FrameTarget, Handoff};
+use mln_gfx::ring::{self, Exporter};
 use mln_gfx::{
-    ConsumerSync, DmaBufFormat, ExportKind, ExportKinds, ExportedFrame, ExportedImage, ExportedRing, FrameDepth,
-    NativeTexture, SyncKind, SyncKinds,
+    DmaBufFormat, ExportKind, ExportKinds, ExportedFrame, ExportedImage, ExportedRing, FrameDepth, NativeTexture,
+    SyncKind, SyncKinds,
 };
 use mln_util::error::Error;
 use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 
-use crate::borrowed_target::{BorrowedDepth, BorrowedImage, BorrowedImages, BorrowedTarget, ImageOwner};
+use crate::borrowed_target::{BorrowedDepth, BorrowedImage, BorrowedImages, ImageOwner, VulkanRing};
 use crate::device::{Device, depth_vk_format};
 use crate::renderer_backend::RendererBackend;
 
@@ -848,111 +846,56 @@ pub fn sync_kinds(device: &Device) -> (SyncKinds, SyncKinds) {
     (keep(producer), keep(consumer))
 }
 
-/// One generation of a ring's images, of one size, and the borrowed ring
-/// target that draws into them.
-struct Generation {
-    // Before the images: dropping it waits for the frames that drew into
-    // them.
-    target: BorrowedTarget,
-    images: Vec<ExportedMemory>,
-    /// Each slot's depth image, when the ring keeps depth.
-    depth_images: Vec<DepthMemory>,
-    size: Size,
-}
-
-impl Generation {
-    fn new(
-        backend: &Rc<RendererBackend>,
-        layout: &Layout,
-        depth: usize,
-        size: Size,
-        producer: SyncKind,
-        depth_format: Option<(vk::Format, bool)>,
-    ) -> Result<Generation, Error> {
-        let device = backend.backend_impl().device();
-        let extent = vk::Extent2D { width: size.width, height: size.height };
-        let images = (0..depth).map(|_| ExportedMemory::new(device, extent, layout)).collect::<Result<Vec<_>, _>>()?;
-        let depth_images = match depth_format {
-            Some((format, exported)) => {
-                (0..depth).map(|_| DepthMemory::new(device, extent, format, exported)).collect::<Result<Vec<_>, _>>()?
-            }
-            None => Vec::new(),
-        };
-        // A dmabuf's or hardware buffer's readers are outside the device,
-        // for which the foreign queue family stands; another API of the
-        // driver is external. A device that imports hardware buffers has the
-        // foreign queue family.
-        let owner = match layout {
-            Layout::DmaBuf { .. } if device.features().foreign_queue_family => ImageOwner::Foreign,
-            #[cfg(target_os = "android")]
-            Layout::AndroidHardwareBuffer { .. } => ImageOwner::Foreign,
-            _ => ImageOwner::External,
-        };
-        let borrowed = BorrowedImages {
-            images: images.iter().map(|image| BorrowedImage { image: image.image, view: image.view }).collect(),
-            size,
-            format: layout.format(),
-            final_layout: vk::ImageLayout::GENERAL,
-            owner,
-            depth: depth_format.map(|(format, _)| BorrowedDepth {
-                images: depth_images
-                    .iter()
-                    .map(|image| BorrowedImage { image: image.image, view: image.view })
-                    .collect(),
-                format,
-                final_layout: vk::ImageLayout::GENERAL,
-            }),
-        };
-        let target = BorrowedTarget::new(Rc::clone(backend), borrowed, producer)?;
-        Ok(Generation { target, images, depth_images, size })
-    }
-}
-
 /// Frames drawn into images of the target's own, which it exports, and
 /// queued for the host to acquire.
-pub struct ExportedTarget {
-    backend: Rc<RendererBackend>,
+pub type ExportedTarget = ring::ExportedTarget<VulkanExporter>;
+
+/// An [`ExportedTarget`]'s part on Vulkan: it allocates images with memory
+/// of their own in the ring's layout, and with the ring's depth, a depth
+/// image beside each, which an opaque file descriptor shares where the
+/// device's [`depth_export_kinds`](Device::depth_export_kinds) has the ring's
+/// kind.
+pub struct VulkanExporter {
     layout: Layout,
     depth: usize,
-    producer: SyncKind,
     /// The format of the depth images, when the ring keeps depth, and
     /// whether they are exported.
     depth_format: Option<(vk::Format, bool)>,
-    generations: RefCell<Generations<Generation>>,
 }
 
-impl ExportedTarget {
-    /// A target on `backend` that draws into `ring.depth` images of `size`
-    /// pixels, exported as `kind`, which [`plan`] picked, and hands each
-    /// frame over with sync of the kind `producer`, one of
+/// A generation's images, and each slot's depth image when the ring keeps
+/// depth.
+pub struct ExportedImages {
+    images: Vec<ExportedMemory>,
+    depth_images: Vec<DepthMemory>,
+}
+
+impl Exporter for VulkanExporter {
+    type Ring = VulkanRing;
+    type Images = ExportedImages;
+
+    /// The kind `kind` is one that [`plan`] picked, and `producer` one of
     /// [`sync_kinds`]'s.
     ///
-    /// With `ring.keep_depth`, each frame also stores its depth and stencil
-    /// into a depth image of the target's own, which an opaque file
-    /// descriptor shares where the device's
-    /// [`depth_export_kinds`](Device::depth_export_kinds) has `kind`.
-    ///
     /// Fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind) when the
-    /// device can't export `kind` or `producer`, and with
-    /// [`ErrorKind::Native`](mln_util::ErrorKind) when a Vulkan call fails.
-    pub fn new(
-        backend: Rc<RendererBackend>,
+    /// device can't export `kind` or `producer`, or keep the ring's depth.
+    fn new(
+        backend: &mut RendererBackend,
         ring: &ExportedRing,
         kind: ExportKind,
-        size: Size,
         producer: SyncKind,
-    ) -> Result<ExportedTarget, Error> {
-        let device = backend.backend_impl().device().clone();
+    ) -> Result<VulkanExporter, Error> {
+        let device = backend.device();
         if !device.export_kinds().contains(kind) {
             return Err(Error::unsupported(format!("the Vulkan device exports no {kind:?}")));
         }
-        if !sync_kinds(&device).0.contains(producer) {
+        if !sync_kinds(device).0.contains(producer) {
             return Err(Error::unsupported(format!("an exported image hands no frame over with {producer:?}")));
         }
         let layout = match kind {
             ExportKind::DmaBuf => dma_buf_layout(
-                &device,
-                dma_buf_choice(&device, &ring.dma_buf_formats)
+                device,
+                dma_buf_choice(device, &ring.dma_buf_formats)
                     .ok_or_else(|| Error::unsupported("the Vulkan device exports a dmabuf of none of the formats"))?,
             ),
             ExportKind::OpaqueFd => Layout::OpaqueFd,
@@ -965,76 +908,60 @@ impl ExportedTarget {
         };
         let depth_format = if ring.keep_depth {
             let exported = device.depth_export_kinds().contains(kind);
-            let format = depth_format(&device, exported)
+            let format = depth_format(device, exported)
                 .ok_or_else(|| Error::unsupported("the Vulkan device keeps no depth of an exported ring"))?;
             Some((format, exported))
         } else {
             None
         };
-        let current = Generation::new(&backend, &layout, ring.depth, size, producer, depth_format)?;
-        Ok(ExportedTarget {
-            backend,
-            layout,
-            depth: ring.depth,
-            producer,
-            depth_format,
-            generations: RefCell::new(Generations::new(current)),
-        })
+        Ok(VulkanExporter { layout, depth: ring.depth, depth_format })
     }
 
-    /// Has the next frame draw into the image at `slot`.
-    pub fn select(&self, slot: usize) {
-        self.generations.borrow().current().target.select(slot);
-    }
-
-    /// The host gave the frame at `slot` back, once its reads reach
-    /// `consumer`. A frame of an older generation lets go of its image, which
-    /// no frame draws into again.
-    ///
-    /// Fails as [`BorrowedTarget::release`] does.
-    pub fn release(&self, slot: usize, consumer: ConsumerSync) -> Result<(), Error> {
-        let mut generations = self.generations.borrow_mut();
-        if generations.give_back(slot) {
-            return Ok(());
-        }
-        generations.current().target.release(slot, consumer)
-    }
-
-    /// The host gave the frame at `slot` up without saying when its reads
-    /// end.
-    pub fn discard(&self, slot: usize) {
-        let mut generations = self.generations.borrow_mut();
-        if !generations.give_back(slot) {
-            generations.current().target.discard(slot);
-        }
-    }
-
-    /// Draws into images of `size` pixels from now on. The frames that the
-    /// host holds, at `held` slots, keep their images. Returns whether the
-    /// ring has new images, which it doesn't when they have `size` already.
-    ///
     /// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when Vulkan
-    /// can't make the images, and the target then keeps its own.
-    pub fn resize(&self, size: Size, held: &[usize]) -> Result<bool, Error> {
-        if self.size() == size {
-            return Ok(false);
-        }
-        let next = Generation::new(&self.backend, &self.layout, self.depth, size, self.producer, self.depth_format)?;
-        self.generations.borrow_mut().replace(next, held);
-        Ok(true)
+    /// can't make the images.
+    fn allocate(&self, backend: &mut RendererBackend, size: Size) -> Result<(ExportedImages, BorrowedImages), Error> {
+        let device = backend.device();
+        let extent = vk::Extent2D { width: size.width, height: size.height };
+        let images = (0..self.depth)
+            .map(|_| ExportedMemory::new(device, extent, &self.layout))
+            .collect::<Result<Vec<_>, _>>()?;
+        let depth_images = match self.depth_format {
+            Some((format, exported)) => (0..self.depth)
+                .map(|_| DepthMemory::new(device, extent, format, exported))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
+        // A dmabuf's or hardware buffer's readers are outside the device,
+        // for which the foreign queue family stands; another API of the
+        // driver is external. A device that imports hardware buffers has the
+        // foreign queue family.
+        let owner = match self.layout {
+            Layout::DmaBuf { .. } if device.features().foreign_queue_family => ImageOwner::Foreign,
+            #[cfg(target_os = "android")]
+            Layout::AndroidHardwareBuffer { .. } => ImageOwner::Foreign,
+            _ => ImageOwner::External,
+        };
+        let borrowed = BorrowedImages {
+            images: images.iter().map(|image| BorrowedImage { image: image.image, view: image.view }).collect(),
+            size,
+            format: self.layout.format(),
+            final_layout: vk::ImageLayout::GENERAL,
+            owner,
+            depth: self.depth_format.map(|(format, _)| BorrowedDepth {
+                images: depth_images
+                    .iter()
+                    .map(|image| BorrowedImage { image: image.image, view: image.view })
+                    .collect(),
+                format,
+                final_layout: vk::ImageLayout::GENERAL,
+            }),
+        };
+        Ok((ExportedImages { images, depth_images }, borrowed))
     }
 
-    /// The size of the images that frames draw into.
-    pub fn size(&self) -> Size {
-        self.generations.borrow().current().size
-    }
-
-    /// The images of the frame at `slot`: of the generation that the host
-    /// holds it in.
-    pub fn image(&self, slot: usize) -> Option<ExportedFrame> {
+    /// The images of the frame at `slot`.
+    fn frame(&self, generation: &ExportedImages, images: &BorrowedImages, slot: usize) -> Option<ExportedFrame> {
         use ash::vk::Handle as _;
-        let generations = self.generations.borrow();
-        let generation = generations.retired(slot).unwrap_or(generations.current());
         let image = generation.images.get(slot)?;
         let native = |image: vk::Image, view: vk::ImageView, format: vk::Format| NativeTexture::Vulkan {
             image: image.as_raw(),
@@ -1043,7 +970,7 @@ impl ExportedTarget {
             layout: vk::ImageLayout::GENERAL.as_raw(),
         };
         Some(ExportedFrame {
-            size: generation.size,
+            size: images.size,
             image: image.export.clone(),
             texture: native(image.image, image.view, self.layout.format()),
             depth: generation.depth_images.get(slot).map(|depth| FrameDepth {
@@ -1051,24 +978,5 @@ impl ExportedTarget {
                 export: depth.export.clone(),
             }),
         })
-    }
-}
-
-impl FrameTarget for ExportedTarget {
-    fn begin_frame(&self) -> Option<FrameImage> {
-        self.generations.borrow().current().target.begin_frame()
-    }
-
-    fn end_frame(&self) -> Handoff {
-        match self.generations.borrow().current().target.end_frame() {
-            Handoff::GivenBack { slot, sync } => Handoff::Queued { slot, sync },
-            other => other,
-        }
-    }
-}
-
-impl Drop for ExportedTarget {
-    fn drop(&mut self) {
-        self.generations.get_mut().clear_retired();
     }
 }

@@ -1,22 +1,22 @@
 // A ring of the host's images that frames are drawn into and given back to
-// the host, with what the host waits for before it reads them, and what the
-// target waits for before it draws into an image the host read.
+// the host, and the ring target's Vulkan part (mln_gfx::ring): the semaphores
+// that the host waits on before it reads an image, and the host's syncs that
+// the target waits for before it draws into an image the host read.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::time::Instant;
 
 use ash::vk;
-use mln_gfx::frame::{FrameImage, FrameTarget, Handoff};
-use mln_gfx::gpu::{Gpu as _, ResourceId, TargetFormats, TextureDesc, TextureFormat, TextureId, TextureUsage};
+use mln_gfx::gpu::{GpuError, TargetFormats, TextureFormat, TextureId, TextureUsage};
+use mln_gfx::ring::{self, RingBackend, RingTextures};
 use mln_gfx::{ConsumerSync, GpuSync, SyncKind};
 use mln_util::error::Error;
+#[cfg(unix)]
 use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 
 use crate::device::Device;
-use crate::gpu::ImportedImage;
-use crate::renderer_backend::{BackendImpl, RendererBackend};
+use crate::gpu::{ImportedImage, VulkanGpu};
+use crate::renderer_backend::RendererBackend;
 
 /// The queue family that a borrowed image goes to after each frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -103,266 +103,162 @@ impl BorrowedImages {
     }
 }
 
-/// The ring's images as textures of the backend's `Gpu`, with their depth
-/// and stencil attachments: the host's, or one of the target's own.
-pub(crate) struct Imports {
-    backend: Rc<RendererBackend>,
-    size: Size,
-    targets: TargetFormats,
-    color: Vec<TextureId>,
-    /// The host's depth and stencil images, one for each slot.
-    depth: Vec<TextureId>,
-    /// The target's own depth and stencil, when the host gave none.
-    own_depth: Option<TextureId>,
-}
+impl RingTextures for BorrowedImages {
+    type Image = BorrowedImage;
 
-impl Imports {
-    /// Fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind) for a
-    /// format the `Gpu` has no texture of, and with
-    /// [`ErrorKind::Native`](mln_util::ErrorKind) when it can't make the
-    /// depth and stencil texture.
-    pub(crate) fn new(backend: &Rc<RendererBackend>, images: &BorrowedImages) -> Result<Imports, Error> {
-        let release_to = match images.owner {
-            ImageOwner::GraphicsQueue => None,
-            ImageOwner::External => Some(vk::QUEUE_FAMILY_EXTERNAL),
-            ImageOwner::Foreign => Some(vk::QUEUE_FAMILY_FOREIGN_EXT),
-        };
-        // Made before the borrow of the `Gpu`, which then ends first where
-        // an error drops the imports, whose drop borrows it again.
-        let mut imports = Imports {
-            backend: Rc::clone(backend),
-            size: images.size,
-            targets: TargetFormats { color: None, depth_stencil: Some(TextureFormat::Depth24PlusStencil8) },
-            color: Vec::new(),
-            depth: Vec::new(),
-            own_depth: None,
-        };
-        let mut gpu = backend.gpu();
-        imports.targets.color = Some(
-            gpu.texture_format(images.format)
-                .ok_or_else(|| Error::unsupported(format!("the Vulkan target draws into no {:?}", images.format)))?,
-        );
-        let attachment = TextureUsage { sampled: false, render_target: true, copy_src: false };
-        let import = |gpu: &mut crate::gpu::VulkanGpu, image: &BorrowedImage, format, layout| {
-            gpu.import_image(&ImportedImage {
-                image: image.image,
-                view: image.view,
-                format,
-                size: images.size,
-                usage: attachment,
-                layout,
-                release_to,
-            })
-            .map_err(|error| Error::native(format!("Importing a borrowed image failed: {error}")))
-        };
-        for image in &images.images {
-            imports.color.push(import(&mut gpu, image, images.format, images.final_layout)?);
-        }
-        if let Some(depth) = &images.depth {
-            imports.targets.depth_stencil = gpu.texture_format(depth.format);
-            for image in &depth.images {
-                imports.depth.push(import(&mut gpu, image, depth.format, depth.final_layout)?);
-            }
-        } else {
-            let texture = gpu
-                .create_texture(&TextureDesc {
-                    label: "BorrowedDepth",
-                    size: images.size,
-                    format: TextureFormat::Depth24PlusStencil8,
-                    usage: attachment,
-                })
-                .map_err(|error| Error::native(format!("Vulkan depth texture allocation failed: {error}")))?;
-            imports.own_depth = Some(texture);
-        }
-        Ok(imports)
+    fn images(&self) -> &[BorrowedImage] {
+        &self.images
     }
 
-    /// The textures that a frame drawn into `slot` draws into.
-    fn frame_image(&self, slot: usize) -> Option<FrameImage> {
-        Some(FrameImage {
-            size: self.size,
-            color: *self.color.get(slot)?,
-            depth_stencil: self.own_depth.or_else(|| self.depth.get(slot).copied()),
-            targets: self.targets,
-        })
+    fn same_image(a: &BorrowedImage, b: &BorrowedImage) -> bool {
+        a.image == b.image
+    }
+
+    fn size(&self) -> Size {
+        self.size
+    }
+
+    fn has_depth(&self) -> bool {
+        self.depth.is_some()
     }
 }
 
-impl Drop for Imports {
-    fn drop(&mut self) {
-        let mut gpu = self.backend.gpu();
-        for texture in self.color.drain(..).chain(self.depth.drain(..)).chain(self.own_depth.take()) {
-            gpu.destroy(ResourceId::Texture(texture));
-        }
-    }
+/// What the next frame drawn into a slot's image waits for: the host's reads
+/// of it, on `device`.
+pub struct ConsumerWait {
+    device: Device,
+    waiting: Waiting,
 }
 
-/// What the next frame drawn into a slot's image waits for.
-enum ConsumerWait {
+/// What a [`ConsumerWait`] waits for.
+enum Waiting {
     /// The host's timeline, until it reaches the value.
     Timeline(vk::Semaphore, u64),
     /// A semaphore of the target's own that holds an imported sync file, and
     /// the file again, which a release of the image polls.
     #[cfg(unix)]
     Imported { semaphore: vk::Semaphore, file: std::os::fd::OwnedFd },
-    /// The host's D3D12 fence, imported, until it reaches the value.
+    /// A timeline semaphore of the target's own that holds the host's
+    /// D3D12 fence, imported, until it reaches the value.
     #[cfg(windows)]
-    Fence(Rc<ImportedFence>, u64),
+    Fence(vk::Semaphore, u64),
 }
 
-/// A timeline semaphore of the target's own that shares a D3D12 fence of the
-/// host's, which dropping destroys.
-#[cfg(windows)]
-struct ImportedFence {
-    device: ash::Device,
-    semaphore: vk::Semaphore,
-}
-
-#[cfg(windows)]
-impl ImportedFence {
-    /// The fence whose NT handle is `handle`, imported into a new timeline.
-    /// The handle stays the host's.
-    ///
-    /// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when Vulkan
-    /// can't import it.
-    fn import(backend: &BackendImpl, handle: u64) -> Result<ImportedFence, Error> {
-        let loader = backend
-            .device()
-            .shared
-            .semaphore_win32()
-            .ok_or_else(|| Error::native("the Vulkan device imports no D3D12 fences"))?;
-        let device = backend.get_device().clone();
-        let mut type_info = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
-        let info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-        // SAFETY: the create info is valid for the device, which has
-        // timelines when it imports D3D12 fences.
-        let semaphore = unsafe { device.create_semaphore(&info, None) }
-            .map_err(|e| Error::native(format!("Failed to create a timeline semaphore: {e}")))?;
-        let fence = ImportedFence { device, semaphore };
-        let import = vk::ImportSemaphoreWin32HandleInfoKHR::default()
-            .semaphore(semaphore)
-            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::D3D12_FENCE)
-            .handle(handle as vk::HANDLE);
-        // SAFETY: the semaphore is new, and an import of an NT handle leaves
-        // the handle to its owner.
-        unsafe { loader.import_semaphore_win32_handle(&import) }
-            .map_err(|e| Error::native(format!("Failed to import the host's D3D12 fence: {e}")))?;
-        Ok(fence)
+impl Waiting {
+    /// The semaphore of the ring's own that the wait holds, which the caller
+    /// destroys. A timeline is the host's.
+    fn into_own_semaphore(self) -> Option<vk::Semaphore> {
+        match self {
+            Waiting::Timeline(..) => None,
+            #[cfg(unix)]
+            Waiting::Imported { semaphore, .. } => Some(semaphore),
+            #[cfg(windows)]
+            Waiting::Fence(semaphore, _) => Some(semaphore),
+        }
     }
 }
 
+/// The host's D3D12 fence whose NT handle is `handle`, imported into a new
+/// timeline semaphore, which the caller destroys. The handle stays the
+/// host's.
+///
+/// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when Vulkan can't
+/// import it.
 #[cfg(windows)]
-impl Drop for ImportedFence {
-    fn drop(&mut self) {
-        // SAFETY: the last frame that waited on the semaphore is done: its
-        // target waited for the queue before it let go of its fences.
-        unsafe { self.device.destroy_semaphore(self.semaphore, None) };
+fn import_fence(device: &Device, handle: u64) -> Result<vk::Semaphore, Error> {
+    let loader =
+        device.shared.semaphore_win32().ok_or_else(|| Error::native("the Vulkan device imports no D3D12 fences"))?;
+    let vk_device = device.shared.device();
+    let mut type_info = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+    let info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
+    // SAFETY: the create info is valid for the device, which has timelines
+    // when it imports D3D12 fences.
+    let semaphore = unsafe { vk_device.create_semaphore(&info, None) }
+        .map_err(|e| Error::native(format!("Failed to create a timeline semaphore: {e}")))?;
+    let import = vk::ImportSemaphoreWin32HandleInfoKHR::default()
+        .semaphore(semaphore)
+        .handle_type(vk::ExternalSemaphoreHandleTypeFlags::D3D12_FENCE)
+        .handle(handle as vk::HANDLE);
+    // SAFETY: the semaphore is new, and an import of an NT handle leaves the
+    // handle to its owner.
+    match unsafe { loader.import_semaphore_win32_handle(&import) } {
+        Ok(()) => Ok(semaphore),
+        Err(error) => {
+            // SAFETY: nothing uses the semaphore.
+            unsafe { vk_device.destroy_semaphore(semaphore, None) };
+            Err(Error::native(format!("Failed to import the host's D3D12 fence: {error}")))
+        }
     }
-}
-
-/// What a slot of the ring waits for, and what it handed the host.
-#[derive(Default)]
-struct Slot {
-    consumer_wait: Option<ConsumerWait>,
-    /// The texture that has the next pass that draws into it wait for
-    /// `consumer_wait`, from the frame begun on the slot until it ends.
-    attached: Option<TextureId>,
-    /// The sync file of the slot's last frame, which the host may read until
-    /// it gives the slot back.
-    #[cfg(unix)]
-    producer_fd: Option<std::os::fd::OwnedFd>,
 }
 
 /// Frames drawn into the host's images, each given back to the host.
-pub struct BorrowedTarget {
-    backend: Rc<RendererBackend>,
-    images: RefCell<BorrowedImages>,
-    imports: RefCell<Imports>,
-    /// The slot the next frame draws into.
-    selected: Cell<usize>,
+pub type BorrowedTarget = ring::BorrowedTarget<VulkanRing>;
+
+/// The host's reads of images that a ring let go of, which the ring waits
+/// for before the host may use or destroy the images. Dropping it stops
+/// waiting.
+pub type PendingReads = ring::PendingReads<VulkanRing>;
+
+/// A [`BorrowedTarget`]'s part on Vulkan: the semaphores that its frames
+/// signal. Dropping it destroys them, once the target waited for its
+/// frames.
+pub struct VulkanRing {
+    device: Device,
     producer: SyncKind,
-    slots: RefCell<Vec<Slot>>,
     /// The timeline that frames signal, for a timeline or D3D12 fence
     /// producer.
     timeline: vk::Semaphore,
-    timeline_value: Cell<u64>,
+    timeline_value: u64,
     /// The binary semaphore that frames signal, for a sync file producer.
     export_semaphore: vk::Semaphore,
     /// The NT handle that shares `timeline` as a D3D12 fence, for a D3D12
     /// fence producer.
     #[cfg(windows)]
-    shared_fence: Option<crate::win32::OwnedHandle>,
-    /// The host's D3D12 fences that releases named, by their handles.
-    #[cfg(windows)]
-    imported_fences: RefCell<Vec<(u64, Rc<ImportedFence>)>>,
+    shared_fence: Option<std::os::windows::io::OwnedHandle>,
 }
 
-impl BorrowedTarget {
-    /// A target on `backend` that draws into `images` and hands each frame
-    /// to the host with sync of the kind `producer`, which must be one of
-    /// [`Device::sync_kinds`](crate::Device::sync_kinds)'s producer kinds.
-    ///
-    /// Fails as [`BorrowedImages::check`] does, with
-    /// [`ErrorKind::Unsupported`](mln_util::ErrorKind) for a producer kind
-    /// the device doesn't have, and with
-    /// [`ErrorKind::Native`](mln_util::ErrorKind) when a Vulkan call fails.
-    pub fn new(backend: Rc<RendererBackend>, images: BorrowedImages, producer: SyncKind) -> Result<Self, Error> {
-        let device = backend.backend_impl().device().clone();
-        images.check(&device)?;
-        if !device.sync_kinds().0.contains(producer) {
-            return Err(Error::unsupported(format!("the Vulkan device can't hand frames over with {producer:?}")));
-        }
-        let imports = Imports::new(&backend, &images)?;
-        let mut this = BorrowedTarget {
-            backend,
-            slots: RefCell::new(Vec::new()),
-            images: RefCell::new(images),
-            imports: RefCell::new(imports),
-            selected: Cell::new(0),
-            producer,
-            timeline: vk::Semaphore::null(),
-            timeline_value: Cell::new(0),
-            export_semaphore: vk::Semaphore::null(),
-            #[cfg(windows)]
-            shared_fence: None,
-            #[cfg(windows)]
-            imported_fences: RefCell::new(Vec::new()),
-        };
-        let vk_device = this.backend.backend_impl().get_device().clone();
+impl VulkanRing {
+    /// Makes what frames signal for the target's producer kind, which the
+    /// device has.
+    fn create_sync(&mut self) -> Result<(), Error> {
+        let producer = self.producer;
+        let vk_device = self.device.shared.device().clone();
         // SAFETY: the create infos are valid for the device, which has the
         // features of the producer kind (checked above).
         unsafe {
             match producer {
                 #[cfg(windows)]
                 SyncKind::D3d12Fence => {
+                    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
                     let mut export_info = vk::ExportSemaphoreCreateInfo::default()
                         .handle_types(vk::ExternalSemaphoreHandleTypeFlags::D3D12_FENCE);
                     let mut type_info = vk::SemaphoreTypeCreateInfo::default()
                         .semaphore_type(vk::SemaphoreType::TIMELINE)
                         .initial_value(0);
                     let info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info).push_next(&mut export_info);
-                    this.timeline = vk_device
+                    self.timeline = vk_device
                         .create_semaphore(&info, None)
                         .map_err(|e| Error::native(format!("Failed to create a shareable timeline: {e}")))?;
-                    let loader = device
+                    let loader = self
+                        .device
                         .shared
                         .semaphore_win32()
                         .ok_or_else(|| Error::unsupported("the Vulkan device exports no D3D12 fences"))?;
                     let get = vk::SemaphoreGetWin32HandleInfoKHR::default()
-                        .semaphore(this.timeline)
+                        .semaphore(self.timeline)
                         .handle_type(vk::ExternalSemaphoreHandleTypeFlags::D3D12_FENCE);
                     let handle = loader
                         .get_semaphore_win32_handle(&get)
                         .map_err(|e| Error::native(format!("Failed to share the timeline as a D3D12 fence: {e}")))?;
                     // The export makes an NT handle, which is the target's.
-                    this.shared_fence = Some(crate::win32::OwnedHandle::from_raw(handle));
+                    self.shared_fence = Some(OwnedHandle::from_raw_handle(handle as _));
                 }
                 SyncKind::VulkanTimelineSemaphore => {
                     let mut type_info = vk::SemaphoreTypeCreateInfo::default()
                         .semaphore_type(vk::SemaphoreType::TIMELINE)
                         .initial_value(0);
                     let info = vk::SemaphoreCreateInfo::default().push_next(&mut type_info);
-                    this.timeline = vk_device
+                    self.timeline = vk_device
                         .create_semaphore(&info, None)
                         .map_err(|e| Error::native(format!("Failed to create a timeline semaphore: {e}")))?;
                 }
@@ -370,374 +266,89 @@ impl BorrowedTarget {
                     let mut export_info = vk::ExportSemaphoreCreateInfo::default()
                         .handle_types(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
                     let info = vk::SemaphoreCreateInfo::default().push_next(&mut export_info);
-                    this.export_semaphore = vk_device
+                    self.export_semaphore = vk_device
                         .create_semaphore(&info, None)
                         .map_err(|e| Error::native(format!("Failed to create an exportable semaphore: {e}")))?;
                 }
                 _ => {}
             }
         }
-        drop(this.reset_slots(&[]));
-        Ok(this)
+        Ok(())
     }
 
-    /// Has the next frame draw into the image at `slot`.
-    pub fn select(&self, slot: usize) {
-        self.selected.set(slot);
+    /// Imports the host's sync file `fd` into a semaphore of the target's
+    /// own, which keeps a copy of the file for its release to poll.
+    #[cfg(unix)]
+    fn import_sync_file(&self, fd: std::os::fd::OwnedFd) -> Result<Waiting, Error> {
+        use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd};
+        let loader = self
+            .device
+            .shared
+            .semaphore_fd()
+            .ok_or_else(|| Error::native("the Vulkan device imports no sync files"))?;
+        let device = self.device.shared.device();
+        let file = fd.try_clone().map_err(|e| Error::native(format!("Failed to keep the host's sync file: {e}")))?;
+        // SAFETY: the create info is valid for the device.
+        let semaphore = unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) }
+            .map_err(|e| Error::native(format!("Failed to create a semaphore: {e}")))?;
+        let raw = fd.into_raw_fd();
+        let info = vk::ImportSemaphoreFdInfoKHR::default()
+            .semaphore(semaphore)
+            .flags(vk::SemaphoreImportFlags::TEMPORARY)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
+            .fd(raw);
+        // SAFETY: the semaphore is new; Vulkan owns the descriptor once the
+        // import succeeds.
+        match unsafe { loader.import_semaphore_fd(&info) } {
+            Ok(()) => Ok(Waiting::Imported { semaphore, file }),
+            Err(error) => {
+                // SAFETY: the import failed, so the descriptor is still the
+                // target's, and nothing uses the semaphore.
+                unsafe {
+                    drop(OwnedFd::from_raw_fd(raw));
+                    device.destroy_semaphore(semaphore, None);
+                }
+                Err(Error::native(format!("Failed to import the host's sync file: {error}")))
+            }
+        }
     }
 
-    /// The host gave the image at `slot` back: the next frame drawn into it
-    /// waits for `consumer`, a sync of one of
-    /// [`Device::sync_kinds`](crate::Device::sync_kinds)'s consumer kinds. The sync file of the
-    /// slot's last frame is closed.
-    ///
-    /// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when the target
-    /// can't wait for `consumer`, such as for a sync file Vulkan can't
-    /// import. The host's GPU may then still read the image.
-    #[cfg_attr(not(unix), expect(clippy::needless_pass_by_value, reason = "a Unix release takes the host's sync file"))]
-    pub fn release(&self, slot: usize, consumer: ConsumerSync) -> Result<(), Error> {
-        use ash::vk::Handle as _;
-        let mut slots = self.slots.borrow_mut();
-        let Some(state) = slots.get_mut(slot) else {
-            return Err(Error::invalid_argument("the ring has no such slot"));
+    /// Exports the sync file that the submitted frame signals.
+    #[cfg(unix)]
+    fn export_sync_file(&self) -> Option<(GpuSync, Option<std::os::fd::OwnedFd>)> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+        let loader = self.device.shared.semaphore_fd()?;
+        let info = vk::SemaphoreGetFdInfoKHR::default()
+            .semaphore(self.export_semaphore)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
+        // SAFETY: the submitted frame signals the semaphore, which the
+        // export unsignals for the next frame.
+        let fd = match unsafe { loader.get_semaphore_fd(&info) } {
+            Ok(fd) => fd,
+            Err(error) => {
+                Log::error(Event::Render, format!("Exporting a frame's sync file failed: {error}"));
+                return None;
+            }
         };
-        #[cfg(unix)]
-        {
-            state.producer_fd = None;
+        // A semaphore that signaled already exports no descriptor: the frame
+        // is complete.
+        if fd == -1 {
+            return Some((GpuSync::of(SyncKind::CpuComplete), None));
         }
-        self.forget_wait(state);
-        #[cfg(unix)]
-        let ConsumerSync { sync: consumer, sync_file } = consumer;
-        #[cfg(not(unix))]
-        let ConsumerSync { sync: consumer } = consumer;
-        match consumer.kind {
-            SyncKind::CpuComplete => Ok(()),
-            SyncKind::QueueOrder => {
-                // The host's reads went to the queue before the next frame,
-                // which waits for them before it clears the image.
-                self.backend
-                    .gpu()
-                    .wait_for_queue()
-                    .map_err(|error| Error::native(format!("Waiting for the host's reads failed: {error}")))
-            }
-            SyncKind::VulkanTimelineSemaphore => {
-                state.consumer_wait =
-                    Some(ConsumerWait::Timeline(vk::Semaphore::from_raw(consumer.handle), consumer.value));
-                Ok(())
-            }
-            #[cfg(unix)]
-            SyncKind::SyncFd => {
-                use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd};
-                let fd = sync_file.ok_or_else(|| Error::invalid_argument("a sync file release names no file"))?;
-                let backend = self.backend.backend_impl();
-                let loader = backend
-                    .get_semaphore_fd_loader()
-                    .ok_or_else(|| Error::native("the Vulkan device imports no sync files"))?;
-                let device = backend.get_device();
-                let file =
-                    fd.try_clone().map_err(|e| Error::native(format!("Failed to keep the host's sync file: {e}")))?;
-                // SAFETY: the create info is valid for the device.
-                let semaphore = unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) }
-                    .map_err(|e| Error::native(format!("Failed to create a semaphore: {e}")))?;
-                let raw = fd.into_raw_fd();
-                let info = vk::ImportSemaphoreFdInfoKHR::default()
-                    .semaphore(semaphore)
-                    .flags(vk::SemaphoreImportFlags::TEMPORARY)
-                    .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
-                    .fd(raw);
-                // SAFETY: the semaphore is new; Vulkan owns the descriptor
-                // once the import succeeds.
-                match unsafe { loader.import_semaphore_fd(&info) } {
-                    Ok(()) => {
-                        state.consumer_wait = Some(ConsumerWait::Imported { semaphore, file });
-                        Ok(())
-                    }
-                    Err(error) => {
-                        // SAFETY: the import failed, so the descriptor is
-                        // still the target's, and nothing uses the
-                        // semaphore.
-                        unsafe {
-                            drop(OwnedFd::from_raw_fd(raw));
-                            device.destroy_semaphore(semaphore, None);
-                        }
-                        Err(Error::native(format!("Failed to import the host's sync file: {error}")))
-                    }
-                }
-            }
-            #[cfg(windows)]
-            SyncKind::D3d12Fence => {
-                let fence = self.imported_fence(consumer.handle)?;
-                state.consumer_wait = Some(ConsumerWait::Fence(fence, consumer.value));
-                Ok(())
-            }
-            kind => Err(Error::unsupported(format!("the Vulkan target waits for no {kind:?}"))),
-        }
-    }
-
-    /// The host's D3D12 fence whose NT handle is `handle`, imported once.
-    #[cfg(windows)]
-    fn imported_fence(&self, handle: u64) -> Result<Rc<ImportedFence>, Error> {
-        let mut fences = self.imported_fences.borrow_mut();
-        if let Some((_, fence)) = fences.iter().find(|(known, _)| *known == handle) {
-            return Ok(Rc::clone(fence));
-        }
-        let fence = Rc::new(ImportedFence::import(self.backend.backend_impl(), handle)?);
-        fences.push((handle, Rc::clone(&fence)));
-        Ok(fence)
-    }
-
-    /// The host gave up the image at `slot` without saying when its reads
-    /// end: the slot's sync file is closed, and the image is never drawn
-    /// into again.
-    pub fn discard(&self, slot: usize) {
-        if let Some(state) = self.slots.borrow_mut().get_mut(slot) {
-            #[cfg(unix)]
-            {
-                state.producer_fd = None;
-            }
-            self.forget_wait(state);
-        }
-    }
-
-    /// Drops what `slot` waits for, destroying a semaphore of the target's
-    /// that no frame waits on.
-    fn forget_wait(&self, slot: &mut Slot) {
-        self.detach(slot);
-        if let Some(wait) = slot.consumer_wait.take() {
-            drop_wait(self.backend.backend_impl(), wait);
-        }
-    }
-
-    /// Has no submit wait for what `slot` waits for.
-    fn detach(&self, slot: &mut Slot) {
-        if let Some(texture) = slot.attached.take() {
-            self.backend.gpu().forget_waits(texture);
-        }
-    }
-
-    /// Takes what the ring's images still wait for, the host's reads of
-    /// them, for the ring to wait for before it lets go of the images.
-    pub fn take_pending(&self) -> PendingReads {
-        let mut slots = self.slots.borrow_mut();
-        for slot in slots.iter_mut() {
-            self.detach(slot);
-        }
-        let waits = slots.iter_mut().filter_map(|slot| slot.consumer_wait.take()).collect();
-        PendingReads { backend: Rc::clone(&self.backend), waits }
-    }
-
-    /// Draws into `images` from now on, which must have as many images, and
-    /// the format, final layout and owner of the ring's.
-    ///
-    /// Fails as [`BorrowedImages::check`] does, with
-    /// [`ErrorKind::InvalidArgument`](mln_util::ErrorKind) for another
-    /// number of images, with
-    /// [`ErrorKind::Unsupported`](mln_util::ErrorKind) for another format,
-    /// final layout or owner, and with
-    /// [`ErrorKind::Native`](mln_util::ErrorKind) when a Vulkan call fails.
-    /// The target then keeps its images. Returns the host's reads of the
-    /// images that the ring let go of, which the ring waits for before the
-    /// host may use them.
-    pub fn replace(&self, images: BorrowedImages) -> Result<PendingReads, Error> {
-        {
-            let current = self.images.borrow();
-            if images.images.len() != current.images.len() {
-                return Err(Error::invalid_argument("a ring keeps its depth"));
-            }
-            if (images.format, images.final_layout, images.owner)
-                != (current.format, current.final_layout, current.owner)
-            {
-                return Err(Error::unsupported("a ring keeps its format, final layout and owner"));
-            }
-            let depth = |images: &BorrowedImages| images.depth.as_ref().map(|depth| (depth.format, depth.final_layout));
-            if depth(&images) != depth(&current) {
-                return Err(Error::unsupported("a ring keeps its depth images' format and final layout"));
-            }
-            images.check(self.backend.backend_impl().device())?;
-        }
-        let imports = Imports::new(&self.backend, &images)?;
-        // The frames that drew into the old images are done before the
-        // `Gpu` forgets them.
-        self.backend.backend_impl().wait_idle("borrowed image replacement");
-        *self.imports.borrow_mut() = imports;
-        let old = std::mem::replace(&mut *self.images.borrow_mut(), images);
-        Ok(self.reset_slots(&old.images))
-    }
-
-    /// Gives each image that the ring had in `old` what it waited for, at
-    /// its new slot, and forgets what the slots handed over. Returns what
-    /// the images that the ring let go of wait for.
-    fn reset_slots(&self, old: &[BorrowedImage]) -> PendingReads {
-        let images = self.images.borrow();
-        let mut slots = self.slots.borrow_mut();
-        let mut previous = std::mem::take(&mut *slots);
-        for image in &images.images {
-            let carried = old
-                .iter()
-                .position(|old| old.image == image.image)
-                .and_then(|index| previous.get_mut(index))
-                .and_then(|slot| slot.consumer_wait.take());
-            slots.push(Slot { consumer_wait: carried, ..Slot::default() });
-        }
-        let waits = previous.iter_mut().filter_map(|slot| slot.consumer_wait.take()).collect();
-        PendingReads { backend: Rc::clone(&self.backend), waits }
-    }
-
-    /// The sync the host waits for, once the frame was submitted.
-    #[cfg_attr(not(unix), expect(unused_variables, reason = "sync files are Unix's"))]
-    fn producer_sync(&self, slot: usize) -> Option<GpuSync> {
-        use ash::vk::Handle as _;
-        match self.producer {
-            SyncKind::CpuComplete => {
-                if let Err(error) = self.backend.gpu().flush(true) {
-                    Log::error(Event::Render, format!("Waiting for a borrowed image's frame failed: {error}"));
-                    return None;
-                }
-                Some(GpuSync::of(SyncKind::CpuComplete))
-            }
-            SyncKind::QueueOrder => Some(GpuSync::of(SyncKind::QueueOrder)),
-            SyncKind::VulkanTimelineSemaphore => Some(GpuSync {
-                kind: SyncKind::VulkanTimelineSemaphore,
-                handle: self.timeline.as_raw(),
-                value: self.timeline_value.get(),
-            }),
-            #[cfg(unix)]
-            SyncKind::SyncFd => {
-                use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-                let loader = self.backend.backend_impl().get_semaphore_fd_loader()?;
-                let info = vk::SemaphoreGetFdInfoKHR::default()
-                    .semaphore(self.export_semaphore)
-                    .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
-                // SAFETY: the submitted frame signals the semaphore, which
-                // the export unsignals for the next frame.
-                let fd = match unsafe { loader.get_semaphore_fd(&info) } {
-                    Ok(fd) => fd,
-                    Err(error) => {
-                        Log::error(Event::Render, format!("Exporting a frame's sync file failed: {error}"));
-                        return None;
-                    }
-                };
-                // A semaphore that signaled already exports no descriptor:
-                // the frame is complete.
-                if fd == -1 {
-                    return Some(GpuSync::of(SyncKind::CpuComplete));
-                }
-                // SAFETY: the export made the descriptor, which is the
-                // target's.
-                let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-                let raw = fd.as_raw_fd();
-                if let Some(state) = self.slots.borrow_mut().get_mut(slot) {
-                    state.producer_fd = Some(fd);
-                }
-                Some(GpuSync { kind: SyncKind::SyncFd, handle: raw as u64, value: 0 })
-            }
-            #[cfg(windows)]
-            SyncKind::D3d12Fence => self.shared_fence.as_ref().map(|handle| GpuSync {
-                kind: SyncKind::D3d12Fence,
-                handle: handle.as_raw() as u64,
-                value: self.timeline_value.get(),
-            }),
-            _ => None,
-        }
+        // SAFETY: the export made the descriptor, which is the target's.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let sync = GpuSync { kind: SyncKind::SyncFd, handle: fd.as_raw_fd() as u64, value: 0 };
+        Some((sync, Some(fd)))
     }
 }
 
-impl FrameTarget for BorrowedTarget {
-    /// The selected slot's image, which the frame's first pass that draws
-    /// into it waits for the host's reads before.
-    fn begin_frame(&self) -> Option<FrameImage> {
-        let slot = self.selected.get();
-        let image = self.imports.borrow().frame_image(slot)?;
-        let mut gpu = self.backend.gpu();
-        let stages = vk::PipelineStageFlags::ALL_COMMANDS;
-        let mut slots = self.slots.borrow_mut();
-        let Some(state) = slots.get_mut(slot) else {
-            return Some(image);
-        };
-        // A frame begun again keeps the wait it attached.
-        if state.attached == Some(image.color) {
-            return Some(image);
-        }
-        let waited = match &state.consumer_wait {
-            Some(ConsumerWait::Timeline(semaphore, value)) => {
-                gpu.wait_before_using(image.color, *semaphore, Some(*value), stages)
-            }
-            #[cfg(unix)]
-            Some(ConsumerWait::Imported { semaphore, .. }) => {
-                gpu.wait_before_using(image.color, *semaphore, None, stages)
-            }
-            #[cfg(windows)]
-            Some(ConsumerWait::Fence(fence, value)) => {
-                gpu.wait_before_using(image.color, fence.semaphore, Some(*value), stages)
-            }
-            None => return Some(image),
-        };
-        state.attached = Some(image.color);
-        if let Err(error) = waited {
-            Log::error(Event::Render, format!("Waiting for the host's reads failed: {error}"));
-        }
-        Some(image)
-    }
-
-    /// Submits what is left of the frame, signaling the producer's sync
-    /// after it.
-    fn end_frame(&self) -> Handoff {
-        let slot = self.selected.get();
-        let Some(color) = self.imports.borrow().color.get(slot).copied() else {
-            return Handoff::Dropped;
-        };
-        let submitted = {
-            let mut gpu = self.backend.gpu();
-            // What no pass took yet, such as where the frame drew nothing.
-            gpu.take_waits_into_next_submit(color);
-            match self.producer {
-                SyncKind::VulkanTimelineSemaphore | SyncKind::D3d12Fence => {
-                    let value = self.timeline_value.get() + 1;
-                    self.timeline_value.set(value);
-                    gpu.signal_after_next_submit(self.timeline, Some(value));
-                }
-                SyncKind::SyncFd => gpu.signal_after_next_submit(self.export_semaphore, None),
-                _ => {}
-            }
-            gpu.flush(false)
-        };
-        // The frame's submits took what the slot waited for.
-        let consumed = self.slots.borrow_mut().get_mut(slot).and_then(|state| {
-            let attached = state.attached.take()?;
-            (attached == color).then(|| state.consumer_wait.take()).flatten()
-        });
-        // A timeline is the host's, and the target keeps a fence until it
-        // waits for the queue.
-        #[cfg(unix)]
-        if let Some(ConsumerWait::Imported { semaphore, file }) = consumed {
-            drop(file);
-            // SAFETY: destroyed once the frame that waits on it is done.
-            self.backend.gpu().destroy_later(move |device| unsafe { device.destroy_semaphore(semaphore, None) });
-        }
-        #[cfg(not(unix))]
-        drop(consumed);
-        if let Err(error) = submitted {
-            Log::error(Event::Render, format!("Submitting a borrowed image's frame failed: {error}"));
-            return Handoff::Dropped;
-        }
-        match self.producer_sync(slot) {
-            Some(sync) => Handoff::GivenBack { slot, sync },
-            None => Handoff::Dropped,
-        }
-    }
-}
-
-impl Drop for BorrowedTarget {
+impl Drop for VulkanRing {
+    /// Destroys the semaphores, which the target's frames are done with.
     fn drop(&mut self) {
-        let backend = self.backend.backend_impl();
-        backend.wait_idle("borrowed target deletion");
-        let device = backend.get_device();
-        // SAFETY: the backend's work is done, and the semaphores are the
-        // target's.
+        let device = self.device.shared.device();
+        // SAFETY: the target waited for its frames, and the semaphores are
+        // the ring's.
         unsafe {
-            for mut slot in std::mem::take(&mut *self.slots.borrow_mut()) {
-                self.forget_wait(&mut slot);
-            }
             if self.timeline != vk::Semaphore::null() {
                 device.destroy_semaphore(self.timeline, None);
             }
@@ -745,72 +356,224 @@ impl Drop for BorrowedTarget {
                 device.destroy_semaphore(self.export_semaphore, None);
             }
         }
-        #[cfg(windows)]
-        self.imported_fences.get_mut().clear();
     }
 }
 
-/// The host's reads of images that a ring let go of, which the ring waits
-/// for before the host may use or destroy the images. Dropping it stops
-/// waiting.
-pub struct PendingReads {
-    backend: Rc<RendererBackend>,
-    waits: Vec<ConsumerWait>,
-}
+/// What a slot's last frame handed the host: the frame's sync file, which
+/// the host may read until it gives the slot back.
+#[cfg(unix)]
+type Handed = std::os::fd::OwnedFd;
+#[cfg(not(unix))]
+type Handed = std::convert::Infallible;
 
-impl PendingReads {
-    /// Whether every read ended, which it checks without blocking. It lets
-    /// go of the syncs of the reads that ended.
-    pub fn poll(&mut self) -> bool {
-        let backend = self.backend.backend_impl();
-        let now = Instant::now();
-        let (ended, waiting): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut self.waits).into_iter().partition(|wait| match wait {
-                ConsumerWait::Timeline(semaphore, value) => wait_timeline(backend, *semaphore, *value, now),
-                #[cfg(unix)]
-                ConsumerWait::Imported { file, .. } => poll_until(file, now),
-                #[cfg(windows)]
-                ConsumerWait::Fence(fence, value) => wait_timeline(backend, fence.semaphore, *value, now),
-            });
-        for wait in ended {
-            drop_wait(backend, wait);
+impl RingBackend for VulkanRing {
+    type Gpu = VulkanGpu;
+    type Renderer = RendererBackend;
+    type Textures = BorrowedImages;
+    type Wait = ConsumerWait;
+    type Handed = Handed;
+
+    /// Fails as [`BorrowedImages::check`] does, with
+    /// [`ErrorKind::Unsupported`](mln_util::ErrorKind) for a producer kind
+    /// that isn't one of [`Device::sync_kinds`](crate::Device::sync_kinds)'s,
+    /// and with [`ErrorKind::Native`](mln_util::ErrorKind) when a Vulkan
+    /// call fails.
+    fn new(backend: &mut RendererBackend, images: &BorrowedImages, producer: SyncKind) -> Result<Self, Error> {
+        let device = backend.device().clone();
+        images.check(&device)?;
+        if !device.sync_kinds().0.contains(producer) {
+            return Err(Error::unsupported(format!("the Vulkan device can't hand frames over with {producer:?}")));
         }
-        self.waits = waiting;
-        self.waits.is_empty()
+        let mut ring = VulkanRing {
+            device,
+            producer,
+            timeline: vk::Semaphore::null(),
+            timeline_value: 0,
+            export_semaphore: vk::Semaphore::null(),
+            #[cfg(windows)]
+            shared_fence: None,
+        };
+        ring.create_sync()?;
+        Ok(ring)
     }
-}
 
-impl Drop for PendingReads {
-    fn drop(&mut self) {
-        for wait in std::mem::take(&mut self.waits) {
-            drop_wait(self.backend.backend_impl(), wait);
+    /// Fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind) for
+    /// another format, final layout or owner, or depth images of another
+    /// format or final layout or where the ring has none, and as
+    /// [`BorrowedImages::check`] does.
+    fn check_replacement(&self, current: &BorrowedImages, next: &BorrowedImages) -> Result<(), Error> {
+        if (next.format, next.final_layout, next.owner) != (current.format, current.final_layout, current.owner) {
+            return Err(Error::unsupported("a ring keeps its format, final layout and owner"));
         }
+        let depth = |images: &BorrowedImages| images.depth.as_ref().map(|depth| (depth.format, depth.final_layout));
+        if depth(next) != depth(current) {
+            return Err(Error::unsupported("a ring keeps its depth images' format and final layout"));
+        }
+        next.check(&self.device)
     }
-}
 
-/// Lets go of `wait`, destroying a semaphore of the target's that no frame
-/// waits on.
-#[cfg_attr(not(unix), expect(unused_variables, clippy::needless_pass_by_value, reason = "sync files are Unix's"))]
-fn drop_wait(backend: &BackendImpl, wait: ConsumerWait) {
-    match wait {
-        ConsumerWait::Timeline(..) => {}
+    /// Fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind) for a
+    /// format that `VulkanGpu` has no texture of.
+    fn targets(gpu: &VulkanGpu, images: &BorrowedImages) -> Result<TargetFormats, Error> {
+        let color = gpu
+            .texture_format(images.format)
+            .ok_or_else(|| Error::unsupported(format!("the Vulkan target draws into no {:?}", images.format)))?;
+        let depth_stencil = match &images.depth {
+            Some(depth) => gpu.texture_format(depth.format),
+            None => Some(TextureFormat::Depth24PlusStencil8),
+        };
+        Ok(TargetFormats { color: Some(color), depth_stencil })
+    }
+
+    fn import(gpu: &mut VulkanGpu, images: &BorrowedImages, slot: usize, depth: bool) -> Result<TextureId, GpuError> {
+        let release_to = match images.owner {
+            ImageOwner::GraphicsQueue => None,
+            ImageOwner::External => Some(vk::QUEUE_FAMILY_EXTERNAL),
+            ImageOwner::Foreign => Some(vk::QUEUE_FAMILY_FOREIGN_EXT),
+        };
+        let (ring, format, layout) = match (&images.depth, depth) {
+            (Some(depth), true) => (&depth.images, depth.format, depth.final_layout),
+            (None, true) => return Err(GpuError::Invalid("the ring has no depth images".to_owned())),
+            (_, false) => (&images.images, images.format, images.final_layout),
+        };
+        let image = ring.get(slot).ok_or_else(|| GpuError::Invalid(format!("the ring has no slot {slot}")))?;
+        gpu.import_image(&ImportedImage {
+            image: image.image,
+            view: image.view,
+            format,
+            size: images.size,
+            usage: TextureUsage { sampled: false, render_target: true, copy_src: false },
+            layout,
+            release_to,
+        })
+    }
+
+    /// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when the target
+    /// can't wait for `consumer`, such as for a sync file Vulkan can't
+    /// import, and with [`ErrorKind::Unsupported`](mln_util::ErrorKind) for
+    /// another kind than [`Device::sync_kinds`](crate::Device::sync_kinds)'s
+    /// consumer kinds. The host's GPU may then still read the image.
+    fn wait_for(&mut self, gpu: &mut VulkanGpu, consumer: ConsumerSync) -> Result<Option<ConsumerWait>, Error> {
+        use ash::vk::Handle as _;
         #[cfg(unix)]
-        ConsumerWait::Imported { semaphore, file } => {
-            drop(file);
-            // SAFETY: no submitted frame waits on the semaphore, which the
-            // target made.
-            unsafe { backend.get_device().destroy_semaphore(semaphore, None) };
+        let ConsumerSync { sync: consumer, sync_file } = consumer;
+        #[cfg(not(unix))]
+        let ConsumerSync { sync: consumer } = consumer;
+        let waiting = match consumer.kind {
+            SyncKind::CpuComplete => return Ok(None),
+            SyncKind::QueueOrder => {
+                // The host's reads went to the queue before the next frame,
+                // which waits for them before it clears the image.
+                gpu.wait_for_queue()
+                    .map_err(|error| Error::native(format!("Waiting for the host's reads failed: {error}")))?;
+                return Ok(None);
+            }
+            SyncKind::VulkanTimelineSemaphore => {
+                Waiting::Timeline(vk::Semaphore::from_raw(consumer.handle), consumer.value)
+            }
+            #[cfg(unix)]
+            SyncKind::SyncFd => {
+                let fd = sync_file.ok_or_else(|| Error::invalid_argument("a sync file release names no file"))?;
+                self.import_sync_file(fd)?
+            }
+            #[cfg(windows)]
+            SyncKind::D3d12Fence => Waiting::Fence(import_fence(&self.device, consumer.handle)?, consumer.value),
+            kind => return Err(Error::unsupported(format!("the Vulkan target waits for no {kind:?}"))),
+        };
+        Ok(Some(ConsumerWait { device: self.device.clone(), waiting }))
+    }
+
+    fn wait_before_using(gpu: &mut VulkanGpu, texture: TextureId, wait: &ConsumerWait) -> Result<(), GpuError> {
+        let stages = vk::PipelineStageFlags::ALL_COMMANDS;
+        match &wait.waiting {
+            Waiting::Timeline(semaphore, value) => gpu.wait_before_using(texture, *semaphore, Some(*value), stages),
+            #[cfg(unix)]
+            Waiting::Imported { semaphore, .. } => gpu.wait_before_using(texture, *semaphore, None, stages),
+            #[cfg(windows)]
+            Waiting::Fence(semaphore, value) => gpu.wait_before_using(texture, *semaphore, Some(*value), stages),
         }
-        // The last reference destroys the fence's semaphore.
-        #[cfg(windows)]
-        ConsumerWait::Fence(..) => {}
+    }
+
+    fn take_waits_into_next_submit(gpu: &mut VulkanGpu, texture: TextureId) {
+        gpu.take_waits_into_next_submit(texture);
+    }
+
+    fn forget_waits(gpu: &mut VulkanGpu, texture: TextureId) {
+        gpu.forget_waits(texture);
+    }
+
+    /// A semaphore of the ring's own goes once the submit is done.
+    fn waited(gpu: &mut VulkanGpu, wait: ConsumerWait) {
+        if let Some(semaphore) = wait.waiting.into_own_semaphore() {
+            // SAFETY: destroyed once the frame that waits on it is done.
+            gpu.destroy_later(move |device| unsafe { device.destroy_semaphore(semaphore, None) });
+        }
+    }
+
+    fn signal_after_next_submit(&mut self, gpu: &mut VulkanGpu) {
+        match self.producer {
+            SyncKind::VulkanTimelineSemaphore | SyncKind::D3d12Fence => {
+                self.timeline_value += 1;
+                gpu.signal_after_next_submit(self.timeline, Some(self.timeline_value));
+            }
+            SyncKind::SyncFd => gpu.signal_after_next_submit(self.export_semaphore, None),
+            _ => {}
+        }
+    }
+
+    fn producer_sync(&mut self, _gpu: &mut VulkanGpu) -> Option<(GpuSync, Option<Handed>)> {
+        use ash::vk::Handle as _;
+        match self.producer {
+            SyncKind::VulkanTimelineSemaphore => Some((
+                GpuSync {
+                    kind: SyncKind::VulkanTimelineSemaphore,
+                    handle: self.timeline.as_raw(),
+                    value: self.timeline_value,
+                },
+                None,
+            )),
+            #[cfg(unix)]
+            SyncKind::SyncFd => self.export_sync_file(),
+            #[cfg(windows)]
+            SyncKind::D3d12Fence => self.shared_fence.as_ref().map(|handle| {
+                use std::os::windows::io::AsRawHandle as _;
+                let handle = handle.as_raw_handle() as usize as u64;
+                (GpuSync { kind: SyncKind::D3d12Fence, handle, value: self.timeline_value }, None)
+            }),
+            _ => None,
+        }
+    }
+
+    /// Waits for the work submitted to the device's queue.
+    fn wait_for_frames(&self, what: &str) {
+        self.device.wait_idle(what);
+    }
+
+    fn ended(wait: &ConsumerWait) -> bool {
+        let device = &wait.device;
+        let now = Instant::now();
+        match &wait.waiting {
+            Waiting::Timeline(semaphore, value) => wait_timeline(device, *semaphore, *value, now),
+            #[cfg(unix)]
+            Waiting::Imported { file, .. } => poll_until(file, now),
+            #[cfg(windows)]
+            Waiting::Fence(semaphore, value) => wait_timeline(device, *semaphore, *value, now),
+        }
+    }
+
+    fn forget(wait: ConsumerWait) {
+        if let Some(semaphore) = wait.waiting.into_own_semaphore() {
+            // SAFETY: no submitted frame waits on the semaphore, which the
+            // ring made.
+            unsafe { wait.device.shared.device().destroy_semaphore(semaphore, None) };
+        }
     }
 }
 
 /// Waits until `deadline` for the host's `semaphore` to reach `value`, and
 /// returns whether it did.
-fn wait_timeline(backend: &BackendImpl, semaphore: vk::Semaphore, value: u64, deadline: Instant) -> bool {
-    let raw = backend.device().raw();
+fn wait_timeline(device: &Device, semaphore: vk::Semaphore, value: u64, deadline: Instant) -> bool {
+    let raw = device.raw();
     // Vulkan 1.2's, or VK_KHR_timeline_semaphore's, which the device has when
     // it takes timelines.
     // SAFETY: the device is live, and the names are functions' names.

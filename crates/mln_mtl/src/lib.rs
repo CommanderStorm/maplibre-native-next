@@ -18,24 +18,27 @@ mod custom_layer;
 mod device;
 pub mod exported_target;
 mod gpu;
-mod mtl_fwd;
 mod readback;
 mod renderer_backend;
 mod shaders;
 pub mod surface_target;
 
-pub use borrowed_target::{BorrowedTarget, BorrowedTextures, PendingReads};
+pub use borrowed_target::{BorrowedTarget, BorrowedTextures, MetalRing, PendingReads};
 pub use custom_layer::{AttachmentFormats, CustomLayerEncoder, CustomLayerPass};
 pub use device::Device;
-pub use exported_target::ExportedTarget;
+pub use exported_target::{ExportedTarget, MetalExporter};
 pub use gpu::MetalGpu;
 pub use objc2;
 pub use objc2_metal;
 pub use renderer_backend::RendererBackend;
 pub use surface_target::{Layer, SurfaceTarget};
 
+/// An `id<P>` that this side retains: a Metal object of the protocol `P`,
+/// such as `Id<dyn MTLTexture>`.
+pub(crate) type Id<P> = objc2::rc::Retained<objc2::runtime::ProtocolObject<P>>;
+
 /// Frames drawn into textures of the library's and read back.
-pub type OffscreenTarget = mln_gfx::offscreen_target::OffscreenTarget<RendererBackend>;
+pub type OffscreenTarget = mln_gfx::offscreen_target::OffscreenTarget<MetalGpu>;
 
 // MTLCreateSystemDefaultDevice returns nil in a process that doesn't link
 // CoreGraphics, such as a command-line tool.

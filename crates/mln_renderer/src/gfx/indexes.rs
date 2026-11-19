@@ -4,12 +4,14 @@
 //! draw's upload writes them to a buffer of the context's `Gpu`, freeing
 //! their data.
 
-use mln_gfx::buffer::BufferPtr;
-use mln_gfx::gpu::{BufferId, BufferUsage, GpuError};
+use mln_gfx::gpu::{BufferId, BufferUsage, Gpu, GpuError};
 #[cfg(target_family = "wasm")]
 use mln_util::host_bytes::HostBytes;
 
-use crate::gfx::context::{Context, Device};
+use crate::gfx::buffer::Buffer;
+use crate::gfx::context::Context;
+use crate::gfx::owned::Held;
+use crate::gfx::resources::Device;
 pub(crate) use crate::gfx::store::SharedIndexes;
 
 /// The indexes before their upload.
@@ -22,23 +24,23 @@ enum IndexData {
 }
 
 /// Where the indexes are.
-enum Held {
+enum Place {
     Data(IndexData),
-    Buffer(BufferPtr),
+    Buffer(Buffer),
 }
 
 /// Indexes, which don't change once made: an upload moves them into their
 /// buffer.
 pub(crate) struct Indexes {
     len: usize,
-    held: Held,
+    place: Place,
 }
 
 impl Indexes {
     /// Indexes holding `indexes`.
     #[must_use]
     pub(crate) fn new(indexes: Vec<u16>) -> Indexes {
-        Indexes { len: indexes.len(), held: Held::Data(IndexData::Vec(indexes)) }
+        Indexes { len: indexes.len(), place: Place::Data(IndexData::Vec(indexes)) }
     }
 
     /// Indexes holding the indexes in a JS array.
@@ -46,7 +48,7 @@ impl Indexes {
     #[must_use]
     pub(crate) fn from_host(indexes: HostBytes) -> Indexes {
         debug_assert!(indexes.len().is_multiple_of(size_of::<u16>()));
-        Indexes { len: indexes.len() / size_of::<u16>(), held: Held::Data(IndexData::Host(indexes)) }
+        Indexes { len: indexes.len() / size_of::<u16>(), place: Place::Data(IndexData::Host(indexes)) }
     }
 
     /// The number of indexes, which stays once the upload freed them.
@@ -58,30 +60,31 @@ impl Indexes {
     /// Whether the CPU copy of the indexes is still there.
     #[cfg(test)]
     pub(crate) fn has_data(&self) -> bool {
-        matches!(self.held, Held::Data(_))
+        matches!(self.place, Place::Data(_))
     }
 
     /// The buffer of the indexes, once uploaded.
     #[must_use]
-    pub(crate) fn buffer(&self) -> Option<&BufferPtr> {
-        match &self.held {
-            Held::Buffer(buffer) => Some(buffer),
-            Held::Data(_) => None,
+    fn buffer(&self) -> Option<BufferId> {
+        match &self.place {
+            Place::Buffer(buffer) => Some(buffer.id()),
+            Place::Data(_) => None,
         }
     }
 
-    /// Writes the indexes to a buffer of `device`'s, unless they have one,
-    /// and frees them. Indexes that fail to upload stay for the next try.
-    pub(crate) fn upload(&mut self, device: &mut Device) -> Result<(), GpuError> {
-        let Held::Data(data) = &self.held else {
+    /// Writes the indexes to a buffer of `gpu` through `device`, unless
+    /// they have one, and frees them. Indexes that fail to upload stay for
+    /// the next try.
+    pub(crate) fn upload(&mut self, gpu: &mut dyn Gpu, device: &mut Device) -> Result<(), GpuError> {
+        let Place::Data(data) = &self.place else {
             return Ok(());
         };
         let buffer = match data {
-            IndexData::Vec(indexes) => device.buffer(BufferUsage::Index, bytemuck::cast_slice(indexes))?,
+            IndexData::Vec(indexes) => device.buffer(gpu, BufferUsage::Index, bytemuck::cast_slice(indexes))?,
             #[cfg(target_family = "wasm")]
-            IndexData::Host(bytes) => device.buffer_from_host(BufferUsage::Index, bytes)?,
+            IndexData::Host(bytes) => device.buffer_from_host(gpu, BufferUsage::Index, bytes)?,
         };
-        self.held = Held::Buffer(buffer);
+        self.place = Place::Buffer(buffer);
         Ok(())
     }
 }
@@ -132,17 +135,26 @@ impl DrawIndexes {
         self.indexes(context).is_some_and(Indexes::has_data)
     }
 
-    /// Writes the indexes to a buffer of `context`'s, unless they have one.
-    pub(crate) fn upload(&mut self, context: &mut Context) -> Result<(), GpuError> {
+    /// Writes the indexes to a buffer of `gpu`, unless they have one.
+    pub(crate) fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) -> Result<(), GpuError> {
         match self {
-            DrawIndexes::Own(indexes) => indexes.upload(context.device()),
-            DrawIndexes::Shared(shared) => context.upload_indexes(shared),
+            DrawIndexes::Own(indexes) => indexes.upload(gpu, context.device()),
+            DrawIndexes::Shared(shared) => context.upload_indexes(gpu, shared),
         }
     }
 
     /// The buffer of the indexes, once uploaded.
     #[must_use]
     pub(crate) fn buffer(&self, context: &Context) -> Option<BufferId> {
-        self.indexes(context).and_then(Indexes::buffer).map(|buffer| buffer.id())
+        self.indexes(context).and_then(Indexes::buffer)
+    }
+
+    /// What geometry made of the indexes holds: the store's indexes, which
+    /// other draws share. The draw keeps its own.
+    pub(crate) fn held(&self) -> Option<Held> {
+        match self {
+            DrawIndexes::Own(_) => None,
+            DrawIndexes::Shared(shared) => Some(Held::Indexes(shared.clone())),
+        }
     }
 }

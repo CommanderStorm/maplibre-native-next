@@ -310,6 +310,11 @@ impl<T> TileMap<T> {
         self.values.fill_with(|| None);
     }
 
+    /// What the layer keeps of the tiles.
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.values.iter_mut().flatten()
+    }
+
     /// Whether `tile_id` is one of the frame's tiles of the layer.
     #[cfg(test)]
     #[must_use]
@@ -435,6 +440,9 @@ pub(crate) trait TileObjects {
 
     /// The GPU objects of the tile's draw `part`.
     fn objects(&mut self, part: Self::Part) -> Option<DrawObjectsMut<'_>>;
+
+    /// Drops the bindings of the tile's draws ([`DrawObjects::drop_bindings`]).
+    fn drop_bindings(&mut self);
 }
 
 impl TileObjects for KeptDraw {
@@ -442,6 +450,26 @@ impl TileObjects for KeptDraw {
 
     fn objects(&mut self, (): ()) -> Option<DrawObjectsMut<'_>> {
         Some((&mut self.objects).into())
+    }
+
+    fn drop_bindings(&mut self) {
+        self.objects.drop_bindings();
+    }
+}
+
+/// Makes the draws of `list` those of `layer`, as [`DrawList::finish`]
+/// does, and drops the bindings of the draws of `tiles` where that replaced
+/// a buffer they bind.
+pub(crate) fn finish_tiles<U, T: TileObjects>(
+    list: &mut DrawList<U, T::Part>,
+    layer: &mut LayerDraws<T::Part>,
+    tiles: &mut TileMap<T>,
+    gpu: &mut dyn Gpu,
+    context: &mut Context,
+    write: impl FnOnce(&mut UniformWriter<'_, U>),
+) {
+    if list.finish(layer, gpu, context, write) {
+        tiles.values_mut().for_each(T::drop_bindings);
     }
 }
 
@@ -558,28 +586,37 @@ impl<U, P: Copy> DrawList<U, P> {
     /// Makes the list's draws `layer`'s, in [`FrameDraw::order`] and in the
     /// order they were pushed among draws of the same order, and empties the
     /// list. Where there are any, `write` first writes the buffers they read
-    /// to `layer`'s.
+    /// to `layer`'s. Returns whether that replaced one of `layer`'s buffers,
+    /// whose owner then drops the bindings of the draws that bind them
+    /// ([`DrawObjects::drop_bindings`]).
+    #[must_use]
     pub(crate) fn finish(
         &mut self,
         layer: &mut LayerDraws<P>,
+        gpu: &mut dyn Gpu,
         context: &mut Context,
         write: impl FnOnce(&mut UniformWriter<'_, U>),
-    ) {
+    ) -> bool {
         sort_draws(&mut self.draws);
+        let mut writer = UniformWriter {
+            draws: &self.draws,
+            uniforms: &self.uniforms,
+            bytes: &mut self.bytes,
+            buffers: &mut layer.frame.uniform_buffers,
+            gpu,
+            context,
+            replaced: false,
+        };
         if !self.draws.is_empty() {
-            write(&mut UniformWriter {
-                draws: &self.draws,
-                uniforms: &self.uniforms,
-                bytes: &mut self.bytes,
-                buffers: &mut layer.frame.uniform_buffers,
-                context,
-            });
+            write(&mut writer);
         }
+        let replaced = writer.replaced;
         layer.parts.clear();
         layer.parts.extend(self.draws.iter().map(|&(_, index)| self.parts[index]));
         take_draws(&mut self.draws, &mut layer.frame.draws);
         self.uniforms.clear();
         self.parts.clear();
+        replaced
     }
 }
 
@@ -604,7 +641,10 @@ pub(crate) struct UniformWriter<'a, U> {
     uniforms: &'a [U],
     bytes: &'a mut Vec<u8>,
     buffers: &'a mut UniformBufferArray,
+    gpu: &'a mut dyn Gpu,
     context: &'a mut Context,
+    /// Whether a write replaced a buffer.
+    replaced: bool,
 }
 
 impl<U> UniformWriter<'_, U> {
@@ -615,12 +655,12 @@ impl<U> UniformWriter<'_, U> {
         for &(_, index) in self.draws {
             self.bytes.extend_from_slice(bytemuck::bytes_of(&entry(&self.uniforms[index])));
         }
-        self.buffers.write_storage(id, self.bytes, self.context.device());
+        self.replaced |= self.buffers.write_storage(self.gpu, id, self.bytes, self.context.device());
     }
 
     /// Writes `value`, which all the draws read, to the uniform buffer `id`.
     pub(crate) fn uniform<P: bytemuck::Pod>(&mut self, id: usize, value: &P) {
-        self.buffers.create_or_update_pod(id, value, self.context.device());
+        self.replaced |= self.buffers.write_pod(self.gpu, id, value, self.context.device());
     }
 }
 
@@ -718,9 +758,9 @@ impl FrameDraws {
     }
 
     /// Uploads `objects`, which all the draws bind, if there are any draws.
-    pub(crate) fn upload_one(&self, objects: &mut DrawObjects, context: &mut Context) {
+    pub(crate) fn upload_one(&self, gpu: &mut dyn Gpu, objects: &mut DrawObjects, context: &mut Context) {
         if !self.draws.is_empty() {
-            objects.upload(context);
+            objects.upload(gpu, context);
         }
     }
 
@@ -861,13 +901,14 @@ impl<P: Copy> LayerDraws<P> {
     /// `objects` finds in `caches`.
     pub(crate) fn upload<C: ?Sized>(
         &self,
+        gpu: &mut dyn Gpu,
         caches: &mut C,
         objects: impl for<'c> Fn(&'c mut C, &FrameDraw, P) -> Option<DrawObjectsMut<'c>>,
         context: &mut Context,
     ) {
         for (draw, &part) in self.frame.draws.iter().zip(&self.parts) {
             if let Some(objects) = objects(caches, draw, part) {
-                objects.objects.upload(context);
+                objects.objects.upload(gpu, context);
             }
         }
     }
@@ -910,8 +951,22 @@ impl SingleDraw {
         SingleDraw { objects, frame }
     }
 
-    pub(crate) fn upload(&mut self, context: &mut Context) {
-        self.frame.upload_one(&mut self.objects, context);
+    pub(crate) fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
+        self.frame.upload_one(gpu, &mut self.objects, context);
+    }
+
+    /// Writes `value` to the frame's uniform buffer `id`, as
+    /// [`UniformBufferArray::write_pod`] does.
+    pub(crate) fn write_pod<T: bytemuck::Pod>(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        id: usize,
+        value: &T,
+        context: &mut Context,
+    ) {
+        if self.frame.uniform_buffers.write_pod(gpu, id, value, context.device()) {
+            self.objects.drop_bindings();
+        }
     }
 
     /// Draws the draw, if it draws in the pass, into the open pass of `gpu`,
@@ -1002,6 +1057,19 @@ impl<T: TileObjects> TileDraws<T> {
     pub(crate) fn frame_mut(&mut self) -> &mut LayerDraws<T::Part> {
         self.frame.get_or_insert_default()
     }
+
+    /// Makes the draws of `list` the frame's, as [`DrawList::finish`] does,
+    /// and drops the bindings of the tiles' draws where that replaced a
+    /// buffer they bind.
+    pub(crate) fn finish<U>(
+        &mut self,
+        list: &mut DrawList<U, T::Part>,
+        gpu: &mut dyn Gpu,
+        context: &mut Context,
+        write: impl FnOnce(&mut UniformWriter<'_, U>),
+    ) {
+        finish_tiles(list, self.frame.get_or_insert_default(), &mut self.tiles, gpu, context, write);
+    }
 }
 
 impl<T: TileObjects> LayerDrawing for TileDraws<T> {
@@ -1034,9 +1102,9 @@ impl<T: TileObjects> LayerDrawing for TileDraws<T> {
         }
     }
 
-    fn upload(&mut self, context: &mut Context) {
+    fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
         if let Some(frame) = &self.frame {
-            frame.upload(&mut self.tiles, tile_objects, context);
+            frame.upload(gpu, &mut self.tiles, tile_objects, context);
         }
     }
 
@@ -1081,7 +1149,7 @@ pub(crate) trait LayerDrawing {
     fn clear_frame(&mut self);
 
     /// Uploads the GPU objects of the draw groups' draws.
-    fn upload(&mut self, context: &mut Context);
+    fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context);
 
     /// Draws the draw groups' draws of the pass into the open pass of `gpu`,
     /// the context's, in `order`, each at its depth.

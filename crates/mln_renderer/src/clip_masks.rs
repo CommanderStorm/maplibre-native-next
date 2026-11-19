@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use mln_gfx::buffer::BufferPtr;
 use mln_gfx::gpu::{
     BindGroupEntry, BindingsDesc, BindingsId, BufferUsage, DepthState, Draw, DynamicState, FixedState, GeometryDesc,
     GeometryId, Gpu, GpuError, PipelineId, PipelineKey, Scissor, ShaderId, StencilState, TargetFormats,
@@ -14,16 +13,17 @@ use mln_gfx::shaders::shader_defines::{
 };
 use mln_gfx::stencil_mode::Test;
 use mln_gfx::types::StencilOpType;
-use mln_gfx::{
-    AttributeDataType, ColorMode, CullFaceMode, DepthMode, DrawModeType, ShaderProgramPtr, ShaderRegistry, StencilMode,
-};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMode, DrawModeType, StencilMode};
 use mln_tile_id::UnwrappedTileID;
 use mln_util::logging::{Event, Log};
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
+use crate::draw::Entries;
+use crate::gfx::buffer::Buffer;
 use crate::gfx::context::Context;
 use crate::gfx::owned::Owned;
-use crate::gfx::uniform_buffer::UniformBufferPtr;
+use crate::gfx::shader_program::ShaderProgramPtr;
+use crate::gfx::shader_registry::ShaderRegistry;
 use crate::globe_tile_mesh::raw_globe_tile_mesh;
 use crate::paint_parameters::DrawTarget;
 use crate::render_static_data::RenderStaticData;
@@ -51,16 +51,23 @@ const SQUARE: MeshKey = (0, false, false, false);
 
 /// A mesh that masks draw, and its geometry, made at its first draw.
 struct Mesh {
-    vertices: BufferPtr,
-    indices: BufferPtr,
+    vertices: Buffer,
+    indices: Buffer,
     segments: Vec<SegmentBase>,
     geometry: Option<Owned<GeometryId>>,
 }
 
 impl Mesh {
-    fn new(context: &mut Context, vertices: &[u8], indices: &[u16], segments: Vec<SegmentBase>) -> Option<Mesh> {
-        let made = context.device().buffer(BufferUsage::Vertex, vertices).and_then(|vertices| {
-            Ok((vertices, context.device().buffer(BufferUsage::Index, bytemuck::cast_slice(indices))?))
+    fn new(
+        gpu: &mut dyn Gpu,
+        context: &mut Context,
+        vertices: &[u8],
+        indices: &[u16],
+        segments: Vec<SegmentBase>,
+    ) -> Option<Mesh> {
+        let device = context.device();
+        let made = device.buffer(gpu, BufferUsage::Vertex, vertices).and_then(|vertices| {
+            Ok((vertices, device.buffer(gpu, BufferUsage::Index, bytemuck::cast_slice(indices))?))
         });
         match made {
             Ok((vertices, indices)) => Some(Mesh { vertices, indices, segments, geometry: None }),
@@ -81,7 +88,7 @@ impl Mesh {
             vertex_buffers: &[(self.vertices.id(), 0)],
             index_buffer: self.indices.id(),
         })?;
-        self.geometry = Some(Owned::new(geometry, context.released()));
+        self.geometry = Some(context.own(geometry, Vec::new()));
         Ok(geometry)
     }
 }
@@ -102,13 +109,14 @@ pub(crate) struct ClipMasks {
     masks: BTreeMap<UnwrappedTileID, (usize, [MeshKey; 2])>,
     /// The masks' projections, each at an offset the GPU can bind, in the
     /// order of their tiles: one write a frame.
-    projections: Option<UniformBufferPtr>,
+    projections: Option<Buffer>,
     /// The bytes of `projections`, kept between frames.
     bytes: Vec<u8>,
-    /// The bindings of each slot of `projections`, and what they were made
-    /// of: the epoch of the frame's buffers and the projections' buffer.
+    /// The bindings of each slot of `projections`, which go with the
+    /// projections' buffer, and the epoch of the global buffers they were
+    /// made at.
     bindings: Vec<Owned<BindingsId>>,
-    bindings_made: Option<(u64, mln_gfx::gpu::BufferId)>,
+    bindings_made: Option<u64>,
     pipelines: Vec<(TargetFormats, PipelineId)>,
 }
 
@@ -118,6 +126,7 @@ impl ClipMasks {
     /// over the area that `projection` gives its tile.
     pub(crate) fn update(
         &mut self,
+        gpu: &mut dyn Gpu,
         context: &mut Context,
         shaders: &ShaderRegistry,
         globe: bool,
@@ -167,12 +176,12 @@ impl ClipMasks {
                     let (_, _, _, borders) = key;
                     let raw =
                         raw_globe_tile_mesh(&tile.canonical, borders, SubdivisionGranularitySetting::globe().stencil);
-                    Mesh::new(context, &raw.vertices, &raw.indices, raw.segments)
+                    Mesh::new(gpu, context, &raw.vertices, &raw.indices, raw.segments)
                 } else {
                     let vertices = RenderStaticData::tile_vertices();
                     let indices = RenderStaticData::quad_triangle_indices();
                     let segment = SegmentBase::with_lengths(0, 0, vertices.len(), indices.len());
-                    Mesh::new(context, bytemuck::cast_slice(&vertices), &indices, vec![segment])
+                    Mesh::new(gpu, context, bytemuck::cast_slice(&vertices), &indices, vec![segment])
                 };
                 if let Some(mesh) = mesh {
                     self.meshes.insert(key, mesh);
@@ -185,7 +194,10 @@ impl ClipMasks {
             let masks = &self.masks;
             self.meshes.retain(|key, _| masks.values().any(|(_, keys)| keys.contains(key)));
         }
-        context.device().write_uniform_buffer(&mut self.projections, &self.bytes);
+        if context.device().write_uniforms(gpu, &mut self.projections, &self.bytes, false) {
+            self.bindings.clear();
+            self.bindings_made = None;
+        }
     }
 
     /// Draws the mask of each tile of `masks` with its stencil value, which
@@ -219,7 +231,7 @@ impl ClipMasks {
             None => *self.shader_id.insert(context.shader(gpu, shader.key())?),
         };
 
-        let made = (context.global_uniform_buffers().epoch(), projections.id());
+        let made = context.global_uniform_buffers().epoch();
         if self.bindings_made != Some(made) || self.bindings.len() < self.masks.len() {
             self.bindings.clear();
             self.bindings_made = None;
@@ -227,22 +239,23 @@ impl ClipMasks {
             let size = size_of::<ProjectionUBO>();
             let stride = size.next_multiple_of(context.caps().buffer_offset_alignment as usize);
             for slot in 0..projections.size() / stride {
-                let entries: Vec<BindGroupEntry> = (0..MAX_UBO_COUNT_PER_SHADER)
-                    .filter_map(|id| {
-                        let (buffer, offset, size) = if id == ID_PROJECTION_UBO {
-                            (projections, (slot * stride) as u64, size as u64)
-                        } else {
-                            global.get(id).map(|buffer| (buffer, 0, buffer.size() as u64))?
-                        };
-                        Some(BindGroupEntry::Buffer { id: id as u32, buffer: buffer.id(), offset, size })
-                    })
-                    .collect();
+                let mut entries = Entries::new();
+                for id in 0..MAX_UBO_COUNT_PER_SHADER {
+                    let (buffer, offset, size) = if id == ID_PROJECTION_UBO {
+                        (projections, (slot * stride) as u64, size as u64)
+                    } else if let Some(buffer) = global.get(id) {
+                        (buffer, 0, buffer.size() as u64)
+                    } else {
+                        continue;
+                    };
+                    entries.push(BindGroupEntry::Buffer { id: id as u32, buffer: buffer.id(), offset, size });
+                }
                 let bindings = gpu.create_bindings(&BindingsDesc {
                     label: "clipping mask",
                     shader: shader_id,
-                    entries: &entries,
+                    entries: entries.as_slice(),
                 })?;
-                self.bindings.push(Owned::new(bindings, context.released()));
+                self.bindings.push(context.own(bindings, Vec::new()));
             }
             self.bindings_made = Some(made);
         }

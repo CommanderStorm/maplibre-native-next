@@ -1,12 +1,11 @@
 //! Writes draws' vertex attributes to buffers of the
 //! backend's [`Gpu`](mln_gfx::gpu::Gpu).
 
-use mln_gfx::buffer::BufferPtr;
 use mln_gfx::gfx_types::AttributeDataType;
-use mln_gfx::gpu::GpuError;
-use mln_gfx::shaders::shader_defines::MAX_ATTRIBUTE_COUNT_PER_SHADER;
+use mln_gfx::gpu::{BufferId, Gpu, GpuError};
 
 use crate::gfx::context::Context;
+use crate::gfx::owned::Held;
 use crate::gfx::vertex_attribute::VertexAttributeArray;
 
 /// How a vertex attribute reads its buffer: as `data_type`, at `offset` in
@@ -17,53 +16,77 @@ pub(crate) struct AttributeDescriptor {
     pub(crate) offset: u32,
 }
 
-/// A vertex attribute bound to a vertex buffer, or to none where the
-/// draw doesn't provide the attribute. Bindings are equal where they
-/// bind the same buffer the same way.
+/// A vertex attribute bound to a vertex buffer, with what keeps a buffer
+/// that other owners share. Bindings are equal where they bind the same buffer the
+/// same way.
 #[derive(Clone)]
 pub(crate) struct AttributeBinding {
     pub(crate) attribute: AttributeDescriptor,
     pub(crate) vertex_stride: u32,
-    pub(crate) buffer: Option<BufferPtr>,
+    pub(crate) buffer: BufferId,
     pub(crate) vertex_offset: u32,
+    pub(crate) held: Option<Held>,
 }
 
 impl PartialEq for AttributeBinding {
     fn eq(&self, rhs: &Self) -> bool {
         self.attribute == rhs.attribute
             && self.vertex_stride == rhs.vertex_stride
-            && self.buffer.as_ref().map(|buffer| buffer.id()) == rhs.buffer.as_ref().map(|buffer| buffer.id())
+            && self.buffer == rhs.buffer
             && self.vertex_offset == rhs.vertex_offset
     }
 }
 
 /// A draw's attribute bindings, indexed by the shader's attribute index.
-pub(crate) type AttributeBindingArray = Vec<Option<AttributeBinding>>;
+pub(crate) type AttributeBindingArray = Vec<AttributeBinding>;
 
-/// The vertex bindings of a draw, indexed by shader attribute index:
-/// one for each of the shader's `attributes`, its id and the format of its
-/// default, read from the draw's attribute of that id in `overrides` where
-/// it has one. An attribute the draw doesn't have, or has no data for,
-/// binds no buffer, at the default's type and stride.
-pub(crate) fn build_attribute_bindings(
+/// Makes `bindings` the vertex bindings of a draw, indexed by shader
+/// attribute index: one for each of the shader's `attributes`, its id and
+/// the format of its default, read from the draw's attribute of that id in
+/// `overrides` where it has one. An attribute the draw doesn't have, or has
+/// no data for, binds a buffer of its default's value for `vertex_count`
+/// vertices. Returns whether a binding changed; after an error, some may
+/// have.
+pub(crate) fn update_attribute_bindings(
+    gpu: &mut dyn Gpu,
     context: &mut Context,
     attributes: &[(usize, AttributeDataType)],
     overrides: &mut VertexAttributeArray,
-) -> Result<AttributeBindingArray, GpuError> {
-    let mut bindings: AttributeBindingArray = vec![None; MAX_ATTRIBUTE_COUNT_PER_SHADER.max(attributes.len())];
+    vertex_count: usize,
+    bindings: &mut AttributeBindingArray,
+) -> Result<bool, GpuError> {
+    bindings.reserve_exact(attributes.len().saturating_sub(bindings.len()));
+    let mut changed = false;
     for (index, &(id, default)) in attributes.iter().enumerate() {
         let binding = match overrides.get_mut(id) {
-            Some(attribute) => attribute.binding(context)?,
+            Some(attribute) => attribute.binding(gpu, context)?,
             None => None,
         };
-        bindings[index] = Some(binding.unwrap_or_else(|| AttributeBinding {
-            attribute: AttributeDescriptor { data_type: default, offset: 0 },
-            vertex_stride: default.stride() as u32,
-            buffer: None,
-            vertex_offset: 0,
-        }));
+        let binding = if let Some(binding) = binding {
+            binding
+        } else {
+            let buffer = context.default_vertex_buffer(gpu, default, vertex_count)?;
+            AttributeBinding {
+                attribute: AttributeDescriptor { data_type: default, offset: 0 },
+                vertex_stride: default.stride() as u32,
+                buffer: buffer.id(),
+                vertex_offset: 0,
+                held: Some(Held::Buffer(buffer)),
+            }
+        };
+        match bindings.get_mut(index) {
+            Some(bound) if *bound == binding => {}
+            Some(bound) => {
+                *bound = binding;
+                changed = true;
+            }
+            None => {
+                bindings.push(binding);
+                changed = true;
+            }
+        }
     }
-    Ok(bindings)
+    Ok(changed)
 }
 
 /// Whether the next upload writes what one of `overrides`' attributes

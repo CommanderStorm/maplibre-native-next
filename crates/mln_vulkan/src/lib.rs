@@ -40,13 +40,15 @@ mod win32;
 mod window;
 
 pub use ash;
-pub use borrowed_target::{BorrowedDepth, BorrowedImage, BorrowedImages, BorrowedTarget, ImageOwner, PendingReads};
+pub use borrowed_target::{
+    BorrowedDepth, BorrowedImage, BorrowedImages, BorrowedTarget, ConsumerWait, ImageOwner, PendingReads, VulkanRing,
+};
 pub use custom_layer::{CustomLayerEncoder, CustomLayerPass};
 pub use device::{AdapterId, Device, HostDevice, QueueLease, QueueLock, RawDevice};
-pub use exported_target::ExportedTarget;
+pub use exported_target::{ExportedImages, ExportedTarget, VulkanExporter};
 pub use gpu::{ImportedImage, VulkanGpu};
 /// Frames drawn into textures of the library's and read back.
-pub type OffscreenTarget = mln_gfx::offscreen_target::OffscreenTarget<RendererBackend>;
+pub type OffscreenTarget = mln_gfx::offscreen_target::OffscreenTarget<VulkanGpu>;
 pub use mln_glsl::Stage as ShaderStage;
 pub use renderer_backend::RendererBackend;
 pub use shaders::compile as compile_glsl;

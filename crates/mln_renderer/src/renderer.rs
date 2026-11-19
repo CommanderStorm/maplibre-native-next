@@ -1,5 +1,3 @@
-use std::mem::ManuallyDrop;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,7 +6,7 @@ use mln_gfx::rendering_stats::RenderingStats;
 use mln_gfx::shaders::layer_ubo::GlobalPaintParamsUBO;
 use mln_gfx::shaders::program_parameters::ProgramParameters;
 use mln_gfx::shaders::shader_defines::ID_GLOBAL_PAINT_PARAMS_UBO;
-use mln_gfx::{FrameImage, FrameTarget, Handoff, RendererBackend, ScissorRect, ShaderRegistry};
+use mln_gfx::{FrameImage, Handoff, ScissorRect};
 use mln_map_types::{MapDebugOptions, MapView};
 use mln_style::layers::CustomLayerFrame;
 use mln_text::GlyphCache;
@@ -26,8 +24,10 @@ use crate::clip_masks::ClipMasks;
 use crate::frame::Frame;
 use crate::frame_projection::{self, FrameProjection};
 use crate::gfx::context::Context;
+use crate::gfx::shader_registry::ShaderRegistry;
 use crate::layer_composite::{Composite, LayerComposite};
 use crate::layer_drawing::DrawOrder;
+use crate::layers::render_custom_layer::end_hosts;
 use crate::paint_parameters::{OpenPass, PaintParameters};
 use crate::render_orchestrator::RenderOrchestrator;
 use crate::render_pass::RenderPass;
@@ -45,8 +45,9 @@ enum RenderState {
 }
 
 /// What the last frame that [`Renderer::render`] drew spent on
-/// each of its steps, on the CPU. They follow each other, and together take
-/// nearly all of `render`.
+/// each of its steps, on the CPU, from its [update](Renderer::update) on.
+/// They follow each other, and together take nearly all of `update` and
+/// `render`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RenderTimings {
     /// The update up to symbol placement: the style's changes, the layers'
@@ -64,37 +65,78 @@ pub struct RenderTimings {
     pub draw: Duration,
 }
 
-/// Draws a map's updates into frame targets on one backend: it keeps the
-/// map's sources, tiles and layers between frames, and the GPU objects
+/// Draws a map's updates into the frames of one backend's [`Gpu`]: it keeps
+/// the map's sources, tiles and layers between frames, and the GPU objects
 /// they draw with.
+///
+/// The renderer holds no `Gpu`. Each call that makes, draws or frees its GPU
+/// objects takes the one it was made for, which its host lends it, as it
+/// does to the target that the renderer draws into. A frame runs in the
+/// host, with one `Gpu` lent to all of it:
+///
+/// ```ignore
+/// let frame = renderer.update(gpu, &update)?;
+/// let image = target.begin_frame(gpu)?;
+/// let drawn = renderer.render(gpu, &image, frame);
+/// let handoff = target.end_frame(gpu);
+/// renderer.finish_frame(gpu, drawn, handoff);
+/// ```
+///
+/// [`tear_down`](Self::tear_down) frees the renderer's GPU objects. A
+/// renderer dropped without it leaves them to the `Gpu`, which frees them
+/// when it drops, and its custom layers' hosts hear that their graphics
+/// objects are lost.
 pub struct Renderer {
-    /// Dropped by hand in `tear_down`, inside the backend's hold: its custom
-    /// layers' hosts free their graphics objects as the layers go, which on
-    /// GL needs the context current. A safe `Drop` runs before the fields
-    /// drop, so it can't wrap their drops in the hold otherwise.
-    orchestrator: ManuallyDrop<RenderOrchestrator>,
-    backend: Rc<dyn RendererBackend>,
+    orchestrator: RenderOrchestrator,
     encoder: Encoder,
     /// Where the renderer reports its events, once the host gives it one.
     events: Option<RendererEvents>,
-    /// Whether `tear_down` dropped the orchestrator.
-    torn_down: bool,
+}
+
+/// A frame that [`Renderer::update`] brought the renderer's state to, for
+/// [`Renderer::render`] to draw.
+#[must_use = "an updated frame is drawn"]
+pub struct UpdatedFrame {
+    frame: Frame,
+    parameters: Arc<UpdateParameters>,
+    updated: Instant,
+}
+
+/// A frame that [`Renderer::render`] drew, for
+/// [`Renderer::finish_frame`] once the target handed it off.
+#[must_use = "a drawn frame is finished once its target handed it off"]
+pub struct DrawnFrame {
+    mode: RenderMode,
+    needs_repaint: bool,
+    /// When the frame's placement wants the next frame, if it does.
+    repaint_at: Option<Instant>,
+    placement_changed: bool,
+    /// The `still_image_request_id` of a still image's frame, or 0.
+    still_image_request_id: u64,
+    started: Instant,
+    symbols_started: Instant,
+    updated: Instant,
+    layers_uploaded: Instant,
+    start_rendering: Instant,
 }
 
 /// What the renderer keeps for its frames' encodes: its GPU state, the
 /// shaders, the passes' masks and composite, and what the last frame drew.
 struct Encoder {
-    /// What the renderer keeps over the backend's `Gpu`, which goes after
-    /// the resources that `drop` drops first.
+    /// What the renderer keeps over the backend's `Gpu`, which the
+    /// tear-down destroys after what the other fields hold.
     context: Context,
     pixel_ratio: f32,
-    /// Dropped in `drop` inside the hold, after the orchestrator.
+    /// Dropped in the tear-down, after the orchestrator.
     static_data: Option<RenderStaticData>,
-    /// Kept across frames; dropped in `drop` inside the hold.
+    /// Kept across frames; dropped in the tear-down.
     clip_masks: ClipMasks,
     /// What layers drawn as a whole draw into and composite with, between
     /// frames.
     layer_composite: LayerComposite,
+    /// Whether the context's shaders and pipelines are of an earlier pixel
+    /// ratio, which the next update's render layers no longer draw with.
+    shaders_replaced: bool,
     render_state: RenderState,
     /// Where the last frame drew the map.
     frame_projection: Option<FrameProjection>,
@@ -111,20 +153,17 @@ impl Renderer {
     /// [`RendererEvent::Invalidate`] to the queue the renderer reports to
     /// ([`set_event_queue`](Self::set_event_queue)). It must not call the
     /// renderer.
-    pub fn new(
-        backend: Rc<dyn RendererBackend>,
-        pixel_ratio: f32,
-        local_glyphs: LocalGlyphs,
-        waker: Waker,
-        pool: &Pool,
-    ) -> Self {
-        Self::with_glyph_cache(backend, pixel_ratio, local_glyphs, Arc::default(), waker, pool)
+    ///
+    /// The renderer draws with `gpu` and only with it: every later call
+    /// that takes a `Gpu` takes this one.
+    pub fn new(gpu: &dyn Gpu, pixel_ratio: f32, local_glyphs: LocalGlyphs, waker: Waker, pool: &Pool) -> Self {
+        Self::with_glyph_cache(gpu, pixel_ratio, local_glyphs, Arc::default(), waker, pool)
     }
 
     /// A renderer that uses `glyph_cache`: renderers given the same
     /// `GlyphCache` share the glyphs they parse from glyph PBFs.
     pub fn with_glyph_cache(
-        backend: Rc<dyn RendererBackend>,
+        gpu: &dyn Gpu,
         pixel_ratio: f32,
         local_glyphs: LocalGlyphs,
         glyph_cache: Arc<GlyphCache>,
@@ -133,7 +172,7 @@ impl Renderer {
     ) -> Self {
         let engine = crate::text::font_face_engine::default_engine();
         let registry = Registry::with_builtins();
-        Self::with_fonts(backend, pixel_ratio, local_glyphs, glyph_cache, engine, registry, waker, pool)
+        Self::with_fonts(gpu, pixel_ratio, local_glyphs, glyph_cache, engine, registry, waker, pool)
     }
 
     /// A renderer that uses `glyph_cache`, loads the font files of a style's
@@ -145,7 +184,7 @@ impl Renderer {
     /// same calls: a layer whose type `registry` lacks isn't drawn.
     #[expect(clippy::too_many_arguments, reason = "each argument is a part of the renderer that its host picks")]
     pub fn with_fonts(
-        backend: Rc<dyn RendererBackend>,
+        gpu: &dyn Gpu,
         pixel_ratio: f32,
         local_glyphs: LocalGlyphs,
         glyph_cache: Arc<GlyphCache>,
@@ -155,7 +194,7 @@ impl Renderer {
         pool: &Pool,
     ) -> Self {
         Renderer {
-            orchestrator: ManuallyDrop::new(RenderOrchestrator::new(
+            orchestrator: RenderOrchestrator::new(
                 true,
                 local_glyphs,
                 glyph_cache,
@@ -163,38 +202,41 @@ impl Renderer {
                 registry,
                 waker,
                 pool,
-            )),
+            ),
             encoder: Encoder {
-                context: Context::new(Rc::clone(&backend)),
+                context: Context::new(*gpu.caps()),
                 pixel_ratio,
                 static_data: None,
                 clip_masks: ClipMasks::default(),
                 layer_composite: LayerComposite::default(),
+                shaders_replaced: false,
                 render_state: RenderState::Never,
                 frame_projection: None,
                 timings: RenderTimings::default(),
             },
-            backend,
             events: None,
-            torn_down: false,
         }
     }
 
     /// Draws at `pixel_ratio` device pixels per logical pixel from the next
     /// frame on, which should be the map's (`Map::set_pixel_ratio`). The
-    /// renderer makes its shaders and draws again, and keeps its
-    /// tiles. The host sizes the backend's framebuffer for the new ratio.
+    /// renderer makes its shaders and draws again, frees the ones they
+    /// replace, and keeps its tiles. The host sizes the backend's
+    /// framebuffer for the new ratio.
     pub fn set_pixel_ratio(&mut self, pixel_ratio: f32) {
         if pixel_ratio == self.encoder.pixel_ratio {
             return;
         }
         // The shaders build the pixel ratio in on some backends, so a new
-        // ratio takes new shaders, and new draws that use them.
+        // ratio takes new shaders, and new draws that use them. The render
+        // layers' draws go with the next update, which makes the layers
+        // again, and the old shaders after it.
         let encoder = &mut self.encoder;
         encoder.pixel_ratio = pixel_ratio;
         encoder.static_data = None;
         encoder.clip_masks = ClipMasks::default();
         encoder.layer_composite = LayerComposite::default();
+        encoder.shaders_replaced = true;
         self.orchestrator.release_shaders();
     }
 
@@ -227,32 +269,39 @@ impl Renderer {
         self.events = events;
     }
 
-    /// Draws `update_parameters` into a frame of `target`, which must be
-    /// built on the renderer's backend. Returns where the frame went, or
-    /// `None` when nothing was drawn: there was nothing to draw, or the
-    /// target had nothing to draw into.
-    ///
-    /// A frame runs in two phases: the orchestrator's update brings the
-    /// renderer's state to the update and returns the frame as a value, and
-    /// the encode builds the layers' GPU objects and draws from it.
-    pub fn render(&mut self, update_parameters: &Arc<UpdateParameters>, target: &dyn FrameTarget) -> Option<Handoff> {
-        // Held from the update on: a custom layer that the update removes or
-        // gives a new host deinitializes on the backend, as on OpenGL with
-        // the context current.
-        let _hold = self.backend.hold();
-        let orchestrator = &mut *self.orchestrator;
+    /// Brings the renderer's state to `update_parameters`: its style,
+    /// sources, tiles, layers and placement. Returns the frame to draw,
+    /// which the host [renders](Self::render) into a frame of its target,
+    /// or `None` when there is nothing to draw: a still image that hasn't
+    /// loaded yet. Custom layers that the update removed or gave a new host
+    /// end on `gpu`.
+    pub fn update(&mut self, gpu: &mut dyn Gpu, update_parameters: &Arc<UpdateParameters>) -> Option<UpdatedFrame> {
+        let orchestrator = &mut self.orchestrator;
         let frame = orchestrator.update(update_parameters);
         report(orchestrator, self.events.as_ref());
-        let frame = frame?;
-        let updated = Instant::now();
         let encoder = &mut self.encoder;
-        let handoff =
-            encoder.encode(orchestrator, &*self.backend, self.events.as_ref(), &frame, update_parameters, target);
-        if handoff.is_some() {
-            encoder.timings.sources = frame.symbols_started - frame.started;
-            encoder.timings.symbols = updated - frame.symbols_started;
+        end_hosts(gpu, orchestrator.take_ended_hosts());
+        if std::mem::take(&mut encoder.shaders_replaced) {
+            encoder.context.release_shaders();
         }
-        handoff
+        let frame = frame?;
+        Some(UpdatedFrame { frame, parameters: Arc::clone(update_parameters), updated: Instant::now() })
+    }
+
+    /// Draws `frame`, which the last [`update`](Self::update) returned, into
+    /// `image`, textures of `gpu` that the host's target began a frame with,
+    /// and submits the frame's passes. Returns the frame, which the host
+    /// ends on its target and then [finishes](Self::finish_frame).
+    pub fn render(&mut self, gpu: &mut dyn Gpu, image: &FrameImage, frame: UpdatedFrame) -> DrawnFrame {
+        self.encoder.encode(gpu, &mut self.orchestrator, self.events.as_ref(), image, frame)
+    }
+
+    /// Ends `frame`, which [`render`](Self::render) drew, once the host's
+    /// target handed it off as `handoff`: destroys what the frame replaced
+    /// and reports the frame with its rendering stats.
+    #[expect(clippy::needless_pass_by_value, reason = "a frame is finished once: the call takes it")]
+    pub fn finish_frame(&mut self, gpu: &mut dyn Gpu, frame: DrawnFrame, handoff: Handoff) {
+        self.encoder.finish(gpu, self.events.as_ref(), &frame, handoff);
     }
 
     /// Drops `value` on the renderer's workers instead of this
@@ -412,67 +461,75 @@ impl Renderer {
     }
 
     /// Lets go of what the orchestrator caches, destroys what it and the
-    /// renderer released, and waits for the GPU, so that its work finishes
+    /// renderer released, and waits for `gpu`, so that its work finishes
     /// before the app goes to the background.
-    pub fn reduce_memory_use(&mut self) {
-        {
-            let _hold = self.backend.hold();
-            self.orchestrator.reduce_memory_use();
-            self.encoder.context.destroy_released();
-            if let Err(error) = self.encoder.context.gpu().flush(true) {
-                Log::error(Event::Render, format!("Waiting for the GPU failed: {error}"));
-            }
+    pub fn reduce_memory_use(&mut self, gpu: &mut dyn Gpu) {
+        self.orchestrator.reduce_memory_use();
+        self.encoder.context.destroy_released(gpu);
+        if let Err(error) = gpu.flush(true) {
+            Log::error(Event::Render, format!("Waiting for the GPU failed: {error}"));
         }
         report(&mut self.orchestrator, self.events.as_ref());
     }
 
     /// The rendering stats, which count the renderer's resources until it
-    /// releases them. A texture counts until the end of the frame that
-    /// follows its release, or until
+    /// destroys them: a buffer or texture counts until the end of the frame
+    /// that follows its release, or until
     /// [`reduce_memory_use`](Self::reduce_memory_use).
     #[must_use]
     pub fn rendering_stats(&self) -> RenderingStats {
         self.encoder.context.stats()
     }
 
-    /// Destroys the renderer, and returns its rendering stats as it leaves
-    /// them, with all its resources released.
-    #[must_use]
-    pub fn into_rendering_stats(mut self) -> RenderingStats {
-        self.tear_down();
-        self.encoder.context.stats()
+    /// Lets go of the map's data: its sources, tiles and layers, which the
+    /// next update loads again. The custom layers that go hear through
+    /// `gpu` that the renderer stopped.
+    pub fn clear_data(&mut self, gpu: &mut dyn Gpu) {
+        self.orchestrator.clear_data();
+        end_hosts(gpu, self.orchestrator.take_ended_hosts());
     }
 
-    pub fn clear_data(&mut self) {
-        // The custom layers that go deinitialize on the backend.
-        let _hold = self.backend.hold();
-        self.orchestrator.clear_data();
+    /// Destroys the renderer's GPU objects on `gpu`, and tells its custom
+    /// layers' hosts that it stopped. Returns its rendering stats as it
+    /// leaves them, with all its resources released.
+    pub fn tear_down(self, gpu: &mut dyn Gpu) -> RenderingStats {
+        let Renderer { mut orchestrator, mut encoder, .. } = self;
+        // The layers' GPU objects go to the context's queue, and their
+        // custom layers' hosts to the ended ones.
+        orchestrator.leave_layers();
+        let ended = orchestrator.take_ended_hosts();
+        drop(orchestrator);
+        encoder.clip_masks = ClipMasks::default();
+        encoder.layer_composite = LayerComposite::default();
+        encoder.static_data = None;
+        encoder.context.tear_down(gpu);
+        end_hosts(gpu, ended);
+        encoder.context.stats()
     }
 }
 
 impl Encoder {
     /// The second phase of a frame: builds and refreshes the GPU objects of
-    /// the layers' draws of `frame`, and draws them into `target`, unless
-    /// the target has nothing to draw into now. It reads the style, the
-    /// sources, the tiles each layer draws and the placement as the update
-    /// left them, and changes only what draws them on the GPU: the atlases'
-    /// textures, the tiles' buckets, which it uploads and binds to the
-    /// atlases' textures, the layers' drawing and the renderer's GPU state.
+    /// the layers' draws of `frame` on `gpu`, draws them into `image` and
+    /// submits them. It reads the style, the sources, the tiles each layer
+    /// draws and the placement as the update left them, and changes only
+    /// what draws them on the GPU: the atlases' textures, the tiles'
+    /// buckets, which it uploads and binds to the atlases' textures, the
+    /// layers' drawing and the renderer's GPU state.
     ///
     /// It uploads the atlases and the tiles' buckets; then the draw update
     /// makes the layers' draws of the frame, the draw upload uploads what
     /// they bind, and the draw section encodes the passes and submits them.
     fn encode(
         &mut self,
+        gpu: &mut dyn Gpu,
         orchestrator: &mut RenderOrchestrator,
-        backend: &dyn RendererBackend,
         events: Option<&RendererEvents>,
-        frame: &Frame,
-        update_parameters: &Arc<UpdateParameters>,
-        target: &dyn FrameTarget,
-    ) -> Option<Handoff> {
+        image: &FrameImage,
+        frame: UpdatedFrame,
+    ) -> DrawnFrame {
+        let UpdatedFrame { frame, parameters: update_parameters, updated } = frame;
         let start = Instant::now();
-        let image = target.begin_frame()?;
         {
             let stats = self.context.rendering_stats();
             stats.num_draw_calls = 0;
@@ -504,13 +561,13 @@ impl Encoder {
         };
 
         let composites_with_frame_depth =
-            image.depth_stencil.is_some_and(|texture| self.context.gpu().attaches_with_any_color(texture));
+            image.depth_stencil.is_some_and(|texture| gpu.attaches_with_any_color(texture));
         let mut parameters = PaintParameters::new(
             &mut self.context,
             &mut self.clip_masks,
             &mut self.layer_composite,
             composites_with_frame_depth,
-            frame,
+            &frame,
             static_data,
             self.pixel_ratio,
             renderable_size,
@@ -520,25 +577,26 @@ impl Encoder {
         // - UPLOAD --------------------------------------------------------
         // The atlases first, whose textures the tiles bind, then the tiles'
         // buckets.
-        orchestrator.upload_atlases(parameters.context);
+        orchestrator.upload_atlases(gpu, parameters.context);
         orchestrator.upload_sources(parameters.context);
 
         // - DRAW UPDATE ---------------------------------------------------
         // The layers' draws of the frame, and those of the debug overlays.
         let uploaded = Instant::now();
-        orchestrator.update_layer_draws(update_parameters, &mut parameters, frame);
+        orchestrator.update_layer_draws(gpu, &update_parameters, &mut parameters, &frame);
         let layers_updated = Instant::now();
-        orchestrator.update_debug_layers(&mut parameters);
+        orchestrator.update_debug_layers(gpu, &mut parameters);
 
         // What the frame's update and draw update replaced goes before the
         // uploads make what replaces it.
-        parameters.context.destroy_released();
+        parameters.context.destroy_released(gpu);
 
         // - DRAW UPLOAD ---------------------------------------------------
-        orchestrator.upload_draws(parameters.context);
+        orchestrator.upload_draws(gpu, parameters.context);
         let draw_groups = DrawGroups::of(orchestrator, &parameters);
         let (proj_state, transform) = (parameters.state, parameters.transform_params);
         parameters.clip_masks.update(
+            gpu,
             parameters.context,
             &static_data.shaders,
             proj_state.is_globe_rendering(),
@@ -546,6 +604,7 @@ impl Encoder {
             |tile| to_projection_ubo(&transform.projection_data_for_tile(tile, false)),
         );
         parameters.layer_composite.update(
+            gpu,
             parameters.context,
             &static_data.shaders,
             image.size,
@@ -565,14 +624,13 @@ impl Encoder {
             map_zoom: state.get_zoom() as f32,
             pad1: 0.0,
         };
-        parameters.context.write_global_uniform_buffer(ID_GLOBAL_PAINT_PARAMS_UBO, &global_paint_params_ubo);
+        parameters.context.write_global_uniform_buffer(gpu, ID_GLOBAL_PAINT_PARAMS_UBO, &global_paint_params_ubo);
         // What the uploads replaced goes before the passes make what
         // replaces it, such as a draw's geometry.
-        parameters.context.destroy_released();
+        parameters.context.destroy_released(gpu);
         let layers_uploaded = Instant::now();
 
         // - DRAW ----------------------------------------------------------
-        // The passes hold the backend's `Gpu` until the frame is submitted.
         // The 3D layers draw into depth from 0 to the passes' depth range
         // size, which the draw groups' count sets, and custom layers record
         // their work with the projection that the frame's result reports.
@@ -587,18 +645,52 @@ impl Encoder {
             width: renderable_size.width,
             height: renderable_size.height,
         });
-        let mut gpu = backend.gpu();
-        draw(orchestrator, &mut *gpu, &mut parameters, frame, &image, draw_groups.count, depth_range_size);
+        draw(orchestrator, gpu, &mut parameters, &frame, image, draw_groups.count, depth_range_size);
         let start_rendering = Instant::now();
-        if let Err(error) = parameters.end_pass(&mut *gpu).and_then(|()| gpu.flush(false)) {
+        if let Err(error) = parameters.end_pass(gpu).and_then(|()| gpu.flush(false)) {
             Log::error(Event::Render, format!("Submitting the frame failed: {error}"));
         }
-        drop(gpu);
-        let handoff = target.end_frame();
-        let submitted = Instant::now();
+        drop(parameters);
 
-        // - FINISH --------------------------------------------------------
-        let context = &mut *parameters.context;
+        self.timings.layers = layers_updated - uploaded;
+        self.timings.upload = (uploaded - start) + (layers_uploaded - layers_updated);
+        self.frame_projection = Some(frame_projection);
+        DrawnFrame {
+            mode: if frame.loaded { RenderMode::Full } else { RenderMode::Partial },
+            needs_repaint: frame.needs_repaint,
+            repaint_at: frame.repaint_at,
+            placement_changed: frame.placement_changed,
+            still_image_request_id: if update_parameters.still_image_request {
+                update_parameters.still_image_request_id
+            } else {
+                0
+            },
+            started: frame.started,
+            symbols_started: frame.symbols_started,
+            updated,
+            layers_uploaded,
+            start_rendering,
+        }
+    }
+
+    /// The end of a frame that [`encode`](Self::encode) drew, once its
+    /// target handed it off as `handoff`: destroys what the uploads and the
+    /// passes replaced, and reports the frame with the rendering stats.
+    fn finish(&mut self, gpu: &mut dyn Gpu, events: Option<&RendererEvents>, frame: &DrawnFrame, handoff: Handoff) {
+        let DrawnFrame {
+            mode,
+            needs_repaint,
+            repaint_at,
+            placement_changed,
+            still_image_request_id,
+            started,
+            symbols_started,
+            updated,
+            layers_uploaded,
+            start_rendering,
+        } = *frame;
+        let submitted = Instant::now();
+        let context = &mut self.context;
         {
             let stats = context.rendering_stats();
             // The frame read back counts as a framebuffer, as an offscreen
@@ -607,43 +699,35 @@ impl Encoder {
             stats.rendering_time = (submitted - start_rendering).as_secs_f64();
         }
         // What the uploads and the passes replaced.
-        context.destroy_released();
+        context.destroy_released(gpu);
         {
             let stats = context.rendering_stats();
-            stats.encoding_time = frame.started.elapsed().as_secs_f64() - stats.rendering_time;
+            stats.encoding_time = started.elapsed().as_secs_f64() - stats.rendering_time;
         }
         let stats = Arc::new(context.stats());
-        drop(parameters);
 
-        self.timings.layers = layers_updated - uploaded;
-        self.timings.upload = (uploaded - start) + (layers_uploaded - layers_updated);
+        self.timings.sources = symbols_started - started;
+        self.timings.symbols = updated - symbols_started;
         self.timings.draw = submitted - layers_uploaded;
 
         emit(
             events,
             RendererEvent::RenderFrameFinished {
-                mode: if frame.loaded { RenderMode::Full } else { RenderMode::Partial },
-                needs_repaint: frame.needs_repaint,
-                repaint_at: frame.repaint_at,
-                placement_changed: frame.placement_changed,
-                still_image_request_id: if update_parameters.still_image_request {
-                    update_parameters.still_image_request_id
-                } else {
-                    0
-                },
+                mode,
+                needs_repaint,
+                repaint_at,
+                placement_changed,
+                still_image_request_id,
                 stats,
             },
         );
 
-        if !frame.loaded {
+        if mode == RenderMode::Partial {
             self.render_state = RenderState::Partial;
         } else if self.render_state != RenderState::Fully {
             self.render_state = RenderState::Fully;
             emit(events, RendererEvent::RenderMapFinished);
         }
-
-        self.frame_projection = Some(frame_projection);
-        Some(handoff)
     }
 }
 
@@ -809,36 +893,5 @@ fn report(orchestrator: &mut RenderOrchestrator, events: Option<&RendererEvents>
 fn emit(events: Option<&RendererEvents>, event: RendererEvent) {
     if let Some(events) = events {
         events.push(event);
-    }
-}
-
-impl Renderer {
-    /// Drops the renderer's resources inside the backend's hold, and
-    /// destroys what the context made and what the renderer released. Once:
-    /// the renderer is then only dropped.
-    fn tear_down(&mut self) {
-        if self.torn_down {
-            return;
-        }
-        self.torn_down = true;
-        let _hold = self.backend.hold();
-        // SAFETY: `torn_down` drops `orchestrator` once, here, and nothing
-        // reads it afterwards: the renderer only drops after this, and the
-        // remaining fields' drops don't touch it.
-        #[expect(unsafe_code, reason = "drops the orchestrator inside the backend's hold; see its field")]
-        unsafe {
-            ManuallyDrop::drop(&mut self.orchestrator);
-        }
-        let encoder = &mut self.encoder;
-        encoder.clip_masks = ClipMasks::default();
-        encoder.layer_composite = LayerComposite::default();
-        encoder.static_data = None;
-        encoder.context.release_all();
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        self.tear_down();
     }
 }
