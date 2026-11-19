@@ -3,6 +3,7 @@
 // images across worker messages.
 //
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::range::RangeInclusive;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use mln_style_types::{
 use mln_text::glyph::{GlyphID, GlyphIDType, GlyphPositions, Shaping, WritingModeType};
 use mln_text::shaping::{PositionedIcon, get_anchor_justification, get_shaping};
 use mln_text::tagged_string::SectionOptions;
-use mln_text::{BiDi, TaggedString, apply_arabic_shaping, starts_right_to_left};
+use mln_text::{BiDi, TaggedString, shape_arabic, starts_right_to_left};
 use mln_tile_id::CanonicalTileID;
 use mln_tile_id::geometry_tile_data::{GeometryCoordinate, GeometryCoordinates, GeometryTileFeature};
 use mln_util::constants::{EXTENT, ONE_EM, TILE_SIZE_D};
@@ -513,7 +514,7 @@ impl SymbolLayout {
                         u8string = u8string.to_lowercase();
                     }
 
-                    // Only the sections that draw from glyph PBFs take ICU's
+                    // Only the sections that draw from glyph PBFs take their
                     // Arabic presentation forms. HarfBuzz needs the letters
                     // themselves, to apply the font's own joining rules.
                     let u16_string = u8string.encode_utf16().collect::<Vec<u16>>();
@@ -537,8 +538,10 @@ impl SymbolLayout {
                             if sub_string.is_empty() {
                                 return;
                             }
-                            if sub_string_type == GlyphIDType::FontPBF {
-                                *sub_string = apply_arabic_shaping(sub_string);
+                            if sub_string_type == GlyphIDType::FontPBF
+                                && let Cow::Owned(shaped) = shape_arabic(sub_string)
+                            {
+                                *sub_string = shaped;
                             }
                             formatted_text.add_text_section(
                                 sub_string,
