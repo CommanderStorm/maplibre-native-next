@@ -16,12 +16,11 @@
 //! its own, copied into a second texture before each such layer and onto the
 //! frame's target at the end.
 
-use mln_gfx::buffer::BufferPtr;
 use mln_gfx::color_mode::{BlendFunction, LinearBlend};
 use mln_gfx::gpu::{
-    BindGroupEntry, BindingsDesc, BindingsId, BufferId, BufferUsage, ColorAttachment, DepthState,
-    DepthStencilAttachment, Draw, DynamicState, FixedState, GeometryDesc, GeometryId, Gpu, GpuError, LoadOp,
-    PipelineKey, SamplerId, Scissor, ShaderId, StencilState, TargetFormats, TextureFormat, TextureId, VertexAttribute,
+    BindGroupEntry, BindingsDesc, BindingsId, BufferUsage, ColorAttachment, DepthState, DepthStencilAttachment, Draw,
+    DynamicState, FixedState, GeometryDesc, GeometryId, Gpu, GpuError, LoadOp, PipelineKey, SamplerId, Scissor,
+    ShaderId, StencilState, TargetFormats, TextureDesc, TextureFormat, TextureId, TextureUsage, VertexAttribute,
     VertexBufferLayout, VertexStep,
 };
 use mln_gfx::projection_variant::ProjectionVariant;
@@ -34,21 +33,22 @@ use mln_gfx::shaders::shader_defines::{
     ID_LAYER_COMPOSITE_BACKDROP_TEXTURE, ID_LAYER_COMPOSITE_IMAGE_TEXTURE, ID_LAYER_COMPOSITE_POS_VERTEX_ATTRIBUTE,
     ID_LAYER_COMPOSITE_UBO, ID_PROJECTION_UBO, MAX_UBO_COUNT_PER_SHADER,
 };
+use mln_gfx::texture2d::SamplerState;
 use mln_gfx::types::ColorBlendFactorType;
-use mln_gfx::{
-    AttributeDataType, ColorMode, CullFaceMode, DepthMode, DrawModeType, ShaderProgramPtr, ShaderRegistry, StencilMode,
-};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMode, DrawModeType, StencilMode};
 use mln_style_types::LayerBlendType;
 use mln_util::Color;
 use mln_util::identity::SimpleIdentity;
 use mln_util::logging::{Event, Log};
 use mln_util::size::Size;
 
-use crate::gfx::attachment::Attachment;
+use crate::draw::Entries;
+use crate::gfx::buffer::Buffer;
 use crate::gfx::context::Context;
 use crate::gfx::owned::Owned;
-use crate::gfx::store::SharedTexture;
-use crate::gfx::uniform_buffer::UniformBufferPtr;
+use crate::gfx::resources::GpuTexture;
+use crate::gfx::shader_program::ShaderProgramPtr;
+use crate::gfx::shader_registry::ShaderRegistry;
 use crate::paint_parameters::{DrawTarget, OpenPass};
 use crate::render_static_data::RenderStaticData;
 
@@ -128,23 +128,24 @@ impl Composite {
     }
 }
 
-/// A texture that passes draw into and draws sample.
+/// A texture that passes draw into and draws sample, with the sampler
+/// they sample it with.
 struct Texture {
-    /// The texture, which `texture` and `sampler` bind.
-    _texture: SharedTexture,
-    texture: TextureId,
+    texture: GpuTexture,
     sampler: SamplerId,
 }
 
 impl Texture {
-    fn new(context: &mut Context, size: Size, format: TextureFormat) -> Result<Texture, GpuError> {
-        let owned = context.add_texture_with(|texture| {
-            texture.set_size(size);
-            texture.set_format(format);
-            texture.set_render_target();
-        });
-        let (texture, sampler) = context.bind_texture(&owned)?;
-        Ok(Texture { _texture: owned, texture, sampler })
+    fn new(gpu: &mut dyn Gpu, context: &mut Context, size: Size, format: TextureFormat) -> Result<Texture, GpuError> {
+        let usage = TextureUsage { sampled: true, render_target: true, copy_src: true };
+        let desc = TextureDesc { label: "render target", size, format, usage };
+        let bytes = size.width as usize * size.height as usize * format.bytes_per_texel().unwrap_or(4) as usize;
+        let texture = context.device().texture(gpu, &desc, Some(bytes))?;
+        Ok(Texture { texture, sampler: context.sampler(gpu, SamplerState::default())? })
+    }
+
+    fn id(&self) -> TextureId {
+        self.texture.id()
     }
 }
 
@@ -154,7 +155,7 @@ struct Target {
     color: Texture,
     /// The depth and stencil of the layers that don't draw with the frame's,
     /// from the first frame that composites one.
-    depth_stencil: Option<Attachment>,
+    depth_stencil: Option<GpuTexture>,
 }
 
 /// The textures of a frame with a layer that blends in the shader: the
@@ -168,8 +169,8 @@ struct FrameCopy {
 
 /// The quad that covers the frame.
 struct Quad {
-    vertices: BufferPtr,
-    indices: BufferPtr,
+    vertices: Buffer,
+    indices: Buffer,
     geometry: Option<Owned<GeometryId>>,
 }
 
@@ -187,17 +188,18 @@ pub(crate) struct LayerComposite {
     groups: Vec<(SimpleIdentity, Composite)>,
     /// Each group's `LayerCompositeUBO`, at an offset the GPU can bind, and
     /// then the copy's: one write a frame.
-    uniforms: Option<UniformBufferPtr>,
+    uniforms: Option<Buffer>,
     /// The bytes of `uniforms`, kept between frames.
     bytes: Vec<u8>,
     /// A projection the shader doesn't read, for the block that OpenGL's
     /// prelude declares, which WebGL2 rejects a draw without a buffer for.
-    projection: Option<UniformBufferPtr>,
+    projection: Option<Buffer>,
     /// The bindings of each slot of `uniforms`, and what they were made of:
-    /// the epoch of the frame's buffers, the uniforms' buffer, the textures
-    /// and the number of slots, the last of which is the copy's.
+    /// the epoch of the frame's buffers, the textures and the number of
+    /// slots, the last of which is the copy's. The composite drops them
+    /// when it replaces a buffer or texture they bind.
     bindings: Vec<Owned<BindingsId>>,
-    bindings_made: Option<(u64, BufferId, TextureId, Option<TextureId>, usize)>,
+    bindings_made: Option<(u64, TextureId, Option<TextureId>, usize)>,
 }
 
 impl LayerComposite {
@@ -206,8 +208,13 @@ impl LayerComposite {
     /// and drops it where there are none. With `overdraw`, the overdraw
     /// inspector's, every group blends as `normal`, and without `format` so
     /// does every group that blends in the shader.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the frame's GPU and context, the shaders, and the frame's size, format and composited groups"
+    )]
     pub(crate) fn update(
         &mut self,
+        gpu: &mut dyn Gpu,
         context: &mut Context,
         shaders: &ShaderRegistry,
         size: Size,
@@ -234,7 +241,7 @@ impl LayerComposite {
             self.groups.push((group, composite));
         }
         let frame_format = format.filter(|_| self.groups.iter().any(|(_, c)| c.reads_backdrop()));
-        if let Err(error) = self.make(context, size, frame_format) {
+        if let Err(error) = self.make(gpu, context, size, frame_format) {
             Log::warning(Event::Render, format!("Making the layer composite's textures failed: {error}"));
             self.groups.clear();
             self.drop_textures();
@@ -254,9 +261,12 @@ impl LayerComposite {
             };
             self.bytes[slot * stride..][..size].copy_from_slice(bytemuck::bytes_of(&ubo));
         }
-        context.device().write_uniform_buffer(&mut self.uniforms, &self.bytes);
+        if context.device().write_uniforms(gpu, &mut self.uniforms, &self.bytes, false) {
+            self.drop_bindings();
+        }
         if self.projection.is_none() {
-            context.device().write_uniform_buffer_pod(&mut self.projection, &ProjectionUBO::default());
+            let projection = ProjectionUBO::default();
+            context.device().write_uniforms(gpu, &mut self.projection, bytemuck::bytes_of(&projection), false);
         }
     }
 
@@ -264,6 +274,10 @@ impl LayerComposite {
     fn drop_textures(&mut self) {
         self.target = None;
         self.frame = None;
+        self.drop_bindings();
+    }
+
+    fn drop_bindings(&mut self) {
         self.bindings.clear();
         self.bindings_made = None;
     }
@@ -271,29 +285,35 @@ impl LayerComposite {
     /// Makes the target of `size`, unless it is made, with a depth and
     /// stencil of its own where a group draws with them, the frame copy of
     /// `frame_format` where there is one, and the quad.
-    fn make(&mut self, context: &mut Context, size: Size, frame_format: Option<TextureFormat>) -> Result<(), GpuError> {
+    fn make(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        context: &mut Context,
+        size: Size,
+        frame_format: Option<TextureFormat>,
+    ) -> Result<(), GpuError> {
         if self.target.as_ref().is_none_or(|target| target.size != size) {
             self.drop_textures();
-            let color = Texture::new(context, size, COLOR)?;
+            let color = Texture::new(gpu, context, size, COLOR)?;
             self.target = Some(Target { size, color, depth_stencil: None });
         }
         if let Some(target) = self.target.as_mut().filter(|target| target.depth_stencil.is_none())
             && self.groups.iter().any(|(_, composite)| !composite.frame_depth)
         {
-            target.depth_stencil = Some(Attachment::new(
-                &mut *context.gpu(),
-                context.released(),
-                "layer composite depth and stencil",
-                size,
-                DEPTH_STENCIL,
-            )?);
+            target.depth_stencil =
+                Some(context.device().attachment(gpu, "layer composite depth and stencil", size, DEPTH_STENCIL)?);
         }
         match frame_format {
-            None => self.frame = None,
+            None => {
+                if self.frame.take().is_some() {
+                    self.drop_bindings();
+                }
+            }
             Some(format) if self.frame.as_ref().is_none_or(|frame| frame.format != format) => {
                 self.frame = None;
-                let frame = Texture::new(context, size, format)?;
-                let backdrop = Texture::new(context, size, format)?;
+                self.drop_bindings();
+                let frame = Texture::new(gpu, context, size, format)?;
+                let backdrop = Texture::new(gpu, context, size, format)?;
                 self.frame = Some(FrameCopy { format, frame, backdrop });
             }
             Some(_) => {}
@@ -302,8 +322,8 @@ impl LayerComposite {
             let vertices: [[i16; 2]; 4] = [[0, 0], [1, 0], [0, 1], [1, 1]];
             let indices = RenderStaticData::quad_triangle_indices();
             self.quad = Some(Quad {
-                vertices: context.device().buffer(BufferUsage::Vertex, bytemuck::cast_slice(&vertices))?,
-                indices: context.device().buffer(BufferUsage::Index, bytemuck::cast_slice(&indices))?,
+                vertices: context.device().buffer(gpu, BufferUsage::Vertex, bytemuck::cast_slice(&vertices))?,
+                indices: context.device().buffer(gpu, BufferUsage::Index, bytemuck::cast_slice(&indices))?,
                 geometry: None,
             });
         }
@@ -314,7 +334,7 @@ impl LayerComposite {
     /// layer of the frame blends in the shader.
     #[must_use]
     pub(crate) fn frame_texture(&self) -> Option<TextureId> {
-        self.frame.as_ref().map(|frame| frame.frame.texture)
+        self.frame.as_ref().map(|frame| frame.frame.id())
     }
 
     /// The pass that copies the frame's texture into the backdrop before the
@@ -328,7 +348,7 @@ impl LayerComposite {
         composite.reads_backdrop().then_some(OpenPass {
             label: "layer composite backdrop",
             color: Some(ColorAttachment {
-                texture: frame.backdrop.texture,
+                texture: frame.backdrop.id(),
                 load: LoadOp::Clear(Color::new(0.0, 0.0, 0.0, 0.0)),
             }),
             depth_stencil: None,
@@ -371,7 +391,7 @@ impl LayerComposite {
         Some(OpenPass {
             label: "layer composite",
             color: Some(ColorAttachment {
-                texture: target.color.texture,
+                texture: target.color.id(),
                 load: LoadOp::Clear(Color::new(0.0, 0.0, 0.0, 0.0)),
             }),
             depth_stencil,
@@ -436,13 +456,7 @@ impl LayerComposite {
         let layer = &target.color;
         let frame = self.frame.as_ref();
         let slots = self.groups.len() + 1;
-        let made = (
-            context.global_uniform_buffers().epoch(),
-            uniforms.id(),
-            layer.texture,
-            frame.map(|frame| frame.frame.texture),
-            slots,
-        );
+        let made = (context.global_uniform_buffers().epoch(), layer.id(), frame.map(|frame| frame.frame.id()), slots);
         if self.bindings_made != Some(made) {
             self.bindings.clear();
             self.bindings_made = None;
@@ -457,31 +471,33 @@ impl LayerComposite {
                     Some(frame) => (layer, &frame.backdrop),
                     None => (layer, layer),
                 };
-                let mut entries: Vec<BindGroupEntry> = (0..MAX_UBO_COUNT_PER_SHADER)
-                    .filter_map(|id| {
-                        let (buffer, offset, size) = match id {
-                            ID_LAYER_COMPOSITE_UBO => (uniforms, (slot * stride) as u64, size as u64),
-                            ID_PROJECTION_UBO => (projection, 0, projection.size() as u64),
-                            _ => global.get(id).map(|buffer| (buffer, 0, buffer.size() as u64))?,
-                        };
-                        Some(BindGroupEntry::Buffer { id: id as u32, buffer: buffer.id(), offset, size })
-                    })
-                    .collect();
+                let mut entries = Entries::new();
+                for id in 0..MAX_UBO_COUNT_PER_SHADER {
+                    let (buffer, offset, size) = match id {
+                        ID_LAYER_COMPOSITE_UBO => (uniforms, (slot * stride) as u64, size as u64),
+                        ID_PROJECTION_UBO => (projection, 0, projection.size() as u64),
+                        _ => match global.get(id) {
+                            Some(buffer) => (buffer, 0, buffer.size() as u64),
+                            None => continue,
+                        },
+                    };
+                    entries.push(BindGroupEntry::Buffer { id: id as u32, buffer: buffer.id(), offset, size });
+                }
                 for (id, texture) in
                     [(ID_LAYER_COMPOSITE_IMAGE_TEXTURE, image), (ID_LAYER_COMPOSITE_BACKDROP_TEXTURE, backdrop)]
                 {
                     entries.push(BindGroupEntry::Texture {
                         id: id as u32,
-                        texture: texture.texture,
+                        texture: texture.id(),
                         sampler: texture.sampler,
                     });
                 }
                 let bindings = gpu.create_bindings(&BindingsDesc {
                     label: "layer composite",
                     shader: shader_id,
-                    entries: &entries,
+                    entries: entries.as_slice(),
                 })?;
-                self.bindings.push(Owned::new(bindings, context.released()));
+                self.bindings.push(context.own(bindings, Vec::new()));
             }
             self.bindings_made = Some(made);
         }
@@ -498,7 +514,7 @@ impl LayerComposite {
                 vertex_buffers: &[(quad.vertices.id(), 0)],
                 index_buffer: quad.indices.id(),
             })?;
-            quad.geometry = Some(Owned::new(geometry, context.released()));
+            quad.geometry = Some(context.own(geometry, Vec::new()));
             geometry
         };
 

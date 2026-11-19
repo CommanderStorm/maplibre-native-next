@@ -23,7 +23,7 @@ use std::mem::offset_of;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use mln_gfx::shader_group::{ShaderGroupPtr, StringIDSetsPair};
+use mln_gfx::gpu::Gpu;
 use mln_gfx::shaders::fill_extrusion_layer_ubo::{
     FillExtrusionDrawableUBO, FillExtrusionPropsUBO, FillExtrusionTilePropsUBO,
 };
@@ -36,7 +36,6 @@ use mln_gfx::shaders::shader_defines::{
     ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE, ID_FILL_EXTRUSION_PROPS_UBO, ID_FILL_EXTRUSION_TILE_PROPS_UBO,
     ID_PROJECTION_UBO,
 };
-use mln_gfx::shaders::shader_program::ShaderProgramPtr;
 use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DrawMode};
 use mln_map_types::TransformState;
 use mln_style::layer_type::LayerStyle;
@@ -64,6 +63,8 @@ use crate::frame_projection::zero_to_one_clip_z;
 use crate::gfx::atlas_binding::AtlasBinding;
 use crate::gfx::context::Context;
 use crate::gfx::indexes::{Indexes, SharedIndexes};
+use crate::gfx::shader_group::{ShaderGroupPtr, StringIDSetsPair};
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::gfx::texture2d::Texture2D;
 use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::gfx::vertices::SharedVertices;
@@ -117,6 +118,12 @@ impl TileObjects for ExtrusionTile {
 
     fn objects(&mut self, index: usize) -> Option<DrawObjectsMut<'_>> {
         Some(DrawObjectsMut { objects: &mut self.draws.get_mut(index)?.objects, atlases: self.atlases.as_ref() })
+    }
+
+    fn drop_bindings(&mut self) {
+        for draw in &mut self.draws {
+            draw.objects.drop_bindings();
+        }
     }
 }
 
@@ -369,6 +376,7 @@ impl TypedLayer for RenderFillExtrusionLayer {
     /// buffers they read.
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         paint_parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         render_tiles: &[FrameTile<'_, FillExtrusion>],
@@ -485,7 +493,7 @@ impl TypedLayer for RenderFillExtrusionLayer {
         // The draws that composite draw opaque: the composite has the
         // layer's opacity.
         let opacity = if composite.is_some() { 1.0 } else { opacity };
-        self.draw_list.finish(frame, paint_parameters.context, |writer| {
+        self.drawing.finish(&mut self.draw_list, gpu, paint_parameters.context, |writer| {
             Self::write_uniforms(layer, writer, light, state, opacity);
         });
     }

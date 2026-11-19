@@ -1,0 +1,172 @@
+//! What the renderer makes its buffers and textures with on its backend's
+//! `Gpu`, with the rendering stats that count them and the queue that they
+//! go to when they drop.
+
+use std::rc::Rc;
+
+use mln_gfx::gpu::{BufferDesc, BufferUsage, Gpu, GpuError, TextureDesc, TextureFormat, TextureId, TextureUsage};
+use mln_gfx::rendering_stats::RenderingStats;
+use mln_util::logging::{Event, Log};
+use mln_util::size::Size;
+
+use crate::gfx::buffer::{self, Buffer};
+use crate::gfx::release::{Release, ReleaseQueue};
+
+/// A texture of the context's `Gpu`, which goes to the context's release
+/// queue when it drops, as a [`Buffer`] does.
+pub(crate) struct GpuTexture {
+    id: TextureId,
+    /// The bytes the rendering stats count it with, `None` where they don't.
+    counted: Option<usize>,
+    queue: Rc<ReleaseQueue>,
+}
+
+impl GpuTexture {
+    #[must_use]
+    pub(crate) fn id(&self) -> TextureId {
+        self.id
+    }
+}
+
+impl Drop for GpuTexture {
+    fn drop(&mut self) {
+        self.queue.push(match self.counted {
+            Some(bytes) => Release::Texture(self.id, bytes),
+            None => Release::Resource(self.id.into()),
+        });
+    }
+}
+
+/// A texture of the context's `Gpu` that draws share: a
+/// [`Texture2D`](crate::gfx::texture2d::Texture2D)'s, which bindings made
+/// of it hold after the texture replaces it.
+pub(crate) type SharedGpuTexture = Rc<GpuTexture>;
+
+/// What the renderer makes its buffers and textures with: the rendering
+/// stats that count them, and the queue that they go to when they drop.
+#[derive(Default)]
+pub(crate) struct Device {
+    pub(crate) stats: RenderingStats,
+    pub(crate) queue: Rc<ReleaseQueue>,
+}
+
+impl Device {
+    /// A buffer of `gpu` of `usage` holding `data`.
+    pub(crate) fn buffer(&mut self, gpu: &mut dyn Gpu, usage: BufferUsage, data: &[u8]) -> Result<Buffer, GpuError> {
+        let buffer = self.allocate(gpu, usage, data.len())?;
+        write_bytes(gpu, &buffer, data)?;
+        buffer::count_write(&mut self.stats, usage, data.len(), false);
+        Ok(buffer)
+    }
+
+    /// A buffer of `usage` holding the bytes of `data`, written from the JS
+    /// array they're in.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn buffer_from_host(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        usage: BufferUsage,
+        data: &mln_util::host_bytes::HostBytes,
+    ) -> Result<Buffer, GpuError> {
+        let buffer = self.allocate(gpu, usage, data.len())?;
+        if !data.is_empty() {
+            gpu.write_buffer_from_host(buffer.id(), 0, data)?;
+        }
+        Ok(buffer)
+    }
+
+    /// A buffer of `usage` that writes of up to `size` bytes fit in, which
+    /// the stats count until the context destroys it.
+    fn allocate(&mut self, gpu: &mut dyn Gpu, usage: BufferUsage, size: usize) -> Result<Buffer, GpuError> {
+        let allocated = buffer::allocated_size(usage, size);
+        let id = gpu.create_buffer(&BufferDesc { label: buffer::label(usage), usage, size: allocated as u64 })?;
+        buffer::count(&mut self.stats, usage, allocated, 1);
+        self.stats.total_buffers += 1;
+        self.stats.total_buffer_objs += 1;
+        Ok(Buffer::new(id, usage, size, &self.queue))
+    }
+
+    /// Writes `data` at the start of `buffer`, and counts the write. Fails
+    /// if `data` is longer than the buffer.
+    pub(crate) fn write(&mut self, gpu: &mut dyn Gpu, buffer: &Buffer, data: &[u8]) -> Result<(), GpuError> {
+        write_bytes(gpu, buffer, data)?;
+        buffer::count_write(&mut self.stats, buffer.usage(), data.len(), true);
+        Ok(())
+    }
+
+    /// Writes `data` to the uniform or, with `storage`, storage buffer in
+    /// `slot`, first making one if the slot has none or `data` doesn't fit
+    /// in it. Returns whether it made one in place of one the slot had,
+    /// whose bindings its owner then drops.
+    pub(crate) fn write_uniforms(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        slot: &mut Option<Buffer>,
+        data: &[u8],
+        storage: bool,
+    ) -> bool {
+        let usage = if storage { BufferUsage::Storage } else { BufferUsage::Uniform };
+        if let Some(buffer) = slot.as_ref().filter(|buffer| buffer.usage() == usage && buffer.size() >= data.len()) {
+            if let Err(error) = self.write(gpu, buffer, data) {
+                Log::error(Event::Render, format!("Writing a buffer failed: {error}"));
+            }
+            return false;
+        }
+        let replaced = slot.is_some();
+        *slot = self
+            .buffer(gpu, usage, data)
+            .inspect_err(|error| Log::error(Event::Render, format!("Making a buffer failed: {error}")))
+            .ok();
+        replaced
+    }
+
+    /// A texture of `gpu` of `desc`, which the stats count with `counted`
+    /// bytes, or not at all with `None`, until the context destroys it.
+    pub(crate) fn texture(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        desc: &TextureDesc<'_>,
+        counted: Option<usize>,
+    ) -> Result<GpuTexture, GpuError> {
+        let id = gpu.create_texture(desc)?;
+        if let Some(bytes) = counted {
+            self.stats.num_created_textures += 1;
+            self.stats.num_active_textures += 1;
+            self.stats.mem_textures += bytes as i32;
+        }
+        Ok(GpuTexture { id, counted, queue: Rc::clone(&self.queue) })
+    }
+
+    /// A texture of `size` and `format` that passes draw into and nothing
+    /// samples, such as a target's depth and stencil. The stats don't count
+    /// it.
+    pub(crate) fn attachment(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        label: &str,
+        size: Size,
+        format: TextureFormat,
+    ) -> Result<GpuTexture, GpuError> {
+        let usage = TextureUsage { render_target: true, ..TextureUsage::default() };
+        self.texture(gpu, &TextureDesc { label, size, format, usage }, None)
+    }
+}
+
+/// Writes `data` at the start of `buffer` through `gpu`. Fails if `data` is
+/// longer than the buffer.
+fn write_bytes(gpu: &mut dyn Gpu, buffer: &Buffer, data: &[u8]) -> Result<(), GpuError> {
+    if data.len() > buffer.size() {
+        return Err(GpuError::Invalid(format!("a write of {} bytes to a buffer of {}", data.len(), buffer.size())));
+    }
+    if data.is_empty() {
+        return Ok(());
+    }
+    // `Gpu::write_buffer` takes whole 4-byte words.
+    if data.len().is_multiple_of(4) {
+        gpu.write_buffer(buffer.id(), 0, data)
+    } else {
+        let mut padded = data.to_vec();
+        padded.resize(data.len().next_multiple_of(4), 0);
+        gpu.write_buffer(buffer.id(), 0, &padded)
+    }
+}

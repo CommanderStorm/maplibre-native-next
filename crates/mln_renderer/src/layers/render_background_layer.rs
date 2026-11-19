@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use mln_gfx::gpu::Gpu;
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shaders::background_layer_ubo::{
     BackgroundDrawableUBO, BackgroundDrawableUnionUBO, BackgroundPatternDrawableUBO, BackgroundPatternPropsUBO,
@@ -14,7 +15,7 @@ use mln_gfx::shaders::shader_defines::{
 };
 use mln_gfx::texture2d::SamplerState;
 use mln_gfx::types::{TextureFilterType, TextureWrapType};
-use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DrawMode, ShaderProgramPtr};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DrawMode};
 use mln_style::layer_type::LayerStyle;
 use mln_style::layers::Background;
 use mln_style_types::TranslateAnchorType;
@@ -28,6 +29,7 @@ use super::cast_matrix;
 use crate::bucket::NoBucket;
 use crate::draw::{DrawGeometry, DrawObjects, Textures, raw_vertices};
 use crate::gfx::indexes::DrawIndexes;
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::globe_tile_mesh::raw_globe_tile_mesh;
 use crate::layer_drawing::{DrawDepth, DrawList, FrameDraw, KeptDraw, LayerDrawing, TileDraws};
 use crate::layer_type::{EvaluatedLayer, LayerType};
@@ -185,7 +187,12 @@ impl TypedLayer for RenderBackgroundLayer {
     /// Makes the frame's draws of the layer, one of each tile that covers
     /// the view, which it builds for a tile it keeps none of, and writes the
     /// layer's buffers they read.
-    fn update_draws_without_source(&mut self, paint_parameters: &mut PaintParameters<'_>, atlases: &Atlases) {
+    fn update_draws_without_source(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        paint_parameters: &mut PaintParameters<'_>,
+        atlases: &Atlases,
+    ) {
         let RenderBackgroundLayer {
             base,
             values,
@@ -259,7 +266,7 @@ impl TypedLayer for RenderBackgroundLayer {
             draw_list.push(draw, Self::uniforms(tile_id, has_pattern, paint_parameters));
         }
 
-        draw_list.finish(drawing.frame_mut(), paint_parameters.context, |writer| {
+        drawing.finish(draw_list, gpu, paint_parameters.context, |writer| {
             let opacity = *evaluated.background_opacity.uniform();
             if let Some((from, to)) = pattern_positions {
                 let crossfade = &layer.crossfade;

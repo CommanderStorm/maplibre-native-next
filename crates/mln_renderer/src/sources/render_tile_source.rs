@@ -12,7 +12,6 @@ use glam::Vec2;
 use mln_gfx::gpu::Gpu;
 use mln_gfx::polyline_generator::{PolylineGenerator, PolylineGeneratorOptions};
 use mln_gfx::projection_variant::ProjectionVariant;
-use mln_gfx::shader_group::StringIDSetsPair;
 use mln_gfx::shaders::layer_ubo::ProjectionUBO;
 use mln_gfx::shaders::line_layer_ubo::{LineDrawableUBO, LineDrawableUnionUBO, LineEvaluatedPropsUBO};
 use mln_gfx::shaders::segment::SegmentBase;
@@ -22,7 +21,6 @@ use mln_gfx::shaders::shader_defines::{
     ID_LINE_OPACITY_VERTEX_ATTRIBUTE, ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, ID_LINE_WIDTH_VERTEX_ATTRIBUTE,
     ID_PROJECTION_UBO,
 };
-use mln_gfx::shaders::shader_program::ShaderProgramPtr;
 use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode};
 use mln_map_types::MapDebugOptions;
 use mln_style::Source;
@@ -42,6 +40,8 @@ use crate::buckets::line_bucket::{LineBucket, LineLayoutVertex};
 use crate::draw::{DrawGeometry, DrawObjects, Textures};
 use crate::gfx::context::Context;
 use crate::gfx::indexes::DrawIndexes;
+use crate::gfx::shader_group::StringIDSetsPair;
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::layer_drawing::{DrawDepth, DrawList, DrawObjectsMut, FrameDraw, KeptDraw, LayerDraws};
 use crate::layer_type::ErasedEvaluatedLayer;
@@ -201,8 +201,8 @@ impl DebugLayer {
     }
 
     /// Uploads the GPU objects of the frame's draws.
-    pub(crate) fn upload(&mut self, context: &mut Context) {
-        self.frame.upload(&mut self.draws[..], Self::objects, context);
+    pub(crate) fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
+        self.frame.upload(gpu, &mut self.draws[..], Self::objects, context);
     }
 
     /// Draws the frame's draws of the pass into the open pass of `gpu`, the
@@ -230,7 +230,7 @@ impl DebugLayer {
 
     /// Makes the frame's draws of the overlay, and writes the buffers they
     /// read.
-    pub(crate) fn update_draws(&mut self, parameters: &mut PaintParameters<'_>) {
+    pub(crate) fn update_draws(&mut self, gpu: &mut dyn Gpu, parameters: &mut PaintParameters<'_>) {
         let zoom = parameters.state.get_zoom();
         for (index, draw) in self.draws.iter().enumerate() {
             let tile_id = draw.tile.to_unwrapped();
@@ -262,11 +262,16 @@ impl DebugLayer {
         }
 
         let properties = &self.properties;
-        self.draw_list.finish(&mut self.frame, parameters.context, |writer| {
+        let replaced = self.draw_list.finish(&mut self.frame, gpu, parameters.context, |writer| {
             writer.uniform(ID_LINE_EVALUATED_PROPS_UBO, properties);
             writer.storage(ID_LINE_DRAWABLE_UBO, |uniforms| uniforms.draw_ubo);
             writer.storage(ID_PROJECTION_UBO, |uniforms| uniforms.projection);
         });
+        if replaced {
+            for draw in &mut self.draws {
+                draw.draw.objects.drop_bindings();
+            }
+        }
     }
 }
 

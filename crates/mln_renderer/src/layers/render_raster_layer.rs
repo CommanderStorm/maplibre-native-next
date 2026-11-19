@@ -18,7 +18,7 @@ use mln_gfx::shaders::shader_defines::{
 };
 use mln_gfx::texture2d::SamplerState;
 use mln_gfx::types::{TextureFilterType, TextureWrapType};
-use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode, ShaderProgramPtr};
+use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode};
 use mln_style::layer_type::LayerStyle;
 use mln_style::layers::Raster;
 use mln_style_types::{RasterResamplingType, ResamplingType, TranslateAnchorType};
@@ -33,6 +33,7 @@ use crate::buckets::raster_bucket::{RasterBucket, RasterLayoutVertex};
 use crate::draw::{DrawGeometry, DrawObjects, Textures};
 use crate::gfx::context::Context;
 use crate::gfx::indexes::{DrawIndexes, Indexes, SharedIndexes};
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::gfx::store::SharedTexture;
 use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::gfx::vertices::SharedVertices;
@@ -126,9 +127,9 @@ impl LayerDrawing for RasterDrawing {
         }
     }
 
-    fn upload(&mut self, context: &mut Context) {
+    fn upload(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
         if let Some(frame) = &self.frame {
-            frame.upload(&mut self.objects, Self::objects, context);
+            frame.upload(gpu, &mut self.objects, Self::objects, context);
         }
     }
 
@@ -252,7 +253,12 @@ impl RenderRasterLayer {
     /// The draws of an image source's layer with `raster_shader`: one for
     /// each tile the image is drawn in, which share the image's geometry
     /// and texture, built again when the image or its geometry changes.
-    fn update_image(&mut self, image_data: ImageSourceRenderData<'_>, paint_parameters: &mut PaintParameters<'_>) {
+    fn update_image(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        image_data: ImageSourceRenderData<'_>,
+        paint_parameters: &mut PaintParameters<'_>,
+    ) {
         let sampler = self.sampler_state();
         let RenderRasterLayer { base, drawing, draw_list, raster_shader, textures, .. } = self;
         let Some(raster_shader) = shader(raster_shader, base.projection_variant, paint_parameters) else {
@@ -288,7 +294,7 @@ impl RenderRasterLayer {
             draw_list.push_part(FrameDraw::new(None, draw.id), RasterPart::Image(index), uniforms);
         }
 
-        self.finish_frame_draws(paint_parameters.context);
+        self.finish_frame_draws(gpu, paint_parameters.context);
     }
 
     /// The entries in the layer's storage buffers of a draw of `tile_id`.
@@ -308,14 +314,14 @@ impl RenderRasterLayer {
 
     /// Makes the draws of the draw list the layer's draws of the frame, and
     /// writes the layer's buffers of them.
-    fn finish_frame_draws(&mut self, context: &mut Context) {
+    fn finish_frame_draws(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
         let composite = self.composite();
         let Some(frame) = self.drawing.frame.as_mut() else {
             return;
         };
         frame.set_composite(composite);
         let evaluated = &self.values.evaluated.paint;
-        self.draw_list.finish(frame, context, |writer| {
+        let replaced = self.draw_list.finish(frame, gpu, context, |writer| {
             let props = RasterEvaluatedPropsUBO {
                 spin_weights: spin_weights(*evaluated.raster_hue_rotate.uniform()),
                 tl_parent: [0.0, 0.0],
@@ -334,6 +340,12 @@ impl RenderRasterLayer {
             writer.storage(ID_RASTER_DRAWABLE_UBO, |(draw_ubo, _)| *draw_ubo);
             writer.storage(ID_PROJECTION_UBO, |(_, projection)| *projection);
         });
+        if replaced {
+            let objects = &mut self.drawing.objects;
+            for draw in objects.tiles.values_mut().map(|tile| &mut tile.draw).chain(&mut objects.images) {
+                draw.objects.drop_bindings();
+            }
+        }
     }
 }
 
@@ -435,6 +447,7 @@ impl TypedLayer for RenderRasterLayer {
     /// changed since, and writes the layer's buffers they read.
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         paint_parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         render_tiles: &[FrameTile<'_, Raster>],
@@ -532,16 +545,17 @@ impl TypedLayer for RenderRasterLayer {
             }
         }
 
-        self.finish_frame_draws(paint_parameters.context);
+        self.finish_frame_draws(gpu, paint_parameters.context);
     }
 
     fn update_image_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         paint_parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         image: ImageSourceRenderData<'_>,
     ) {
-        self.update_image(image, paint_parameters);
+        self.update_image(gpu, image, paint_parameters);
     }
 
     fn release(&mut self) {

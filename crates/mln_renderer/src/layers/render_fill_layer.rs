@@ -1,8 +1,8 @@
 use std::mem::offset_of;
 use std::sync::Arc;
 
+use mln_gfx::gpu::Gpu;
 use mln_gfx::projection_variant::ProjectionVariant;
-use mln_gfx::shader_group::{ShaderGroupPtr, StringIDSetsPair};
 use mln_gfx::shaders::fill_layer_ubo::{
     FillDrawableUBO, FillDrawableUnionUBO, FillEvaluatedPropsUBO, FillOutlineDrawableUBO, FillPatternDrawableUBO,
     FillPatternTilePropsUBO, FillTilePropsUnionUBO,
@@ -14,7 +14,6 @@ use mln_gfx::shaders::shader_defines::{
     ID_FILL_OUTLINE_END_ATTRIBUTE, ID_FILL_OUTLINE_POS_ATTRIBUTE, ID_FILL_POS_VERTEX_ATTRIBUTE, ID_FILL_TILE_PROPS_UBO,
     ID_PROJECTION_UBO,
 };
-use mln_gfx::shaders::shader_program::ShaderProgramPtr;
 use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DepthMaskType, DrawMode};
 use mln_map_types::TransformState;
 use mln_style::PropertyEvaluationParameters;
@@ -36,6 +35,8 @@ use crate::draw::{DrawGeometry, DrawObjects, copy_shared_attributes};
 use crate::gfx::atlas_binding::AtlasBinding;
 use crate::gfx::context::Context;
 use crate::gfx::indexes::{DrawIndexes, Indexes, SharedIndexes};
+use crate::gfx::shader_group::{ShaderGroupPtr, StringIDSetsPair};
+use crate::gfx::shader_program::ShaderProgramPtr;
 use crate::gfx::texture2d::Texture2D;
 use crate::gfx::vertex_attribute::{SharedAttribute, VertexAttributeArray};
 use crate::gfx::vertices::SharedVertices;
@@ -158,6 +159,12 @@ impl TileObjects for FillTile {
             FillPart::Outline => &mut self.outline,
         };
         Some(DrawObjectsMut { objects: &mut draw.as_mut()?.objects, atlases: self.atlases.as_ref() })
+    }
+
+    fn drop_bindings(&mut self) {
+        for draw in self.fill.iter_mut().chain(&mut self.outline) {
+            draw.objects.drop_bindings();
+        }
     }
 }
 
@@ -622,6 +629,7 @@ impl TypedLayer for RenderFillLayer {
     /// buffers they read.
     fn update_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         paint_parameters: &mut PaintParameters<'_>,
         _atlases: &Atlases,
         render_tiles: &[FrameTile<'_, Fill>],
@@ -754,7 +762,9 @@ impl TypedLayer for RenderFillLayer {
             *layer.paint.fill_layer_blend.uniform(),
         ));
         frame.set_stencil_tiles(render_tiles.iter().map(|tile| tile.tile.id));
-        self.draw_list.finish(frame, paint_parameters.context, |writer| Self::write_uniforms(layer, writer));
+        self.drawing.finish(&mut self.draw_list, gpu, paint_parameters.context, |writer| {
+            Self::write_uniforms(layer, writer);
+        });
     }
 }
 

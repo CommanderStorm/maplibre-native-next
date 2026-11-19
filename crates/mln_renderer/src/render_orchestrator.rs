@@ -33,6 +33,7 @@ use crate::globe_depth_pass::GlobeDepthPass;
 use crate::image_store::ImageStore;
 use crate::layer_drawing::{ChangedBuckets, DrawGroup, DrawOrder, SingleDraw};
 use crate::layer_type::ErasedEvaluatedLayer;
+use crate::layers::render_custom_layer::EndedHosts;
 use crate::line_atlas::LineAtlas;
 use crate::paint_parameters::PaintParameters;
 use crate::pattern_atlas::PatternAtlas;
@@ -176,6 +177,9 @@ pub(crate) struct RenderOrchestrator {
     /// Whether the next update makes the render layers again, for new
     /// shaders.
     remake_render_layers: bool,
+    /// The hosts of the custom layers that left since the renderer last
+    /// [took them](Self::take_ended_hosts).
+    ended_hosts: EndedHosts,
     filtered_layers_for_source: Vec<Arc<dyn ErasedEvaluatedLayer>>,
 
     thread_pool: TaskGroup,
@@ -239,6 +243,7 @@ impl RenderOrchestrator {
             longitude: 0.0,
             tile_cache_enabled: true,
             remake_render_layers: false,
+            ended_hosts: Vec::new(),
             filtered_layers_for_source: Vec::new(),
             _wait_for_thread_pool: WaitOnDrop(thread_pool.clone()),
             thread_pool,
@@ -655,6 +660,7 @@ impl RenderOrchestrator {
                     continue;
                 };
                 new_layer.transition(&clock.added_layer_transition);
+                render_layer.leave(&mut self.ended_hosts);
                 *render_layer = new_layer;
             }
         }
@@ -665,7 +671,9 @@ impl RenderOrchestrator {
 
             // Remove render layers for removed layers.
             for (id, _) in layer_changes.iter().filter(|(_, change)| change.removes()) {
-                by_id.remove(&**id);
+                if let Some(mut removed) = by_id.remove(&**id) {
+                    removed.leave(&mut self.ended_hosts);
+                }
             }
 
             // Create render layers for newly added layers.
@@ -680,6 +688,9 @@ impl RenderOrchestrator {
 
             // A layer type without a render layer is skipped.
             self.layers = layers.iter().filter_map(|layer| by_id.remove(layer.get_id())).collect();
+            for mut left in by_id.into_values() {
+                left.leave(&mut self.ended_hosts);
+            }
             self.layer_indexes =
                 self.layers.iter().enumerate().map(|(index, layer)| (layer.id().to_owned(), index)).collect();
         }
@@ -689,7 +700,7 @@ impl RenderOrchestrator {
             if let (Some(&index), Some(layer)) = (self.layer_indexes.get(&**id), layers.get(id)) {
                 let new_layer = layer.style();
                 let render_layer = &mut self.layers[index];
-                render_layer.restyle(&clock.transition, new_layer);
+                render_layer.restyle(&clock.transition, new_layer, &mut self.ended_hosts);
             }
         }
 
@@ -1084,7 +1095,7 @@ impl RenderOrchestrator {
         self.debug_layers.clear();
         self.render_sources.clear();
         self.tile_store.clear();
-        self.layers.clear();
+        self.leave_layers();
         self.layer_indexes.clear();
 
         self.cross_tile_symbol_index.reset();
@@ -1099,10 +1110,11 @@ impl RenderOrchestrator {
         self.tile_store.glyphs().evict(&VecSet::new());
     }
 
-    /// Drops what holds the renderer's shaders: the render layers, the sky
-    /// and globe depth passes, and the debug overlays. The next update
-    /// makes them again, from the shaders the renderer has then. The
-    /// sources keep their tiles, and the tiles their layout.
+    /// Drops what holds the renderer's shaders: the sky and globe depth
+    /// passes and the debug overlays now, and the render layers in the next
+    /// update, which makes them again. The draws made after that use the
+    /// shaders the renderer has then. The sources keep their tiles, and the
+    /// tiles their layout.
     pub(crate) fn release_shaders(&mut self) {
         self.remake_render_layers = true;
         self.debug_layers.clear();
@@ -1112,10 +1124,10 @@ impl RenderOrchestrator {
 
     /// Makes the GPU textures of the tiles' atlas and of the layers'
     /// atlases, and uploads what they queued.
-    pub(crate) fn upload_atlases(&mut self, context: &mut Context) {
-        self.tile_store.atlas().upload(context);
-        self.atlases.line.upload(context);
-        self.atlases.pattern.upload(context);
+    pub(crate) fn upload_atlases(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
+        self.tile_store.atlas().upload(gpu, context);
+        self.atlases.line.upload(gpu, context);
+        self.atlases.pattern.upload(gpu, context);
     }
 
     /// Takes in what arrived for the tiles, and starts the jobs that it
@@ -1172,22 +1184,22 @@ impl RenderOrchestrator {
     /// groups in drawing order, the globe's depth, the sky and the
     /// atmosphere, what draws into the layers' render targets, and the debug
     /// overlays.
-    pub(crate) fn upload_draws(&mut self, context: &mut Context) {
+    pub(crate) fn upload_draws(&mut self, gpu: &mut dyn Gpu, context: &mut Context) {
         for layer in &mut self.layers {
-            layer.upload(context);
+            layer.upload(gpu, context);
         }
-        self.globe_depth_pass.upload(context);
+        self.globe_depth_pass.upload(gpu, context);
         if let Some(sky) = self.sky_pass.sky() {
-            sky.upload(context);
+            sky.upload(gpu, context);
         }
         if let Some(atmosphere) = self.sky_pass.atmosphere() {
-            atmosphere.upload(context);
+            atmosphere.upload(gpu, context);
         }
         for layer in &mut self.layers {
-            layer.upload_render_targets(context);
+            layer.upload_render_targets(gpu, context);
         }
         for debug in self.debug_layers.values_mut() {
-            debug.upload(context);
+            debug.upload(gpu, context);
         }
     }
 
@@ -1226,20 +1238,33 @@ impl RenderOrchestrator {
 
     /// Updates the debug overlays' draws from the sources' tiles, and makes
     /// their draws of the frame.
-    pub(crate) fn update_debug_layers(&mut self, parameters: &mut PaintParameters<'_>) {
+    pub(crate) fn update_debug_layers(&mut self, gpu: &mut dyn Gpu, parameters: &mut PaintParameters<'_>) {
         for source in self.render_sources.values() {
             if source.is_enabled() {
                 source.update_debug_draws(&mut self.debug_layers, parameters);
             }
         }
         for debug in self.debug_layers.values_mut() {
-            debug.update_draws(parameters);
+            debug.update_draws(gpu, parameters);
         }
     }
 
     /// The debug overlays, in `DebugType` order.
     pub(crate) fn debug_layers(&mut self) -> impl Iterator<Item = &mut DebugLayer> {
         self.debug_layers.values_mut()
+    }
+
+    /// Makes every render layer leave, and drops them.
+    pub(crate) fn leave_layers(&mut self) {
+        for mut layer in self.layers.drain(..) {
+            layer.leave(&mut self.ended_hosts);
+        }
+    }
+
+    /// The hosts of the custom layers that left since the last call, which
+    /// drew and hear that the renderer stopped.
+    pub(crate) fn take_ended_hosts(&mut self) -> EndedHosts {
+        std::mem::take(&mut self.ended_hosts)
     }
 
     /// Visits every render layer, in no order.
@@ -1253,6 +1278,7 @@ impl RenderOrchestrator {
     /// globe depth passes.
     pub(crate) fn update_layer_draws(
         &mut self,
+        gpu: &mut dyn Gpu,
         update_parameters: &UpdateParameters,
         paint_parameters: &mut PaintParameters<'_>,
         frame: &Frame,
@@ -1270,15 +1296,25 @@ impl RenderOrchestrator {
                     LayerSource::Tiles(FrameSourceTiles::new(source.render_tiles(), source_contents), &self.found_tiles)
                 }
             });
-            render_layer.update_draws(paint_parameters, &self.atlases, layer_source);
+            render_layer.update_draws(gpu, paint_parameters, &self.atlases, layer_source);
             needs_globe_depth = needs_globe_depth || render_layer.needs_globe_depth();
         }
         let (static_data, state) = (paint_parameters.static_data, paint_parameters.state);
         let shaders = &static_data.shaders;
         let (renderable_size, pixel_ratio) = (paint_parameters.renderable_size, paint_parameters.pixel_ratio);
         let context = &mut *paint_parameters.context;
-        self.sky_pass.update(shaders, context, state, renderable_size, pixel_ratio, frame.sky.as_ref(), &frame.light);
+        self.sky_pass.update(
+            gpu,
+            shaders,
+            context,
+            state,
+            renderable_size,
+            pixel_ratio,
+            frame.sky.as_ref(),
+            &frame.light,
+        );
         self.globe_depth_pass.update(
+            gpu,
             shaders,
             context,
             state,
@@ -1622,6 +1658,11 @@ impl Drop for WaitOnDrop {
 
 impl Drop for RenderOrchestrator {
     fn drop(&mut self) {
+        // Hosts that left and that the renderer didn't take, as when it
+        // goes without its tear-down, lose their graphics objects.
+        for host in std::mem::take(&mut self.ended_hosts) {
+            host.context_lost();
+        }
         self.tile_store.log_stats();
         // The render sources and their tiles go before the wait, since
         // their data drops on the thread pool.

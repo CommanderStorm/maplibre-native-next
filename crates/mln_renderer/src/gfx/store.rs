@@ -1,14 +1,15 @@
 //! The context's stores of what draws share on the GPU: textures, indexes
 //! and vertices. Each entry is held through [`Shared`] handles, which the
-//! entry's owner and every draw that binds it clone: the entry stays while
-//! a handle to it does, so a draw never names one that is gone. When the
-//! last handle drops, its key goes to the renderer's queue of released
-//! entries, and the context removes the entry the next time it destroys
-//! what the renderer released.
+//! entry's owner and every draw, bindings or geometry that reads it clone:
+//! the entry stays while a handle to it does, so nothing names one that is
+//! gone. When the last handle drops, its key goes to the renderer's release
+//! queue, and the context removes the entry the next time it destroys what
+//! the renderer released.
 
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
+
+use crate::gfx::release::{Release, ReleaseQueue};
 
 /// Where an entry is in its store: its slot, and which of the entries the
 /// slot held in turn it is.
@@ -65,31 +66,6 @@ pub(crate) enum StoreKey {
     Vertices(VerticesKey),
 }
 
-/// The keys of the store entries whose last handle dropped, which the
-/// context removes.
-#[derive(Default)]
-pub(crate) struct ReleasedEntries(Cell<Vec<StoreKey>>);
-
-impl ReleasedEntries {
-    fn push(&self, key: StoreKey) {
-        let mut keys = self.0.take();
-        keys.push(key);
-        self.0.set(keys);
-    }
-
-    /// Takes the keys released so far, giving each to `remove`, which may
-    /// release more, until none are left.
-    pub(crate) fn drain(&self, mut remove: impl FnMut(StoreKey)) {
-        loop {
-            let keys = self.0.take();
-            if keys.is_empty() {
-                return;
-            }
-            keys.into_iter().for_each(&mut remove);
-        }
-    }
-}
-
 /// A handle of the store entry `key`, which stays in its store while a
 /// clone of the handle does.
 pub(crate) struct Shared<K: Key>(Rc<Holder<K>>);
@@ -98,22 +74,16 @@ pub(crate) struct Shared<K: Key>(Rc<Holder<K>>);
 /// once the last of them drops.
 struct Holder<K: Key> {
     key: K,
-    released: Rc<ReleasedEntries>,
+    queue: Rc<ReleaseQueue>,
 }
 
 impl<K: Key> Drop for Holder<K> {
     fn drop(&mut self) {
-        self.released.push(self.key.into());
+        self.queue.push(Release::Entry(self.key.into()));
     }
 }
 
 impl<K: Key> Shared<K> {
-    /// The first handle of the entry `key`, whose key goes to `released` when
-    /// the last clone of it drops.
-    pub(crate) fn new(key: K, released: &Rc<ReleasedEntries>) -> Shared<K> {
-        Shared(Rc::new(Holder { key, released: Rc::clone(released) }))
-    }
-
     /// The entry's key in its store.
     #[must_use]
     pub(crate) fn key(&self) -> K {
@@ -192,8 +162,8 @@ impl<K, V> Default for Store<K, V> {
 
 impl<K: Key, V> Store<K, V> {
     /// Keeps `value`, while a clone of the returned handle lasts, whose key
-    /// goes to `released` once the last clone drops.
-    pub(crate) fn add(&mut self, value: V, released: &Rc<ReleasedEntries>) -> Shared<K> {
+    /// goes to `queue` once the last clone drops.
+    pub(crate) fn add(&mut self, value: V, queue: &Rc<ReleaseQueue>) -> Shared<K> {
         let version = self.next_version;
         self.next_version = version.wrapping_add(1);
         if let Some(offset) = self.chunks.iter().skip(self.first_vacant).position(|chunk| chunk.vacant != 0) {
@@ -207,7 +177,7 @@ impl<K: Key, V> Store<K, V> {
         let index = chunk.vacant.trailing_zeros() as usize;
         chunk.vacant &= !(1 << index);
         chunk.slots[index] = Slot { version, value: Some(value) };
-        Shared::new(K::new(EntryKey { slot: at * CHUNK + index, version }), released)
+        Shared(Rc::new(Holder { key: K::new(EntryKey { slot: at * CHUNK + index, version }), queue: Rc::clone(queue) }))
     }
 
     /// The slot that `key` names, if the store has its entry.
@@ -272,7 +242,7 @@ impl<K: Key, V> Store<K, V> {
 mod tests {
     use super::*;
 
-    fn store() -> (Store<VerticesKey, u32>, Rc<ReleasedEntries>) {
+    fn store() -> (Store<VerticesKey, u32>, Rc<ReleaseQueue>) {
         (Store::default(), Rc::default())
     }
 

@@ -2,13 +2,11 @@
 //! values of its own, which the draw owns and uploads to a buffer of its
 //! own, or vertices of the context's store that other draws share.
 
-use std::rc::Rc;
-
-use mln_gfx::buffer::BufferPtr;
 use mln_gfx::gfx_types::AttributeDataType;
-use mln_gfx::gpu::{BufferUsage, GpuError};
+use mln_gfx::gpu::{BufferUsage, Gpu, GpuError};
 use mln_gfx::shaders::shader_defines::MAX_ATTRIBUTE_COUNT_PER_SHADER;
 
+use crate::gfx::buffer::Buffer;
 use crate::gfx::context::Context;
 use crate::gfx::upload::{AttributeBinding, AttributeDescriptor};
 use crate::gfx::vertices::{SharedVertices, Vertices};
@@ -39,10 +37,10 @@ impl SharedAttribute {
 }
 
 /// Where an attribute's own values are: in their bytes until the first
-/// upload moves them into a buffer.
+/// upload moves them into a buffer, which the draw owns.
 pub(crate) enum OwnValues {
     Bytes(Vec<u8>),
-    Buffer(BufferPtr),
+    Buffer(Buffer),
 }
 
 /// What a vertex attribute reads.
@@ -82,28 +80,34 @@ impl VertexAttribute {
     }
 
     /// The attribute's binding, of the buffer it reads, which this uploads
-    /// through `context` where [`needs_upload`](Self::needs_upload) says;
-    /// `None` where there are no values.
-    pub(crate) fn binding(&mut self, context: &mut Context) -> Result<Option<AttributeBinding>, GpuError> {
+    /// to `gpu` where [`needs_upload`](Self::needs_upload) says; `None`
+    /// where there are no values.
+    pub(crate) fn binding(
+        &mut self,
+        gpu: &mut dyn Gpu,
+        context: &mut Context,
+    ) -> Result<Option<AttributeBinding>, GpuError> {
         match self {
             VertexAttribute::Own { data_type, values, .. } => {
                 let buffer = match values {
-                    OwnValues::Buffer(buffer) => Rc::clone(buffer),
+                    OwnValues::Buffer(buffer) => buffer.id(),
                     OwnValues::Bytes(bytes) => {
-                        let buffer = context.device().buffer(BufferUsage::Vertex, bytes)?;
-                        *values = OwnValues::Buffer(Rc::clone(&buffer));
-                        buffer
+                        let buffer = context.device().buffer(gpu, BufferUsage::Vertex, bytes)?;
+                        let id = buffer.id();
+                        *values = OwnValues::Buffer(buffer);
+                        id
                     }
                 };
                 Ok(Some(AttributeBinding {
                     attribute: AttributeDescriptor { data_type: *data_type, offset: 0 },
                     vertex_stride: data_type.stride() as u32,
-                    buffer: Some(buffer),
+                    buffer,
                     vertex_offset: 0,
+                    held: None,
                 }))
             }
             VertexAttribute::Shared(shared) => {
-                let Some(buffer) = context.upload_vertices(&shared.vertices)? else {
+                let Some(buffer) = context.upload_vertices(gpu, &shared.vertices)? else {
                     return Ok(None);
                 };
                 debug_assert!(
@@ -115,8 +119,9 @@ impl VertexAttribute {
                 Ok(Some(AttributeBinding {
                     attribute: AttributeDescriptor { data_type: shared.data_type, offset: shared.offset },
                     vertex_stride: shared.stride,
-                    buffer: Some(buffer),
+                    buffer,
                     vertex_offset: shared.vertex_offset,
+                    held: Some(shared.vertices.held()),
                 }))
             }
         }
@@ -178,6 +183,12 @@ impl VertexAttributeArray {
             VertexAttribute::Shared(shared) => Some(shared),
             VertexAttribute::Own { .. } => None,
         })
+    }
+
+    /// Whether an attribute has values of its own, in a buffer the draw
+    /// owns.
+    pub(crate) fn has_own(&self) -> bool {
+        self.iter().any(|(_, attr)| matches!(attr, VertexAttribute::Own { .. }))
     }
 
     /// The attributes, with their ids.

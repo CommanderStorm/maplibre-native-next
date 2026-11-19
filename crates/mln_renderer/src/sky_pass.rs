@@ -3,13 +3,14 @@ use std::rc::Rc;
 
 use mln_gfx::color_mode::ColorMode;
 use mln_gfx::cull_face_mode::CullFaceMode;
+use mln_gfx::gpu::Gpu;
 use mln_gfx::projection_variant::ProjectionVariant;
 use mln_gfx::shaders::segment::SegmentBase;
 use mln_gfx::shaders::shader_defines::{
     ID_ATMOSPHERE_POS_VERTEX_ATTRIBUTE, ID_ATMOSPHERE_PROPS_UBO, ID_SKY_POS_VERTEX_ATTRIBUTE, ID_SKY_PROPS_UBO,
 };
 use mln_gfx::shaders::sky_ubo::{AtmospherePropsUBO, SkyPropsUBO};
-use mln_gfx::{AttributeDataType, DepthMaskType, DrawMode, ShaderProgramPtr, ShaderRegistry};
+use mln_gfx::{AttributeDataType, DepthMaskType, DrawMode};
 use mln_map_types::TransformState;
 use mln_style_types::LightAnchorType;
 use mln_util::Color;
@@ -22,6 +23,8 @@ use mln_util::vectors::Vec4;
 use crate::draw::{DrawGeometry, DrawObjects, Textures, raw_vertices};
 use crate::gfx::context::Context;
 use crate::gfx::indexes::DrawIndexes;
+use crate::gfx::shader_program::ShaderProgramPtr;
+use crate::gfx::shader_registry::ShaderRegistry;
 use crate::layer_drawing::{DrawDepth, FrameDraw, SingleDraw};
 use crate::render_light::EvaluatedLight;
 use crate::render_sky::EvaluatedSky;
@@ -109,6 +112,7 @@ impl SkyPass {
     )]
     pub(crate) fn update(
         &mut self,
+        gpu: &mut dyn Gpu,
         shaders: &ShaderRegistry,
         context: &mut Context,
         state: &TransformState,
@@ -152,9 +156,8 @@ impl SkyPass {
                     sky_horizon_blend: *evaluated.sky_horizon_blend.uniform() * viewport_size.height as f32 * 0.5,
                     sky_blend: projection_transition as f32,
                 };
-                let buffers = &mut sky.frame.uniform_buffers;
-                buffers.create_or_update_pod(ID_SKY_PROPS_UBO, &props, context.device());
-                bind_no_projection(buffers, context);
+                sky.write_pod(gpu, ID_SKY_PROPS_UBO, &props, context);
+                bind_no_projection(gpu, &mut sky.frame.uniform_buffers, context);
             }
         } else {
             self.sky = None;
@@ -186,9 +189,8 @@ impl SkyPass {
             camera_position: [camera[0] as f32, camera[1] as f32, camera[2] as f32, 0.0],
             sun_position: sun_position(light, state, atmosphere_blend),
         };
-        let buffers = &mut atmosphere.frame.uniform_buffers;
-        buffers.create_or_update_pod(ID_ATMOSPHERE_PROPS_UBO, &props, context.device());
-        bind_no_projection(buffers, context);
+        atmosphere.write_pod(gpu, ID_ATMOSPHERE_PROPS_UBO, &props, context);
+        bind_no_projection(gpu, &mut atmosphere.frame.uniform_buffers, context);
     }
 
     /// The planar sky, which draws before the layers, if the frame draws it.

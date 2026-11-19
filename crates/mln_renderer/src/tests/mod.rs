@@ -39,6 +39,8 @@ mod source_test;
 mod drop_on_workers_test;
 // Port-only: malformed vector tiles become tile errors, not panics.
 mod malformed_tile_test;
+// The context destroys what it released after what was made of it.
+mod release_test;
 // Port-only: a tile drives its layout jobs.
 mod tile_jobs_test;
 // Port-only: a tile's layout in two stages, and the worker over them.
@@ -363,10 +365,15 @@ pub(crate) fn ready(source: mln_style::Source) -> mln_style::Source {
     }
 }
 
-/// Runs `f` with the context of a headless WebGPU backend.
-fn with_context(f: impl FnOnce(&mut crate::gfx::context::Context)) {
+/// Runs `f` with the `Gpu` of a headless WebGPU backend and a context over
+/// it, which it then tears down.
+fn with_context(f: impl FnOnce(&mut dyn mln_gfx::gpu::Gpu, &mut crate::gfx::context::Context)) {
+    use mln_gfx::RendererBackend as _;
+    use mln_gfx::gpu::Gpu as _;
     let device = mln_webgpu::Device::new(None).expect("device");
-    let backend: std::rc::Rc<dyn mln_gfx::RendererBackend> =
-        std::rc::Rc::new(mln_webgpu::RendererBackend::new(&device));
-    f(&mut crate::gfx::context::Context::new(backend));
+    let mut backend = mln_webgpu::RendererBackend::new(&device);
+    let gpu = backend.gpu();
+    let mut context = crate::gfx::context::Context::new(*gpu.caps());
+    f(gpu, &mut context);
+    context.tear_down(gpu);
 }
