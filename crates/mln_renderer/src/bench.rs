@@ -36,7 +36,7 @@ use crate::paint_parameters::TransformParameters;
 use crate::render_layer::{LayerParts, RenderLayer};
 use crate::render_tile::RenderTile;
 use crate::text::cross_tile_symbol_index::CrossTileSymbolIndex;
-use crate::text::glyph_store::HBShapeResults;
+use crate::text::glyph_store::ShapeResults;
 use crate::text::placement::{Placement, PlacementInputs};
 use crate::tile::contents::LayoutResult;
 use crate::tile::job::{
@@ -121,6 +121,7 @@ impl TileLayout {
                 layers,
                 global_state: Some(Arc::clone(style.get_global_state())),
                 font_faces: style.get_font_faces().cloned(),
+                glyph_pbfs: !style.get_glyph_url().is_empty(),
             }),
             available_images: Arc::new(style.get_images().iter().map(|image| image.id.clone()).collect()),
             params: LayoutParams {
@@ -440,7 +441,7 @@ fn resolve(
     let image_page = atlas.pack_images(&icons, &patterns);
     Ok(Resolved {
         glyphs: glyph_page.positions,
-        shaping: HBShapeResults::new(),
+        shaping: ShapeResults::new(),
         icons: image_page.icons,
         patterns: image_page.patterns,
         missing_images,
