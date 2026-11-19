@@ -302,14 +302,24 @@ impl HeadlessMap {
 
     /// Draws frames, waiting for the workers before each, until one shows
     /// the view complete with nothing left to animate, such as symbols
-    /// fading in. Returns how many it drew.
+    /// fading in. When the map changes next on its own, as when a symbol
+    /// placement is due, the clock skips to the frame then, as a host's
+    /// display would draw nothing until it. Returns how many it drew.
     pub(crate) fn settle(&mut self) -> u64 {
         let start = self.frames;
         loop {
             self.wait_for_workers();
             let status = self.draw_frame();
-            if status.mode == RenderMode::Full && !status.needs_repaint {
-                return self.frames - start;
+            if status.mode == RenderMode::Full {
+                if let Some(at) = self.map.repaint_at() {
+                    while self.clock < at {
+                        self.clock += FRAME_INTERVAL;
+                    }
+                    continue;
+                }
+                if !status.needs_repaint {
+                    return self.frames - start;
+                }
             }
             assert!(self.frames - start < FRAME_LIMIT, "the view isn't settled after {FRAME_LIMIT} frames");
         }
