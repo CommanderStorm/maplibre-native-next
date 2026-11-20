@@ -57,7 +57,7 @@ fn a_ring_of_images_of_no_size_or_too_large_is_rejected() {
         .expect("a ring of 4x4 images");
     let gpu = backend.gpu();
     for size in bad_sizes(&device) {
-        let error = target.replace(gpu, images(size)).err().expect("no ring of that size");
+        let error = target.replace(gpu, images(size)).expect_err("no ring of that size");
         assert_eq!(error.kind, ErrorKind::InvalidArgument, "{size:?}");
     }
     target.replace(gpu, images(Size::new(8, 8))).expect("a ring of 8x8 images");
@@ -143,22 +143,32 @@ impl Owned {
         semaphore
     }
 
-    /// Signals `semaphore`, a timeline, to `value` from another thread once
-    /// [`DELAY`] passed, and returns when it began waiting.
-    fn signal_later(&self, semaphore: vk::Semaphore, value: u64) -> (std::time::Instant, std::thread::JoinHandle<()>) {
-        let device = self.device.shared.device().clone();
-        let signal = std::thread::spawn(move || {
-            std::thread::sleep(DELAY);
-            let info = vk::SemaphoreSignalInfo::default().semaphore(semaphore).value(value);
-            // SAFETY: a timeline of the device, below `value`.
-            unsafe { device.signal_semaphore(&info) }.unwrap();
-        });
-        (std::time::Instant::now(), signal)
+    /// Signals `semaphore`, a timeline, to `value` now, from the host's CPU.
+    fn signal(&self, semaphore: vk::Semaphore, value: u64) {
+        let info = vk::SemaphoreSignalInfo::default().semaphore(semaphore).value(value);
+        // SAFETY: a timeline of the device, below `value`.
+        unsafe { self.device.shared.device().signal_semaphore(&info) }.unwrap();
+    }
+
+    /// Whether the ring's timeline that `sync` names reached its value.
+    fn reached(&self, sync: mln_gfx::GpuSync) -> bool {
+        use ash::vk::Handle as _;
+        assert_eq!(SyncKind::VulkanTimelineSemaphore, sync.kind);
+        let semaphore = vk::Semaphore::from_raw(sync.handle);
+        // SAFETY: the ring's timeline, which it keeps until its next release
+        // or replacement.
+        unsafe { self.device.shared.device().get_semaphore_counter_value(semaphore) }.unwrap() >= sync.value
+    }
+
+    /// Waits until the ring's timeline that `sync` names reaches its value.
+    fn wait_for(&self, sync: mln_gfx::GpuSync) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !self.reached(sync) {
+            assert!(std::time::Instant::now() < deadline, "the ring's work never finished");
+            std::thread::yield_now();
+        }
     }
 }
-
-/// How long the host takes to signal its timeline.
-const DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// The host's timeline at `value`.
 fn timeline_sync(semaphore: vk::Semaphore, value: u64) -> mln_gfx::ConsumerSync {
@@ -218,19 +228,13 @@ fn sync_file(producer: &mut BorrowedTarget, gpu: &mut crate::VulkanGpu) -> mln_g
     mln_gfx::ConsumerSync { sync, sync_file: Some(file) }
 }
 
-/// Waits until `pending` reads end.
-fn wait_for(mut pending: crate::PendingReads) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !pending.poll() {
-        assert!(std::time::Instant::now() < deadline, "the reads never ended");
-        std::thread::yield_now();
-    }
-}
-
 // A frame begun and drawn into, but not ended, is submitted with what its
 // slot waits for before the ring lets go of its images, and the semaphores
-// imported for the waits outlive that submit: on release (`take_pending`),
-// on replacement and on tear-down, for the host's sync files and timelines.
+// imported for the waits outlive that submit: on replacement, on release and
+// on tear-down, for the host's sync files and timelines. None blocks: with a
+// timeline producer, a host that signals its timeline only once the call
+// returned gets the images back at the sync that the call returned. The
+// host's reads of a slot that no frame drew into hold nothing up.
 #[test]
 fn a_frame_drawn_and_not_ended_is_submitted_with_its_waits() {
     let (device, mut backend) = backend();
@@ -244,12 +248,13 @@ fn a_frame_drawn_and_not_ended_is_submitted_with_its_waits() {
     let mut producer = sync_files.then(|| {
         BorrowedTarget::new(&mut backend, owned.ring(1, size), SyncKind::SyncFd).expect("a sync file producer")
     });
-    let mut target =
-        BorrowedTarget::new(&mut backend, owned.ring(2, size), SyncKind::CpuComplete).expect("a ring of 8x8 images");
+    let kind = if timelines { SyncKind::VulkanTimelineSemaphore } else { SyncKind::CpuComplete };
+    let mut target = BorrowedTarget::new(&mut backend, owned.ring(2, size), kind).expect("a ring of 8x8 images");
     let gpu = backend.gpu();
+    let timeline = timelines.then(|| owned.timeline());
 
-    // Release: a sync file at slot 0, and a timeline that the host signals
-    // only after the ring took the frame's waits.
+    // Replacement with a frame drawn at slot 0 that waits for a sync file,
+    // where the device takes them.
     #[cfg(unix)]
     if let Some(producer) = &mut producer {
         let consumer = sync_file(producer, gpu);
@@ -257,53 +262,54 @@ fn a_frame_drawn_and_not_ended_is_submitted_with_its_waits() {
         target.release(gpu, 0, consumer).unwrap();
         target.select(0);
         draw_without_ending(&mut target, gpu);
-        wait_for(target.take_pending(gpu));
-    }
-    // A timeline at slot 1, which the host signals later: the frame's
-    // submit waits for it, and the device until it's signaled.
-    let timeline = timelines.then(|| owned.timeline());
-    if let Some(timeline) = timeline {
-        target.release(gpu, 1, timeline_sync(timeline, 1)).unwrap();
-        target.select(1);
-        draw_without_ending(&mut target, gpu);
-        let pending = target.take_pending(gpu);
-        let (since, signal) = owned.signal_later(timeline, 1);
-        device.wait_idle("the frame's submit");
-        assert!(since.elapsed() >= DELAY, "the frame's submit waited for no timeline");
-        signal.join().unwrap();
-        wait_for(pending);
-    }
-
-    // Replacement with a frame drawn at slot 0, which waits for a sync file
-    // where the device takes them, and otherwise a timeline.
-    #[cfg(unix)]
-    let replaced_after_sync_file = producer.as_mut().map(|producer| {
-        let consumer = sync_file(producer, gpu);
-        producer.release(gpu, 0, mln_gfx::ConsumerSync::of(mln_gfx::GpuSync::of(SyncKind::CpuComplete))).unwrap();
-        target.release(gpu, 0, consumer).unwrap();
-    });
-    #[cfg(not(unix))]
-    let replaced_after_sync_file = None::<()>;
-    let delayed = match (replaced_after_sync_file, timeline) {
-        (None, Some(timeline)) => {
-            target.release(gpu, 0, timeline_sync(timeline, 2)).unwrap();
-            Some(owned.signal_later(timeline, 2))
+        let sync = target.replace(gpu, owned.ring(2, size)).expect("new images");
+        if timelines {
+            owned.wait_for(sync);
         }
-        _ => None,
-    };
-    target.select(0);
-    draw_without_ending(&mut target, gpu);
-    wait_for(target.replace(gpu, owned.ring(2, size)).expect("new images"));
-    if let Some((since, signal)) = delayed {
-        assert!(since.elapsed() >= DELAY, "the replacement waited for no timeline");
-        signal.join().unwrap();
     }
 
-    // Tear-down with a frame drawn at slot 1, which waits for a timeline
-    // where the device takes them, and otherwise a sync file.
-    let delayed = if let Some(timeline) = timeline {
+    if let Some(timeline) = timeline {
+        // Replacement with a frame drawn at slot 0 that waits for a timeline,
+        // which the host signals only once the replacement returned.
+        target.release(gpu, 0, timeline_sync(timeline, 1)).unwrap();
+        target.select(0);
+        draw_without_ending(&mut target, gpu);
+        let sync = target.replace(gpu, owned.ring(2, size)).expect("new images");
+        assert!(!owned.reached(sync), "the replacement's frame ran before the host's reads");
+        owned.signal(timeline, 1);
+        owned.wait_for(sync);
+
+        // Both slots go back with a value that the host never signals, and a
+        // frame begins on slot 1 without drawing: the replacement's work
+        // waits for neither.
+        target.release(gpu, 0, timeline_sync(timeline, 10)).unwrap();
+        target.release(gpu, 1, timeline_sync(timeline, 10)).unwrap();
+        target.select(1);
+        target.begin_frame(gpu).expect("a frame");
+        let sync = target.replace(gpu, owned.ring(2, size)).expect("new images");
+        owned.wait_for(sync);
+
+        // Release with a frame drawn at slot 0 that waits for a timeline,
+        // which the host signals only once the release returned, then new
+        // images after it.
+        target.release(gpu, 0, timeline_sync(timeline, 2)).unwrap();
+        target.select(0);
+        draw_without_ending(&mut target, gpu);
+        let sync = target.release_textures(gpu).expect("a release");
+        assert!(!owned.reached(sync), "the release's frame ran before the host's reads");
+        owned.signal(timeline, 2);
+        owned.wait_for(sync);
+        target.tear_down(gpu);
+        target = BorrowedTarget::new(&mut backend, owned.ring(2, size), kind).expect("a ring of 8x8 images");
+    }
+    let gpu = backend.gpu();
+
+    // Tear-down with a frame drawn at slot 1, which waits for a timeline that
+    // the host signals only once the tear-down returned, where the device
+    // takes them, and otherwise a sync file.
+    let signaled_after = if let Some(timeline) = timeline {
         target.release(gpu, 1, timeline_sync(timeline, 3)).unwrap();
-        Some(owned.signal_later(timeline, 3))
+        Some((timeline, 3))
     } else {
         #[cfg(unix)]
         if let Some(producer) = &mut producer {
@@ -316,9 +322,8 @@ fn a_frame_drawn_and_not_ended_is_submitted_with_its_waits() {
     target.select(1);
     draw_without_ending(&mut target, gpu);
     target.tear_down(gpu);
-    if let Some((since, signal)) = delayed {
-        assert!(since.elapsed() >= DELAY, "the tear-down waited for no timeline");
-        signal.join().unwrap();
+    if let Some((timeline, value)) = signaled_after {
+        owned.signal(timeline, value);
     }
     #[cfg(unix)]
     if let Some(mut producer) = producer {

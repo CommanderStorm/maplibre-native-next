@@ -25,8 +25,8 @@ use mln_gfx::offscreen_target::OffscreenTarget;
 use mln_gfx::rendering_stats::RenderingStats;
 use mln_gfx::ring::{self, Exporter, RingBackend};
 use mln_gfx::{
-    ConsumerSync, ExportKind, ExportedFrame, ExportedRing, FrameImage, FrameTarget, Handoff, RendererBackend, SyncKind,
-    Window,
+    ConsumerSync, ExportKind, ExportedFrame, ExportedRing, FrameImage, FrameTarget, GpuSync, Handoff, RendererBackend,
+    SyncKind, Window,
 };
 use mln_renderer::{Renderer, UpdateParameters};
 use mln_util::error::Error;
@@ -46,15 +46,13 @@ trait Borrowed<B: LocalBackend>: FrameTarget<Gpu = B::Gpu> {
     fn select(&mut self, slot: usize);
     fn release(&mut self, gpu: &mut B::Gpu, slot: usize, consumer: ConsumerSync) -> Result<(), Error>;
     fn discard(&mut self, gpu: &mut B::Gpu, slot: usize);
-    /// Renders into `textures` from now on, and returns the host's reads of
-    /// the textures that it let go of.
-    fn replace(&mut self, gpu: &mut B::Gpu, textures: B::RingTextures) -> Result<Pending, Error>;
-    /// Takes the host's reads of the textures that they still wait for, for
-    /// the ring to wait for before it lets go of them. A target that waits
-    /// for the host's reads as it takes each texture back has none.
-    fn take_pending(&mut self, _gpu: &mut B::Gpu) -> Pending {
-        None
-    }
+    /// Renders into `textures` from now on, and returns the sync after
+    /// which the host may use the textures that it let go of.
+    fn replace(&mut self, gpu: &mut B::Gpu, textures: B::RingTextures) -> Result<GpuSync, Error>;
+    /// Lets go of its textures, and returns the sync after which the host
+    /// may use them. It keeps what the sync names until the next release or
+    /// replacement, or until it goes, and draws no frame until then.
+    fn release_textures(&mut self, gpu: &mut B::Gpu) -> Result<GpuSync, Error>;
 }
 
 /// Frames queued for the host: a ring of the target's own images, which it
@@ -66,28 +64,6 @@ trait Exported<B: RendererBackend>: FrameTarget<Gpu = B::Gpu> {
     fn resize_images(&mut self, backend: &mut B, size: Size, held: &[usize]) -> Result<bool, Error>;
     fn size(&self) -> Size;
     fn image(&self, slot: usize) -> Option<ExportedFrame>;
-}
-
-/// The host's reads of textures that a ring let go of, which the session
-/// waits for before the release or replacement completes. Dropping it stops
-/// waiting.
-pub(crate) trait PendingReads {
-    /// Whether every read ended, which it checks without blocking.
-    fn poll(&mut self) -> bool;
-}
-
-/// The host's reads that a ring waits for, if any.
-pub(crate) type Pending = Option<Box<dyn PendingReads>>;
-
-impl<R: RingBackend + 'static> PendingReads for ring::PendingReads<R> {
-    fn poll(&mut self) -> bool {
-        ring::PendingReads::poll(self)
-    }
-}
-
-/// `reads`, unless they ended already.
-fn pending(mut reads: impl PendingReads + 'static) -> Pending {
-    (!reads.poll()).then(|| -> Box<dyn PendingReads> { Box::new(reads) })
 }
 
 impl<R: RingBackend + 'static> Borrowed<R::Renderer> for ring::BorrowedTarget<R>
@@ -103,11 +79,11 @@ where
     fn discard(&mut self, gpu: &mut R::Gpu, slot: usize) {
         ring::BorrowedTarget::discard(self, gpu, slot);
     }
-    fn replace(&mut self, gpu: &mut R::Gpu, textures: R::Textures) -> Result<Pending, Error> {
-        ring::BorrowedTarget::replace(self, gpu, textures).map(pending)
+    fn replace(&mut self, gpu: &mut R::Gpu, textures: R::Textures) -> Result<GpuSync, Error> {
+        ring::BorrowedTarget::replace(self, gpu, textures)
     }
-    fn take_pending(&mut self, gpu: &mut R::Gpu) -> Pending {
-        pending(ring::BorrowedTarget::take_pending(self, gpu))
+    fn release_textures(&mut self, gpu: &mut R::Gpu) -> Result<GpuSync, Error> {
+        ring::BorrowedTarget::release_textures(self, gpu)
     }
 }
 
@@ -126,8 +102,11 @@ impl Borrowed<mln_webgpu::RendererBackend> for mln_webgpu::BorrowedTarget {
         &mut self,
         gpu: &mut mln_webgpu::WebGpu,
         textures: mln_webgpu::BorrowedTextures,
-    ) -> Result<Pending, Error> {
-        mln_webgpu::BorrowedTarget::replace(self, gpu, textures).map(|()| None)
+    ) -> Result<GpuSync, Error> {
+        mln_webgpu::BorrowedTarget::replace(self, gpu, textures)
+    }
+    fn release_textures(&mut self, gpu: &mut mln_webgpu::WebGpu) -> Result<GpuSync, Error> {
+        mln_webgpu::BorrowedTarget::release_textures(self, gpu)
     }
 }
 
@@ -142,8 +121,11 @@ impl Borrowed<mln_gl::RendererBackend> for mln_gl::BorrowedTarget {
     fn discard(&mut self, gpu: &mut mln_gl::GlGpu, slot: usize) {
         mln_gl::BorrowedTarget::discard(self, gpu, slot);
     }
-    fn replace(&mut self, gpu: &mut mln_gl::GlGpu, textures: mln_gl::BorrowedTextures) -> Result<Pending, Error> {
-        mln_gl::BorrowedTarget::replace(self, gpu, textures).map(|()| None)
+    fn replace(&mut self, gpu: &mut mln_gl::GlGpu, textures: mln_gl::BorrowedTextures) -> Result<GpuSync, Error> {
+        mln_gl::BorrowedTarget::replace(self, gpu, textures)
+    }
+    fn release_textures(&mut self, gpu: &mut mln_gl::GlGpu) -> Result<GpuSync, Error> {
+        mln_gl::BorrowedTarget::release_textures(self, gpu)
     }
 }
 
@@ -544,10 +526,10 @@ trait Gfx {
     fn exported_size(&self) -> Option<Size>;
     fn resize_exported(&mut self, size: Size, held: &[usize]) -> Result<bool, Error>;
     fn exported_image(&self, slot: usize) -> Option<ExportedFrame>;
-    fn set_ring(&mut self, ring: BorrowedRing) -> Result<Pending, Error>;
+    fn set_ring(&mut self, ring: BorrowedRing) -> Result<GpuSync, Error>;
     fn resize(&mut self, size: Size);
     fn read_image(&mut self) -> Result<PremultipliedImage, Error>;
-    fn release_surface(&mut self) -> Pending;
+    fn release_surface(&mut self) -> Result<Option<GpuSync>, Error>;
     fn set_surface(&mut self, surface: Surface, overlay: Option<SurfaceOverlay>, size: Size) -> Result<(), Error>;
 }
 
@@ -580,9 +562,11 @@ enum Frames<B: LocalBackend> {
     Offscreen(OffscreenTarget<B::Gpu>),
     /// `None` once the surface is released.
     Presenting(Option<Target<B>>),
-    /// `target` is `None` once the ring is released.
+    /// `released` once the target let go of the ring's textures, which it
+    /// keeps without them until it gets new ones.
     Borrowed {
-        target: Option<Box<dyn Borrowed<B>>>,
+        target: Box<dyn Borrowed<B>>,
+        released: bool,
         producer: SyncKind,
     },
     Exported(Box<dyn Exported<B>>),
@@ -595,7 +579,8 @@ impl<B: LocalBackend> Frames<B> {
             #[cfg(not(target_family = "wasm"))]
             Frames::Offscreen(target) => Some(target),
             Frames::Presenting(target) => Some(&mut **target.as_mut()?),
-            Frames::Borrowed { target, .. } => Some(&mut **target.as_mut()?),
+            Frames::Borrowed { target, released: false, .. } => Some(&mut **target),
+            Frames::Borrowed { released: true, .. } => None,
             Frames::Exported(target) => Some(&mut **target),
         }
     }
@@ -603,8 +588,8 @@ impl<B: LocalBackend> Frames<B> {
     /// The ring that the frames draw into.
     fn ring(&mut self) -> Result<&mut dyn Borrowed<B>, Error> {
         match self {
-            Frames::Borrowed { target: Some(target), .. } => Ok(&mut **target),
-            Frames::Borrowed { target: None, .. } => Err(Error::invalid_state("the ring was released")),
+            Frames::Borrowed { target, released: false, .. } => Ok(&mut **target),
+            Frames::Borrowed { released: true, .. } => Err(Error::invalid_state("the ring was released")),
             _ => Err(Error::unsupported("the target has no ring")),
         }
     }
@@ -622,7 +607,7 @@ fn gfx<B: LocalBackend>(mut backend: B, init: FramesInit<'_>) -> Result<Box<dyn 
         }
         FramesInit::Borrowed(ring, producer) => {
             let textures = B::ring_textures(ring.kind).ok_or_else(no_ring)?;
-            Frames::Borrowed { target: Some(backend.borrowed(textures, producer)?), producer }
+            Frames::Borrowed { target: backend.borrowed(textures, producer)?, released: false, producer }
         }
         FramesInit::Exported { device, ring, kind, size, producer } => {
             Frames::Exported(backend.exported(device, ring, kind, size, producer)?)
@@ -653,7 +638,7 @@ impl<B: LocalBackend> Gfx for BackendGfx<B> {
             #[cfg(not(target_family = "wasm"))]
             Frames::Offscreen(_) => FramesKind::Offscreen,
             Frames::Presenting(_) => FramesKind::Presenting,
-            Frames::Borrowed { target, .. } => FramesKind::Borrowed { released: target.is_none() },
+            Frames::Borrowed { released, .. } => FramesKind::Borrowed { released: *released },
             Frames::Exported(_) => FramesKind::Exported,
         }
     }
@@ -752,16 +737,20 @@ impl<B: LocalBackend> Gfx for BackendGfx<B> {
         }
     }
 
-    fn set_ring(&mut self, ring: BorrowedRing) -> Result<Pending, Error> {
-        let Frames::Borrowed { target, producer } = &mut self.frames else {
+    fn set_ring(&mut self, ring: BorrowedRing) -> Result<GpuSync, Error> {
+        let Frames::Borrowed { target, released, producer } = &mut self.frames else {
             return Err(Error::unsupported("the target has no ring"));
         };
         let textures = B::ring_textures(ring.kind).ok_or_else(no_ring)?;
-        if let Some(target) = target {
+        if !*released {
             return target.replace(&mut self.backend.gpu(), textures);
         }
-        *target = Some(self.backend.borrowed(textures, *producer)?);
-        Ok(None)
+        // The released target, which kept what its release's sync names
+        // until now, goes once its frames are done.
+        let next = self.backend.borrowed(textures, *producer)?;
+        std::mem::replace(target, next).tear_down(&mut self.backend.gpu());
+        *released = false;
+        Ok(GpuSync::of(SyncKind::CpuComplete))
     }
 
     fn resize(&mut self, size: Size) {
@@ -781,23 +770,24 @@ impl<B: LocalBackend> Gfx for BackendGfx<B> {
         }
     }
 
-    fn release_surface(&mut self) -> Pending {
+    fn release_surface(&mut self) -> Result<Option<GpuSync>, Error> {
         let gpu = &mut *self.backend.gpu();
         match &mut self.frames {
             Frames::Presenting(target) => {
                 if let Some(mut target) = target.take() {
                     target.tear_down(gpu);
                 }
-                None
+                Ok(None)
             }
-            Frames::Borrowed { target, .. } => target.take().and_then(|mut target| {
-                let pending = target.take_pending(gpu);
-                target.tear_down(gpu);
-                pending
-            }),
+            Frames::Borrowed { released: true, .. } => Ok(Some(GpuSync::of(SyncKind::CpuComplete))),
+            Frames::Borrowed { target, released, .. } => {
+                let sync = target.release_textures(gpu)?;
+                *released = true;
+                Ok(Some(sync))
+            }
             #[cfg(not(target_family = "wasm"))]
-            Frames::Offscreen(_) => None,
-            Frames::Exported(_) => None,
+            Frames::Offscreen(_) => Ok(None),
+            Frames::Exported(_) => Ok(None),
         }
     }
 
@@ -819,7 +809,10 @@ impl<B: LocalBackend> Drop for BackendGfx<B> {
         if let Some(renderer) = self.renderer.take() {
             renderer.tear_down(&mut *gpu);
         }
-        if let Some(target) = self.frames.target() {
+        // A released ring keeps the objects that its release's sync names.
+        if let Frames::Borrowed { target, .. } = &mut self.frames {
+            target.tear_down(&mut gpu);
+        } else if let Some(target) = self.frames.target() {
             target.tear_down(&mut gpu);
         }
     }
@@ -1237,13 +1230,14 @@ impl LocalTarget {
     }
 
     /// Renders into `ring` from now on, in place of the ring's textures, and
-    /// returns the host's reads of the textures that it let go of, which the
-    /// host may use once they end.
+    /// returns the sync after which the host may use the textures that it
+    /// let go of: of the target's producer kind, or
+    /// [`SyncKind::CpuComplete`] when it had none since a release.
     ///
     /// Fails with [`ErrorKind::Unsupported`](mln_util::ErrorKind) for a
     /// target that isn't a ring, or a ring of another format, and with the
-    /// backend's error.
-    pub(crate) fn set_ring(&mut self, ring: BorrowedRing) -> Result<Pending, Error> {
+    /// backend's error. The target then keeps its textures.
+    pub(crate) fn set_ring(&mut self, ring: BorrowedRing) -> Result<GpuSync, Error> {
         self.gfx.set_ring(ring)
     }
 
@@ -1264,14 +1258,17 @@ impl LocalTarget {
     }
 
     /// Lets go of a surface target's surface, or of a ring's textures, and
-    /// returns the host's reads of the textures, which the host may use once
-    /// they end. The backend and its renderer stay.
-    pub(crate) fn release_surface(&mut self) -> Pending {
-        let pending = self.gfx.release_surface();
+    /// returns, for a ring, the sync after which the host may use them. The
+    /// backend and its renderer stay.
+    ///
+    /// Fails with [`ErrorKind::Native`](mln_util::ErrorKind) when a ring
+    /// can't submit its work on the textures, which it keeps then.
+    pub(crate) fn release_surface(&mut self) -> Result<Option<GpuSync>, Error> {
+        let sync = self.gfx.release_surface()?;
         if self.is_presenting() {
             self.window = None;
         }
-        pending
+        Ok(sync)
     }
 
     /// Presents to `surface` at `size` pixels from now on, with `overlay`

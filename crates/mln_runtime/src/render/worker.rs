@@ -11,9 +11,8 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
-use mln_gfx::{ConsumerSync, Handoff, SyncKind};
+use mln_gfx::{ConsumerSync, GpuSync, Handoff, SyncKind};
 use mln_map::RenderMode;
 use mln_renderer::text::font_face_engine::FontFaceEngine;
 use mln_renderer::{Registry, Renderer, RendererEvent, RendererEvents, Update, UpdateReader};
@@ -28,10 +27,9 @@ use mln_util::logging::{Event, Log};
 use mln_util::pool::Pool;
 use mln_util::queue::Queue;
 use mln_util::size::Size;
-use mln_util::time::Instant;
 
 use super::frame::{DemandMode, FrameDemand, FrameDisposition, FrameResult};
-use super::local::{LocalTarget, Pending, PendingReads};
+use super::local::LocalTarget;
 use super::session::{Published, RenderSessionState, SessionShared, WorkId, physical_size};
 use super::target::{
     BorrowedRing, Device, DeviceLease, Driver, ExportKind, ExportedRing, SentSurface, Surface, SurfaceOverlay,
@@ -455,88 +453,6 @@ pub(crate) struct Worker {
     /// The target that a teardown keeps while views name their sync
     /// objects, until the last view ends.
     viewed: Option<LocalTarget>,
-    /// The releases and replacements that wait for the host's reads of the
-    /// textures that they let go of.
-    settling: Vec<Settling>,
-    /// The thread that has the session's thread poll `settling`.
-    ticker: Option<Ticker>,
-}
-
-/// The longest that a release or replacement waits for the host's reads of
-/// the textures that it lets go of.
-const SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// How often the session's thread polls the host's reads.
-#[cfg(not(target_family = "wasm"))]
-const SETTLE_POLL: Duration = Duration::from_millis(2);
-
-/// A release or replacement that waits for the host's reads.
-struct Settling {
-    reads: Box<dyn PendingReads>,
-    deadline: Instant,
-    done: SettleDone,
-}
-
-/// What runs once a release or replacement has settled, with its result.
-type SettleDone = Box<dyn FnOnce(&mut Outbox, Result<(), Error>)>;
-
-/// What has the session's thread poll the host's reads, until it drops,
-/// which waits for its thread to end.
-struct Ticker {
-    stop: Arc<AtomicBool>,
-    #[cfg(not(target_family = "wasm"))]
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Drop for Ticker {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        // It sleeps for no longer than `SETTLE_POLL`.
-        #[cfg(not(target_family = "wasm"))]
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-/// Starts a thread that has the session's thread poll the host's reads on
-/// its later turns, until the returned ticker drops. It posts to the
-/// session's queue, so a caller-driven session's host gets a wake for each
-/// poll.
-#[cfg(target_family = "wasm")]
-fn start_ticker(queue: SessionQueue) -> Ticker {
-    // The browser's one thread polls in the pump's slices instead, which it
-    // asks for meanwhile.
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopped = Arc::clone(&stop);
-    let deadline = Instant::now() + SETTLE_TIMEOUT * 2;
-    mln_web_host::pump::add(move || {
-        if stopped.load(Ordering::SeqCst) || Instant::now() >= deadline {
-            return false;
-        }
-        post(&queue, Worker::poll_settling);
-        mln_web_host::pump::wake();
-        true
-    })
-    .detach();
-    Ticker { stop }
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn start_ticker(queue: SessionQueue) -> Ticker {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopped = Arc::clone(&stop);
-    let deadline = Instant::now() + SETTLE_TIMEOUT * 2;
-    let spawned = mln_util::thread::spawn("RenderSessionSettle", move || {
-        while !stopped.load(Ordering::SeqCst) && Instant::now() < deadline {
-            std::thread::sleep(SETTLE_POLL);
-            post(&queue, Worker::poll_settling);
-        }
-    });
-    if spawned.is_err() {
-        Log::error(Event::Render, "Can't start the thread that polls the host's reads of released textures");
-    }
-    Ticker { stop, thread: spawned.ok() }
 }
 
 impl Drop for Worker {
@@ -621,8 +537,6 @@ impl Worker {
             demands_received: 0,
             behind: VecDeque::new(),
             viewed: None,
-            settling: Vec::new(),
-            ticker: None,
         }
     }
 
@@ -1244,11 +1158,6 @@ impl Worker {
         if state.ring.iter().all(|slot| slot.quarantined) {
             return RingPick::Quarantined;
         }
-        // A frame may draw into a texture whose host's reads a release
-        // waits for.
-        if !self.settling.is_empty() {
-            return RingPick::Full;
-        }
         let free = state.ring.iter().enumerate().filter(|(_, slot)| !slot.busy());
         let index = free
             .clone()
@@ -1336,7 +1245,7 @@ impl Worker {
         scale_factor: f64,
         ring: &BorrowedRing,
         outbox: &mut Outbox,
-    ) -> Result<Pending, Error> {
+    ) -> Result<GpuSync, Error> {
         self.set_scale_factor(scale_factor)?;
         let same_size = self.size() == size;
         let gfx = self.gfx.as_mut().ok_or_else(target_lost)?;
@@ -1349,9 +1258,9 @@ impl Worker {
             for (_, seen) in &mut self.waiting {
                 *seen = latest;
             }
-            return Ok(None);
+            return Ok(GpuSync::of(SyncKind::CpuComplete));
         }
-        let pending = gfx.target.set_ring(ring.clone())?;
+        let sync = gfx.target.set_ring(ring.clone())?;
         let old = self.ring.replace(ring.clone());
         {
             let mut state = self.shared.state.lock();
@@ -1383,7 +1292,7 @@ impl Worker {
         // A still image that waits for a target gets its demand again, once
         // the replacement no longer counts as on its way.
         post(&self.shared.queue, Worker::still_image_changed);
-        Ok(pending)
+        Ok(sync)
     }
 
     // MARK: - Work
@@ -1544,13 +1453,12 @@ impl Worker {
     }
 
     /// Lets go of a surface session's surface, or of a ring's textures, and
-    /// ends the demands on their way. Returns the host's reads of the
-    /// textures, which the release waits for. The host may destroy the
-    /// textures once it completes, so a new ring keeps nothing of the old
-    /// one: no texture of it stays quarantined.
-    pub(crate) fn release_target(&mut self, outbox: &mut Outbox) -> Result<Pending, Error> {
+    /// ends the demands on their way. Returns, for a ring, the sync after
+    /// which the host may use or destroy the textures, so a new ring keeps
+    /// nothing of the old one: no texture of it stays quarantined.
+    pub(crate) fn release_target(&mut self, outbox: &mut Outbox) -> Result<Option<GpuSync>, Error> {
         let gfx = self.gfx.as_mut().ok_or_else(target_lost)?;
-        let pending = gfx.target.release_surface();
+        let sync = gfx.target.release_surface()?;
         self.has_frame = false;
         self.ring = None;
         {
@@ -1562,67 +1470,7 @@ impl Worker {
             }
         }
         self.end_demands(FrameDisposition::TargetNotReady, outbox);
-        Ok(pending)
-    }
-
-    // MARK: - The host's reads of released textures
-
-    /// Runs `done` once the host's `pending` reads end, or a second passes:
-    /// at once when there are none, and else on a later turn of the
-    /// session's thread, which polls them without blocking. Frames wait for
-    /// them meanwhile.
-    pub(crate) fn settle_then(
-        &mut self,
-        pending: Pending,
-        done: impl FnOnce(&mut Outbox, Result<(), Error>) + 'static,
-        outbox: &mut Outbox,
-    ) {
-        let Some(reads) = pending else { return done(outbox, Ok(())) };
-        self.settling.push(Settling { reads, deadline: Instant::now() + SETTLE_TIMEOUT, done: Box::new(done) });
-        if self.ticker.is_none() {
-            self.ticker = Some(start_ticker(self.shared.queue.clone()));
-        }
-    }
-
-    /// Polls the host's reads that releases and replacements wait for, and
-    /// completes those whose reads ended or that waited long enough.
-    fn poll_settling(&mut self, outbox: &mut Outbox) {
-        let now = Instant::now();
-        let (settled, settling): (Vec<_>, Vec<_>) = std::mem::take(&mut self.settling)
-            .into_iter()
-            .map(|mut settling| (settling.reads.poll(), settling))
-            .partition(|(ended, settling)| *ended || now >= settling.deadline);
-        self.settling = settling.into_iter().map(|(_, settling)| settling).collect();
-        for (ended, settling) in settled {
-            if !ended {
-                Log::warning(
-                    Event::Render,
-                    "The host's reads of a borrowed texture didn't end within a second of its release; the session \
-                     no longer waits for them",
-                );
-            }
-            let Settling { reads, done, .. } = settling;
-            drop(reads);
-            done(outbox, Ok(()));
-        }
-        if self.settling.is_empty() {
-            self.stop_ticker();
-            self.pump(outbox);
-        }
-    }
-
-    fn stop_ticker(&mut self) {
-        self.ticker = None;
-    }
-
-    /// Ends the releases and replacements that wait for the host's reads,
-    /// which the session no longer waits for, with `error`.
-    fn end_settling(&mut self, error: &Error, outbox: &mut Outbox) {
-        self.stop_ticker();
-        for Settling { reads, done, .. } in std::mem::take(&mut self.settling) {
-            drop(reads);
-            done(outbox, Err(error.clone()));
-        }
+        Ok(sync)
     }
 
     /// Presents to `surface` from now on, at `size` logical pixels, after
@@ -1735,7 +1583,6 @@ impl Worker {
     /// Lets go of the map's updates and the graphics objects, and ends the
     /// demands on their way.
     pub(crate) fn tear_down(&mut self, outbox: &mut Outbox) {
-        self.end_settling(&target_lost(), outbox);
         self.end_demands(FrameDisposition::TargetNotReady, outbox);
         self.torn_down = true;
         if let Some(reader) = self.reader.take() {

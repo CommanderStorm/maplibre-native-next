@@ -222,11 +222,6 @@ const DEPTH_STENCIL: TextureFormat = TextureFormat::Depth24PlusStencil8;
 /// its reads to the device's queue needs neither.
 pub type BorrowedTarget = ring::BorrowedTarget<D3d12Ring>;
 
-/// The host's reads of textures that a ring let go of, and the ring's frames
-/// into them, which the ring waits for before the host may use or destroy the
-/// textures: each fence's completed value. Dropping it stops waiting.
-pub type PendingReads = ring::PendingReads<D3d12Ring>;
-
 /// A [`BorrowedTarget`]'s part on D3D12: the shared fence that its frames
 /// signal, for a fence producer, and the host's fences that it opened.
 pub struct D3d12Ring {
@@ -336,8 +331,8 @@ impl RingBackend for D3d12Ring {
         gpu.take_waits_into_next_submit(texture);
     }
 
-    fn forget_waits(gpu: &mut D3d12Gpu, texture: TextureId) {
-        gpu.forget_waits(texture);
+    fn forget_waits(gpu: &mut D3d12Gpu, texture: TextureId) -> bool {
+        gpu.forget_waits(texture)
     }
 
     fn signal_after_next_submit(&mut self, gpu: &mut D3d12Gpu) {
@@ -351,17 +346,6 @@ impl RingBackend for D3d12Ring {
         let fence = self.fence.as_ref()?;
         let handle = fence.handle.as_raw_handle() as usize as u64;
         Some((GpuSync { kind: SyncKind::D3d12Fence, handle, value: self.fence_value }, None))
-    }
-
-    /// The fence that the backend's submits signal, and the value of the
-    /// last one's.
-    fn submitted(gpu: &D3d12Gpu) -> Option<Self::Wait> {
-        Some(gpu.last_submit())
-    }
-
-    fn ended((fence, value): &Self::Wait) -> bool {
-        // SAFETY: a plain query.
-        unsafe { fence.GetCompletedValue() >= *value }
     }
 }
 
