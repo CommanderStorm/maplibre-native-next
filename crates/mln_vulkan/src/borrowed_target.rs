@@ -3,8 +3,6 @@
 // that the host waits on before it reads an image, and the host's syncs that
 // the target waits for before it draws into an image the host read.
 
-use std::time::Instant;
-
 use ash::vk;
 use mln_gfx::gpu::{GpuError, TargetFormats, TextureFormat, TextureId, TextureUsage};
 use mln_gfx::ring::{self, RingBackend, RingTextures};
@@ -134,10 +132,9 @@ pub struct ConsumerWait {
 enum Waiting {
     /// The host's timeline, until it reaches the value.
     Timeline(vk::Semaphore, u64),
-    /// A semaphore of the target's own that holds an imported sync file, and
-    /// the file again, which a release of the image polls.
+    /// A semaphore of the target's own that holds an imported sync file.
     #[cfg(unix)]
-    Imported { semaphore: vk::Semaphore, file: std::os::fd::OwnedFd },
+    Imported(vk::Semaphore),
     /// A timeline semaphore of the target's own that holds the host's
     /// D3D12 fence, imported, until it reaches the value.
     #[cfg(windows)]
@@ -145,15 +142,22 @@ enum Waiting {
 }
 
 impl Waiting {
-    /// The semaphore of the ring's own that the wait holds, which the caller
-    /// destroys. A timeline is the host's.
-    fn into_own_semaphore(self) -> Option<vk::Semaphore> {
-        match self {
-            Waiting::Timeline(..) => None,
-            #[cfg(unix)]
-            Waiting::Imported { semaphore, .. } => Some(semaphore),
-            #[cfg(windows)]
-            Waiting::Fence(semaphore, _) => Some(semaphore),
+    /// Destroys the semaphore of the ring's own that the wait holds, with
+    /// `device`. A timeline is the host's.
+    ///
+    /// # Safety
+    ///
+    /// No submit that hasn't finished waits on it.
+    unsafe fn destroy(self, device: &ash::Device) {
+        // SAFETY: as the caller says.
+        unsafe {
+            match self {
+                Waiting::Timeline(..) => {}
+                #[cfg(unix)]
+                Waiting::Imported(semaphore) => device.destroy_semaphore(semaphore, None),
+                #[cfg(windows)]
+                Waiting::Fence(semaphore, _) => device.destroy_semaphore(semaphore, None),
+            }
         }
     }
 }
@@ -194,14 +198,9 @@ fn import_fence(device: &Device, handle: u64) -> Result<vk::Semaphore, Error> {
 /// Frames drawn into the host's images, each given back to the host.
 pub type BorrowedTarget = ring::BorrowedTarget<VulkanRing>;
 
-/// The host's reads of images that a ring let go of, which the ring waits
-/// for before the host may use or destroy the images. Dropping it stops
-/// waiting.
-pub type PendingReads = ring::PendingReads<VulkanRing>;
-
 /// A [`BorrowedTarget`]'s part on Vulkan: the semaphores that its frames
-/// signal. Dropping it destroys them, once the target waited for its
-/// frames.
+/// signal. A tear-down destroys them once the frames are done, and dropping
+/// it without one once the target waited for them.
 pub struct VulkanRing {
     device: Device,
     producer: SyncKind,
@@ -277,7 +276,7 @@ impl VulkanRing {
     }
 
     /// Imports the host's sync file `fd` into a semaphore of the target's
-    /// own, which keeps a copy of the file for its release to poll.
+    /// own.
     #[cfg(unix)]
     fn import_sync_file(&self, fd: std::os::fd::OwnedFd) -> Result<Waiting, Error> {
         use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd};
@@ -287,7 +286,6 @@ impl VulkanRing {
             .semaphore_fd()
             .ok_or_else(|| Error::native("the Vulkan device imports no sync files"))?;
         let device = self.device.shared.device();
-        let file = fd.try_clone().map_err(|e| Error::native(format!("Failed to keep the host's sync file: {e}")))?;
         // SAFETY: the create info is valid for the device.
         let semaphore = unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) }
             .map_err(|e| Error::native(format!("Failed to create a semaphore: {e}")))?;
@@ -300,7 +298,7 @@ impl VulkanRing {
         // SAFETY: the semaphore is new; Vulkan owns the descriptor once the
         // import succeeds.
         match unsafe { loader.import_semaphore_fd(&info) } {
-            Ok(()) => Ok(Waiting::Imported { semaphore, file }),
+            Ok(()) => Ok(Waiting::Imported(semaphore)),
             Err(error) => {
                 // SAFETY: the import failed, so the descriptor is still the
                 // target's, and nothing uses the semaphore.
@@ -343,7 +341,8 @@ impl VulkanRing {
 }
 
 impl Drop for VulkanRing {
-    /// Destroys the semaphores, which the target's frames are done with.
+    /// Destroys the semaphores that no tear-down took, which the target's
+    /// frames are done with.
     fn drop(&mut self) {
         let device = self.device.shared.device();
         // SAFETY: the target waited for its frames, and the semaphores are
@@ -488,7 +487,7 @@ impl RingBackend for VulkanRing {
         match &wait.waiting {
             Waiting::Timeline(semaphore, value) => gpu.wait_before_using(texture, *semaphore, Some(*value), stages),
             #[cfg(unix)]
-            Waiting::Imported { semaphore, .. } => gpu.wait_before_using(texture, *semaphore, None, stages),
+            Waiting::Imported(semaphore) => gpu.wait_before_using(texture, *semaphore, None, stages),
             #[cfg(windows)]
             Waiting::Fence(semaphore, value) => gpu.wait_before_using(texture, *semaphore, Some(*value), stages),
         }
@@ -498,16 +497,15 @@ impl RingBackend for VulkanRing {
         gpu.take_waits_into_next_submit(texture);
     }
 
-    fn forget_waits(gpu: &mut VulkanGpu, texture: TextureId) {
-        gpu.forget_waits(texture);
+    fn forget_waits(gpu: &mut VulkanGpu, texture: TextureId) -> bool {
+        gpu.forget_waits(texture)
     }
 
     /// A semaphore of the ring's own goes once the submit is done.
     fn waited(gpu: &mut VulkanGpu, wait: ConsumerWait) {
-        if let Some(semaphore) = wait.waiting.into_own_semaphore() {
-            // SAFETY: destroyed once the frame that waits on it is done.
-            gpu.destroy_later(move |device| unsafe { device.destroy_semaphore(semaphore, None) });
-        }
+        let waiting = wait.waiting;
+        // SAFETY: destroyed once the frame that waits on it is done.
+        gpu.destroy_later(move |device| unsafe { waiting.destroy(device) });
     }
 
     fn signal_after_next_submit(&mut self, gpu: &mut VulkanGpu) {
@@ -544,72 +542,28 @@ impl RingBackend for VulkanRing {
         }
     }
 
+    /// The semaphores go once the frames that signal them are done.
+    fn tear_down(&mut self, gpu: &mut VulkanGpu) {
+        let semaphores = [
+            std::mem::replace(&mut self.timeline, vk::Semaphore::null()),
+            std::mem::replace(&mut self.export_semaphore, vk::Semaphore::null()),
+        ];
+        // SAFETY: destroyed once the frames that signal them are done, and
+        // they are the ring's.
+        gpu.destroy_later(move |device| unsafe {
+            for semaphore in semaphores.into_iter().filter(|semaphore| *semaphore != vk::Semaphore::null()) {
+                device.destroy_semaphore(semaphore, None);
+            }
+        });
+    }
+
     /// Waits for the work submitted to the device's queue.
     fn wait_for_frames(&self, what: &str) {
         self.device.wait_idle(what);
     }
 
-    fn ended(wait: &ConsumerWait) -> bool {
-        let device = &wait.device;
-        let now = Instant::now();
-        match &wait.waiting {
-            Waiting::Timeline(semaphore, value) => wait_timeline(device, *semaphore, *value, now),
-            #[cfg(unix)]
-            Waiting::Imported { file, .. } => poll_until(file, now),
-            #[cfg(windows)]
-            Waiting::Fence(semaphore, value) => wait_timeline(device, *semaphore, *value, now),
-        }
-    }
-
     fn forget(wait: ConsumerWait) {
-        if let Some(semaphore) = wait.waiting.into_own_semaphore() {
-            // SAFETY: no submitted frame waits on the semaphore, which the
-            // ring made.
-            unsafe { wait.device.shared.device().destroy_semaphore(semaphore, None) };
-        }
-    }
-}
-
-/// Waits until `deadline` for the host's `semaphore` to reach `value`, and
-/// returns whether it did.
-fn wait_timeline(device: &Device, semaphore: vk::Semaphore, value: u64, deadline: Instant) -> bool {
-    let raw = device.raw();
-    // Vulkan 1.2's, or VK_KHR_timeline_semaphore's, which the device has when
-    // it takes timelines.
-    // SAFETY: the device is live, and the names are functions' names.
-    let Some(function) = [c"vkWaitSemaphores", c"vkWaitSemaphoresKHR"]
-        .into_iter()
-        .find_map(|name| unsafe { (raw.get_device_proc_addr)(raw.device, name.as_ptr()) })
-    else {
-        return false;
-    };
-    // SAFETY: both functions have vkWaitSemaphores's signature.
-    let wait = unsafe { std::mem::transmute::<unsafe extern "system" fn(), vk::PFN_vkWaitSemaphores>(function) };
-    let semaphores = [semaphore];
-    let values = [value];
-    let info = vk::SemaphoreWaitInfo::default().semaphores(&semaphores).values(&values);
-    let timeout = u64::try_from(deadline.saturating_duration_since(Instant::now()).as_nanos()).unwrap_or(u64::MAX);
-    // SAFETY: the host's timeline, of the device, which stays valid until
-    // the session ends.
-    unsafe { wait(raw.device, &raw const info, timeout) == vk::Result::SUCCESS }
-}
-
-/// Waits until `deadline` for `file`, a sync file, to signal, and returns
-/// whether it did.
-#[cfg(unix)]
-fn poll_until(file: &std::os::fd::OwnedFd, deadline: Instant) -> bool {
-    use std::os::fd::AsRawFd as _;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        // Rounded up, so that a wait shorter than a millisecond still waits.
-        let timeout = i32::try_from(remaining.as_micros().div_ceil(1000)).unwrap_or(i32::MAX);
-        let mut poll = libc::pollfd { fd: file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-        // SAFETY: one live descriptor, which the call only reads.
-        match unsafe { libc::poll(&raw mut poll, 1, timeout) } {
-            0 => return false,
-            ready if ready > 0 => return true,
-            _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {}
-            _ => return false,
-        }
+        // SAFETY: no submit waits on the semaphore, which the ring made.
+        unsafe { wait.waiting.destroy(wait.device.shared.device()) };
     }
 }

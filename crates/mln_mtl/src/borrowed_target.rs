@@ -189,11 +189,6 @@ const DEPTH_STENCIL: TextureFormat = TextureFormat::Depth32FloatStencil8;
 /// Frames drawn into the host's textures, each given back to the host.
 pub type BorrowedTarget = ring::BorrowedTarget<MetalRing>;
 
-/// The host's reads of textures that a ring let go of: each shared event's
-/// value, which the ring waits for before the host may use or destroy the
-/// textures. Dropping it stops waiting.
-pub type PendingReads = ring::PendingReads<MetalRing>;
-
 /// A [`BorrowedTarget`]'s part on Metal: the shared event that its frames
 /// signal, for a shared event producer.
 pub struct MetalRing {
@@ -297,8 +292,8 @@ impl RingBackend for MetalRing {
         gpu.take_waits_into_next_submit(texture);
     }
 
-    fn forget_waits(gpu: &mut MetalGpu, texture: TextureId) {
-        gpu.forget_waits(texture);
+    fn forget_waits(gpu: &mut MetalGpu, texture: TextureId) -> bool {
+        gpu.forget_waits(texture)
     }
 
     fn signal_after_next_submit(&mut self, gpu: &mut MetalGpu) {
@@ -312,11 +307,5 @@ impl RingBackend for MetalRing {
         let event = self.event.as_ref()?;
         let handle = Retained::as_ptr(event) as usize as u64;
         Some((GpuSync { kind: SyncKind::MetalSharedEvent, handle, value: self.event_value }, None))
-    }
-
-    /// Whether the event reached the value, by its signaled value, which any
-    /// macOS with shared events reports.
-    fn ended((event, value): &Self::Wait) -> bool {
-        event.signaledValue() >= *value
     }
 }

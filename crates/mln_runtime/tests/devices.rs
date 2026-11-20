@@ -612,55 +612,14 @@ mod vulkan {
         (vk::Semaphore::from_raw(sync.handle), sync.value)
     }
 
-    // A release of the ring's images completes once the host's reads of
-    // them end, so a new ring of the same image draws only after them. A
-    // wait that runs out still completes the release, and quarantines
-    // nothing.
+    // A replacement or a release completes without waiting for the frames
+    // drawn into the images that it lets go of: it hands over the timeline
+    // value that their work signals. Each time, a frame drawn into an image
+    // that the host gave back waits for the host's timeline, which the host
+    // signals only after the completion.
     #[test]
-    fn a_release_of_the_ring_waits_for_the_hosts_reads() {
-        let Some((device, mut host)) = with_timelines() else { return };
-        let images = [host.image()];
-        let timeline = host.timeline();
-        let runtime = runtime();
-        let map = map_of(&runtime, "#ff0000");
-        let target = RenderTarget::Borrowed { size: SIZE, ring: Host::ring(&images), device: device.clone() };
-        let session = attach(&map, target, SyncKinds::of(&[SyncKind::VulkanTimelineSemaphore]));
-        assert_eq!(FrameDisposition::Rendered, render(&session));
-        let frame = session.acquire_frame().unwrap().expect("a frame");
-        let (producer, value) = timeline_of(&frame);
-        assert!(eventually(|| host.counter(producer) >= value));
-        frame.release(timeline_sync(timeline, 1)).unwrap();
-
-        let host = &host;
-        std::thread::scope(|scope| {
-            let released = session.release_target().unwrap();
-            scope.spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                host.signal(timeline, 1);
-            });
-            released.wait().unwrap();
-            wait(session.set_ring(SIZE, Host::ring(&images)));
-            assert_eq!(FrameDisposition::Rendered, render(&session));
-            let frame = session.acquire_frame().unwrap().expect("a frame");
-            let (producer, value) = timeline_of(&frame);
-            assert!(eventually(|| host.counter(producer) >= value));
-            assert!(host.counter(timeline) >= 1, "the new ring drew into the image before the host's reads ended");
-            // The host never signals 2.
-            frame.release(timeline_sync(timeline, 2)).unwrap();
-        });
-        let started = std::time::Instant::now();
-        wait(session.release_target());
-        assert!(started.elapsed() >= std::time::Duration::from_millis(900));
-        wait(session.set_ring(SIZE, Host::ring(&images)));
-        assert_eq!(FrameDisposition::Rendered, render(&session));
-        drop(session.acquire_frame().unwrap().expect("a frame"));
-        wait(session.detach());
-    }
-
-    // A new ring that lets go of an image completes once the host's reads
-    // of it end.
-    #[test]
-    fn a_new_ring_waits_for_the_hosts_reads_of_the_image_it_lets_go_of() {
+    fn a_new_ring_or_a_release_hands_over_the_sync_after_its_frames() {
+        use vk::Handle as _;
         let Some((device, mut host)) = with_timelines() else { return };
         let (old, new) = ([host.image()], [host.image()]);
         let timeline = host.timeline();
@@ -668,22 +627,27 @@ mod vulkan {
         let map = map_of(&runtime, "#ff0000");
         let target = RenderTarget::Borrowed { size: SIZE, ring: Host::ring(&old), device: device.clone() };
         let session = attach(&map, target, SyncKinds::of(&[SyncKind::VulkanTimelineSemaphore]));
-        assert_eq!(FrameDisposition::Rendered, render(&session));
-        let frame = session.acquire_frame().unwrap().expect("a frame");
-        let (producer, value) = timeline_of(&frame);
-        assert!(eventually(|| host.counter(producer) >= value));
-        frame.release(timeline_sync(timeline, 1)).unwrap();
-
-        let host = &host;
-        std::thread::scope(|scope| {
-            let replaced = session.set_ring(SIZE, Host::ring(&new)).unwrap();
-            scope.spawn(|| {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                host.signal(timeline, 1);
-            });
-            replaced.wait().unwrap();
-            assert!(host.counter(timeline) >= 1, "the new ring let go of the image before the host's reads ended");
-        });
+        for value in [1, 2] {
+            assert_eq!(FrameDisposition::Rendered, render(&session));
+            let frame = session.acquire_frame().unwrap().expect("a frame");
+            let (producer, produced) = timeline_of(&frame);
+            assert!(eventually(|| host.counter(producer) >= produced));
+            frame.release(timeline_sync(timeline, value)).unwrap();
+            // The next frame waits for the host's timeline on the device.
+            assert_eq!(FrameDisposition::Rendered, render(&session));
+            let sync = if value == 1 {
+                wait(session.set_ring(SIZE, Host::ring(&new))).1
+            } else {
+                wait(session.release_target()).expect("a ring's sync")
+            };
+            assert_eq!(SyncKind::VulkanTimelineSemaphore, sync.kind);
+            let ended = vk::Semaphore::from_raw(sync.handle);
+            assert!(host.counter(ended) < sync.value, "the frame ran before the host's timeline");
+            host.signal(timeline, value);
+            assert!(eventually(|| host.counter(ended) >= sync.value));
+        }
+        // Without images, a release lets go of none.
+        assert_eq!(Some(GpuSync::of(SyncKind::CpuComplete)), wait(session.release_target()));
         wait(session.detach());
     }
 
@@ -695,78 +659,6 @@ mod vulkan {
             driver.service().unwrap();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-    }
-
-    // A caller-driven session's release waits for the host's reads on its
-    // later services, which return at once: the host can signal from work
-    // that it submits after a service.
-    #[test]
-    fn a_caller_driven_release_waits_for_the_hosts_reads_on_later_services() {
-        let Some((device, mut host)) = with_timelines() else { return };
-        let images = [host.image()];
-        let timeline = host.timeline();
-        let runtime = runtime();
-        let map = map_of(&runtime, "#ff0000");
-        let target = RenderTarget::Borrowed { size: SIZE, ring: Host::ring(&images), device: device.clone() };
-        let options = AttachOptions {
-            driver: mln_runtime::Driver::CallerThread,
-            producer_sync_kinds: SyncKinds::of(&[SyncKind::VulkanTimelineSemaphore]),
-            ..AttachOptions::default()
-        };
-        let (session, attached) = map.attach(target, options).unwrap();
-        let driver = session.take_driver_work().unwrap();
-        service_until(&driver, || attached.is_complete());
-        attached.wait().unwrap();
-        session.demand_frame(FrameDemand::new(DemandMode::Force, 1)).unwrap();
-        let mut results = Vec::new();
-        service_until(&driver, || {
-            results.extend(session.drain_frame_results().unwrap());
-            !results.is_empty()
-        });
-        assert_eq!(FrameDisposition::Rendered, results[0].disposition);
-        let frame = session.acquire_frame().unwrap().expect("a frame");
-        let (producer, value) = timeline_of(&frame);
-        assert!(eventually(|| host.counter(producer) >= value));
-        frame.release(timeline_sync(timeline, 1)).unwrap();
-
-        let released = session.release_target().unwrap();
-        let started = std::time::Instant::now();
-        driver.service().unwrap();
-        driver.service().unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_millis(500), "a service waited for the host's reads");
-        assert!(!released.is_complete());
-        host.signal(timeline, 1);
-        service_until(&driver, || released.is_complete());
-        released.wait().unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_millis(900), "the release waited out its timeout");
-        let detached = session.detach().unwrap();
-        service_until(&driver, || detached.is_complete());
-        detached.wait().unwrap();
-    }
-
-    // An abandon doesn't wait for a release that waits for the host's reads,
-    // which fails instead.
-    #[test]
-    fn an_abandon_ends_a_release_that_waits_for_the_hosts_reads() {
-        let Some((device, mut host)) = with_timelines() else { return };
-        let images = [host.image()];
-        let timeline = host.timeline();
-        let runtime = runtime();
-        let map = map_of(&runtime, "#ff0000");
-        let target = RenderTarget::Borrowed { size: SIZE, ring: Host::ring(&images), device: device.clone() };
-        let session = attach(&map, target, SyncKinds::of(&[SyncKind::VulkanTimelineSemaphore]));
-        assert_eq!(FrameDisposition::Rendered, render(&session));
-        let frame = session.acquire_frame().unwrap().expect("a frame");
-        let (producer, value) = timeline_of(&frame);
-        assert!(eventually(|| host.counter(producer) >= value));
-        frame.release(timeline_sync(timeline, 1)).unwrap();
-        let released = session.release_target().unwrap();
-        // The release runs on the session's thread before the abandon.
-        assert!(eventually(|| !session.snapshot().unwrap().has_target));
-        let started = std::time::Instant::now();
-        session.abandon().unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_millis(500), "the abandon waited for the host's reads");
-        assert_eq!(ErrorKind::TargetLost, released.wait().unwrap_err().kind);
     }
 
     // The host reads each frame on the queue that it shares with the
@@ -1117,6 +1009,47 @@ mod d3d12_ring {
         // SAFETY: as above.
         assert!(eventually(|| unsafe { fence.GetCompletedValue() } >= sync.value));
         drop(frame);
+        wait(session.detach());
+        // SAFETY: the test's handle, which the detached session let go of.
+        unsafe { CloseHandle(reads_handle).unwrap() };
+    }
+
+    // A replacement or a release completes without waiting for the frames
+    // drawn into the textures that it lets go of: it hands over the
+    // session's fence at the value that their work signals. Each time, a
+    // frame drawn into a texture that the host gave back waits for the
+    // host's fence, which the host signals only after the completion.
+    #[test]
+    fn a_new_ring_or_a_release_hands_over_the_sync_after_its_frames() {
+        let Some((device, host)) = Host::new() else { return };
+        let (old, new) = ([host.color()], [host.color()]);
+        let runtime = runtime();
+        let map = map_of(&runtime, "#ff0000");
+        let target = RenderTarget::Borrowed { size: SIZE, ring: Host::ring(&old, &[]), device };
+        let session = attach(&map, target, SyncKinds::of(&[SyncKind::D3d12Fence]));
+        let reads_handle = host.share_reads();
+        for value in [1, 2] {
+            assert_eq!(FrameDisposition::Rendered, render(&session));
+            let frame = session.acquire_frame().unwrap().expect("a frame");
+            let held = GpuSync { kind: SyncKind::D3d12Fence, handle: reads_handle.0 as usize as u64, value };
+            frame.release(ConsumerSync::of(held)).unwrap();
+            // The next frame waits for the host's fence on the device.
+            assert_eq!(FrameDisposition::Rendered, render(&session));
+            let sync = if value == 1 {
+                wait(session.set_ring(SIZE, Host::ring(&new, &[]))).1
+            } else {
+                wait(session.release_target()).expect("a ring's sync")
+            };
+            assert_eq!(SyncKind::D3d12Fence, sync.kind);
+            let ended = host.open(sync.handle);
+            // SAFETY: plain calls of live fences.
+            unsafe {
+                assert!(ended.GetCompletedValue() < sync.value, "the frame ran before the host's fence");
+                host.reads.Signal(value).unwrap();
+            }
+            // SAFETY: as above.
+            assert!(eventually(|| unsafe { ended.GetCompletedValue() } >= sync.value));
+        }
         wait(session.detach());
         // SAFETY: the test's handle, which the detached session let go of.
         unsafe { CloseHandle(reads_handle).unwrap() };
@@ -1788,25 +1721,28 @@ mod metal {
         pixel
     }
 
+    /// A texture of the host's on `metal`, which a ring draws into and the
+    /// CPU reads.
+    fn texture(metal: &mln_mtl::Device) -> Texture {
+        // SAFETY: a valid 2D format and a non-zero size.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::BGRA8Unorm,
+                SIZE.width as usize,
+                SIZE.height as usize,
+                false,
+            )
+        };
+        descriptor.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        descriptor.setStorageMode(MTLStorageMode::Shared);
+        metal.device().newTextureWithDescriptor(&descriptor).unwrap()
+    }
+
     #[test]
     fn a_ring_of_the_hosts_textures_hands_frames_back_with_shared_events() {
         let Some(device) = device_of(BackendType::Metal) else { return };
         let Device::Metal(metal) = &device else { unreachable!() };
-        let texture = || -> Texture {
-            // SAFETY: a valid 2D format and a non-zero size.
-            let descriptor = unsafe {
-                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
-                    MTLPixelFormat::BGRA8Unorm,
-                    SIZE.width as usize,
-                    SIZE.height as usize,
-                    false,
-                )
-            };
-            descriptor.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            descriptor.setStorageMode(MTLStorageMode::Shared);
-            metal.device().newTextureWithDescriptor(&descriptor).unwrap()
-        };
-        let textures = vec![texture(), texture()];
+        let textures = vec![texture(metal), texture(metal)];
         let ring = BorrowedRing::metal(mln_mtl::BorrowedTextures {
             textures: textures.clone(),
             size: SIZE,
@@ -1832,6 +1768,56 @@ mod metal {
             assert_eq!(expected, read(&textures[frame.slot()]));
             frame.release(ConsumerSync::of(GpuSync::of(SyncKind::CpuComplete))).unwrap();
         }
+        wait(session.detach());
+    }
+
+    // A replacement or a release completes without waiting for the frames
+    // drawn into the textures that it lets go of: it hands over the sync
+    // that their work signals. Each time, a frame drawn into a texture that
+    // the host gave back waits for the host's event, which the host signals
+    // only after the completion.
+    #[test]
+    fn a_new_ring_or_a_release_hands_over_the_sync_after_its_frames() {
+        let Some(device) = device_of(BackendType::Metal) else { return };
+        let Device::Metal(metal) = &device else { unreachable!() };
+        let ring = |texture: &Texture| {
+            BorrowedRing::metal(mln_mtl::BorrowedTextures {
+                textures: vec![texture.clone()],
+                size: SIZE,
+                depth_textures: Vec::new(),
+            })
+        };
+        let (old, new) = (texture(metal), texture(metal));
+        let runtime = runtime();
+        let map = map_of(&runtime, "#ff0000");
+        let target = RenderTarget::Borrowed { size: SIZE, ring: ring(&old), device: device.clone() };
+        let session = attach(&map, target, SyncKinds::of(&[SyncKind::MetalSharedEvent]));
+        let host = metal.device().newSharedEvent().unwrap();
+        let handle = Retained::as_ptr(&host) as usize as u64;
+        for value in [1, 2] {
+            assert_eq!(FrameDisposition::Rendered, render(&session));
+            let frame = session.acquire_frame().unwrap().expect("a frame");
+            frame.release(ConsumerSync::of(GpuSync { kind: SyncKind::MetalSharedEvent, handle, value })).unwrap();
+            // The next frame waits for the host's event on the GPU.
+            assert_eq!(FrameDisposition::Rendered, render(&session));
+            let sync = if value == 1 {
+                wait(session.set_ring(SIZE, ring(&new))).1
+            } else {
+                wait(session.release_target()).expect("a ring's sync")
+            };
+            assert_eq!(SyncKind::MetalSharedEvent, sync.kind);
+            // SAFETY: the session's shared event, which stays valid until its
+            // next release or replacement.
+            let event: Retained<ProtocolObject<dyn MTLSharedEvent>> =
+                unsafe { Retained::retain(sync.handle as usize as *mut ProtocolObject<dyn MTLSharedEvent>) }.unwrap();
+            assert!(event.signaledValue() < sync.value, "the frame ran before the host's event");
+            host.setSignaledValue(value);
+            assert!(eventually(|| event.signaledValue() >= sync.value));
+        }
+        // Without textures, a release or a new ring lets go of none.
+        assert_eq!(Some(GpuSync::of(SyncKind::CpuComplete)), wait(session.release_target()));
+        assert_eq!(GpuSync::of(SyncKind::CpuComplete), wait(session.set_ring(SIZE, ring(&old))).1);
+        assert_eq!(FrameDisposition::Rendered, render(&session));
         wait(session.detach());
     }
 }
