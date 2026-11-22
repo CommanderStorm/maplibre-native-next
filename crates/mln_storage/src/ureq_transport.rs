@@ -44,7 +44,7 @@ use ureq::unversioned::transport::{
     Transport as UreqTransport,
 };
 
-use crate::http_file_source::{HttpTransport, Transfer, TransferRequest, range_header, same_origin};
+use crate::http_file_source::{HttpTransport, Transfer, TransferRequest, accept_header, range_header, same_origin};
 use crate::redirect::redirect_url;
 use crate::resource::Resource;
 use crate::response::{Reason, ResourceError};
@@ -545,6 +545,9 @@ impl Client {
             request = request.header("If-None-Match", prior_etag.as_str());
         } else if let Some(prior_modified) = resource.prior_modified {
             request = request.header("If-Modified-Since", rfc1123(prior_modified));
+        }
+        if let Some(accept) = accept_header(resource, headers) {
+            request = request.header("Accept", accept);
         }
 
         for (name, value) in headers {

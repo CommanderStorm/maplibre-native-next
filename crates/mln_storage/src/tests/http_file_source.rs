@@ -11,7 +11,7 @@ use super::{Dispatcher, LocalRequests, Req, TestLoop, req};
 use crate::file_source::FileSource;
 use crate::http_file_source::{HTTPFileSource, same_origin};
 use crate::http_header_transform::HttpHeaderTransform;
-use crate::resource::{Kind, Resource};
+use crate::resource::{Kind, LoadingMethod, Resource, TileFormat};
 use crate::response::{Reason, Response};
 
 fn http_file_source() -> HTTPFileSource {
@@ -372,13 +372,18 @@ fn token_transform(seen: Arc<Mutex<Vec<(Kind, String)>>>) -> HttpHeaderTransform
 
 /// Loads `url` with `fs`, and returns the response.
 fn load_once(fs: &HTTPFileSource, kind: Kind, url: String) -> Response {
+    load_resource(fs, &Resource::new(kind, url))
+}
+
+/// Loads `resource` with `fs`, and returns the response.
+fn load_resource(fs: &HTTPFileSource, resource: &Resource) -> Response {
     let run_loop = TestLoop::new();
     let local = run_loop.dispatcher();
     let result = Rc::new(RefCell::new(None));
     let (r, stop) = (Rc::clone(&result), run_loop.clone());
     let _req = fs.request_local(
         &local,
-        &Resource::new(kind, url),
+        resource,
         Box::new(move |res: Response| {
             *r.borrow_mut() = Some(res);
             stop.stop();
@@ -449,6 +454,51 @@ fn a_redirect_keeps_headers_only_within_the_origin() {
     assert_eq!(None, res.error);
     assert_eq!(b"elsewhere", data(&res));
     elsewhere.assert_calls(1);
+}
+
+const MLT_ACCEPT: &str = "application/vnd.maplibre-tile, */*;q=0.1";
+
+fn mlt_tile(url: &str) -> Resource {
+    Resource::tile(url, 1.0, 0, 0, 0, mln_util::tileset::Scheme::XYZ, TileFormat::Mlt, LoadingMethod::All)
+}
+
+#[test]
+fn a_tile_accepts_its_format_past_a_redirect_that_drops_the_hosts_headers() {
+    let other = MockServer::start();
+    let elsewhere = other.mock(|when, then| {
+        when.method("GET").path("/elsewhere.mlt").header("Accept", MLT_ACCEPT).header_missing(TOKEN_HEADER);
+        then.status(200).body("elsewhere");
+    });
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method("GET").path("/tile.mlt").header("Accept", MLT_ACCEPT).header(TOKEN_HEADER, TOKEN_VALUE);
+        then.status(302).header("Location", other.url("/elsewhere.mlt"));
+    });
+    let mut fs = http_file_source();
+    fs.set_http_header_transform(token_transform(Arc::default()));
+
+    let res = load_resource(&fs, &mlt_tile(&server.url("/tile.mlt")));
+    assert_eq!(None, res.error);
+    assert_eq!(b"elsewhere", data(&res));
+    elsewhere.assert_calls(1);
+}
+
+#[test]
+fn a_hosts_accept_replaces_a_tiles() {
+    let server = MockServer::start();
+    let custom = server.mock(|when, then| {
+        when.method("GET").path("/tile.mlt").header("Accept", "application/x-custom");
+        then.status(200).body("custom");
+    });
+    let mut fs = http_file_source();
+    fs.set_http_header_transform(HttpHeaderTransform::new(Some(Arc::new(|_: Kind, _: &str| {
+        vec![("Accept".to_owned(), "application/x-custom".to_owned())]
+    }))));
+
+    let res = load_resource(&fs, &mlt_tile(&server.url("/tile.mlt")));
+    assert_eq!(None, res.error);
+    assert_eq!(b"custom", data(&res));
+    custom.assert_calls(1);
 }
 
 #[test]
