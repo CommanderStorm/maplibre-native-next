@@ -453,9 +453,7 @@ mod tests {
         let mut mlt = Resource::tile(
             "https://example.com/{z}/{x}/{y}",
             1.0,
-            0,
-            0,
-            0,
+            (0, 0, 0),
             mln_util::tileset::Scheme::XYZ,
             crate::resource::LoadingMethod::All,
         );

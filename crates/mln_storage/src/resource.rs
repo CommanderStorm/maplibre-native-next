@@ -323,6 +323,13 @@ impl Resource {
         scheme: Scheme,
         loading_method: LoadingMethod,
         format: TileFormat,
+    pub fn tile(
+        url_template: &str,
+        pixel_ratio: f32,
+        (x,y,z): (i32,i32, i8),
+        scheme: Scheme,
+        loading_method: LoadingMethod,
+        format: TileFormat,
     ) -> Resource {
         let supports_ratio = url_template.contains("{ratio}");
         let mut y = y;
