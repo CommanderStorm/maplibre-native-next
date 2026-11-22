@@ -304,28 +304,6 @@ impl Resource {
     pub fn tile(
         url_template: &str,
         pixel_ratio: f32,
-        x: i32,
-        y: i32,
-        z: i8,
-        scheme: Scheme,
-        loading_method: LoadingMethod,
-    ) -> Resource {
-        Resource::tile_with_format(url_template, pixel_ratio, x, y, z, scheme, loading_method, TileFormat::Mvt)
-    }
-
-    #[must_use]
-    pub fn tile_with_format(
-        url_template: &str,
-        pixel_ratio: f32,
-        x: i32,
-        y: i32,
-        z: i8,
-        scheme: Scheme,
-        loading_method: LoadingMethod,
-        format: TileFormat,
-    pub fn tile(
-        url_template: &str,
-        pixel_ratio: f32,
         (x,y,z): (i32,i32, i8),
         scheme: Scheme,
         loading_method: LoadingMethod,
