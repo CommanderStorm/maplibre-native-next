@@ -74,6 +74,14 @@ pub struct TileData {
     pub x: i32,
     pub y: i32,
     pub z: i8,
+    pub format: TileFormat,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileFormat {
+    Mvt,
+    Mlt,
+    Raster,
 }
 
 /// A bitmask of the ways a resource may be loaded.
@@ -302,6 +310,20 @@ impl Resource {
         scheme: Scheme,
         loading_method: LoadingMethod,
     ) -> Resource {
+        Resource::tile_with_format(url_template, pixel_ratio, x, y, z, scheme, loading_method, TileFormat::Mvt)
+    }
+
+    #[must_use]
+    pub fn tile_with_format(
+        url_template: &str,
+        pixel_ratio: f32,
+        x: i32,
+        y: i32,
+        z: i8,
+        scheme: Scheme,
+        loading_method: LoadingMethod,
+        format: TileFormat,
+    ) -> Resource {
         let supports_ratio = url_template.contains("{ratio}");
         let mut y = y;
         if scheme == Scheme::TMS {
@@ -333,6 +355,7 @@ impl Resource {
                 x,
                 y,
                 z,
+                format,
             }),
             loading_method,
         )

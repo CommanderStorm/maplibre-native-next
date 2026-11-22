@@ -25,8 +25,10 @@
 
 use std::sync::Arc;
 
+use crate::resource::TileFormat;
 use mln_util::chrono::{now, parse_http_date};
 use mln_util::http_header::{CacheControl, CachingHeaders, parse_retry_headers};
+use mln_util::logging::{Event, Log};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::file_source::FileSource;
@@ -150,6 +152,52 @@ fn default_transport() -> Arc<dyn HttpTransport> {
     Arc::new(crate::ureq_transport::Transport::new())
 }
 
+fn default_accept_headers(resource: &Resource) -> HttpHeaders {
+    let value = match resource.kind {
+        Kind::Tile => match resource.tile_data.as_ref().map(|tile| tile.format) {
+            Some(TileFormat::Mlt) => Some("application/vnd.maplibre-tile"),
+            Some(TileFormat::Mvt) => Some("application/vnd.mapbox-vector-tile"),
+            Some(TileFormat::Raster) => Some("image/png, image/jpeg, image/webp"),
+            None => None,
+        },
+        Kind::Image => Some("image/png, image/jpeg, image/webp"),
+        Kind::SpriteImage => Some("image/png"),
+        Kind::Style | Kind::SpriteJSON => Some("application/json"),
+        Kind::Glyphs => Some("application/x-protobuf"),
+        _ => None,
+    };
+    value.map_or_else(HttpHeaders::new, |value| vec![("Accept".to_owned(), value.to_owned())])
+}
+
+fn warn_for_tile_encoding_mismatch(resource: &Resource, headers: &[(String, String)]) {
+    let Some(format) = resource.tile_data.as_ref().map(|tile| tile.format) else {
+        return;
+    };
+    let content_type = headers.iter().find_map(|(name, value)| {
+        name.eq_ignore_ascii_case("content-type").then(|| value.split(';').next().unwrap_or(value).trim())
+    });
+    let mismatch = match (format, content_type.map(str::to_ascii_lowercase)) {
+        (TileFormat::Mlt, Some(content_type)) if content_type == "application/vnd.mapbox-vector-tile" => true,
+        (TileFormat::Mvt, Some(content_type))
+            if content_type == "application/vnd.maplibre-tile"
+                || content_type == "application/vnd.maplibre-vector-tile" =>
+        {
+            true
+        }
+        _ => false,
+    };
+    if mismatch {
+        Log::warning(
+            Event::ParseTile,
+            format!(
+                "Tile response Content-Type does not match the tileset encoding {:?}: {}",
+                format,
+                content_type.unwrap_or("unknown")
+            ),
+        );
+    }
+}
+
 /// The response half of `HTTPRequest`, from a finished transfer: the header
 /// callback and `handleResult(CURLcode)`.
 fn build_response(resource: &Resource, transfer: Result<Transfer, Box<ResourceError>>) -> Response {
@@ -161,6 +209,8 @@ fn build_response(resource: &Resource, transfer: Result<Transfer, Box<ResourceEr
             return response;
         }
     };
+
+    warn_for_tile_encoding_mismatch(resource, &transfer.headers);
 
     let mut retry_after: Option<String> = None;
     let mut x_rate_limit_reset: Option<String> = None;
@@ -365,7 +415,14 @@ impl HTTPFileSource {
     /// Starts the transfer of `resource`, whose response goes to
     /// `responder`, without blocking.
     pub(crate) fn start(&self, resource: &Resource, responder: Responder) {
-        let headers = self.header_transform.headers(resource.kind, &resource.url);
+        let mut headers = default_accept_headers(resource);
+        for (name, value) in self.header_transform.headers(resource.kind, &resource.url) {
+            if let Some(index) = headers.iter().position(|(current, _)| current.eq_ignore_ascii_case(&name)) {
+                headers[index] = (name, value);
+            } else {
+                headers.push((name, value));
+            }
+        }
         let request = TransferRequest { resource: resource.clone(), headers, responder };
         #[cfg(not(target_family = "wasm"))]
         self.transport.get_or_init(default_transport).start(request);
@@ -390,6 +447,36 @@ mod tests {
     use mln_util::chrono::{Timestamp, now, rfc1123};
 
     use super::*;
+
+    #[test]
+    fn default_accept_headers_follow_resource_format() {
+        let mut mlt = Resource::tile(
+            "https://example.com/{z}/{x}/{y}",
+            1.0,
+            0,
+            0,
+            0,
+            mln_util::tileset::Scheme::XYZ,
+            crate::resource::LoadingMethod::All,
+        );
+        mlt.tile_data.as_mut().unwrap().format = TileFormat::Mlt;
+        assert_eq!(
+            default_accept_headers(&mlt),
+            vec![("Accept".to_owned(), "application/vnd.maplibre-tile".to_owned())]
+        );
+
+        let mut mvt = mlt.clone();
+        mvt.tile_data.as_mut().unwrap().format = TileFormat::Mvt;
+        assert_eq!(
+            default_accept_headers(&mvt),
+            vec![("Accept".to_owned(), "application/vnd.mapbox-vector-tile".to_owned())]
+        );
+
+        assert_eq!(
+            default_accept_headers(&Resource::image("https://example.com/image")),
+            vec![("Accept".to_owned(), "image/png, image/jpeg, image/webp".to_owned())]
+        );
+    }
 
     fn response(status: i64, headers: &[(&str, &str)], resource: &Resource) -> Response {
         let transfer = Transfer {

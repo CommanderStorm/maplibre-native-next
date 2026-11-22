@@ -5,7 +5,7 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use mln_storage::resource::Priority;
+use mln_storage::resource::{Priority, TileFormat};
 use mln_storage::response::{Caching, Reason};
 use mln_storage::{Data, FileSource, LoadingMethod, Request, Resource, Response, StoragePolicy};
 use mln_style::custom_tile_loader::{CustomProvider, CustomTileSubscriber, SubscriberKey};
@@ -18,7 +18,7 @@ use mln_util::chrono::Timestamp;
 use mln_util::error::Error;
 use mln_util::hash::HashMap;
 use mln_util::pool::Pool;
-use mln_util::tileset::Tileset;
+use mln_util::tileset::{Tileset, VectorEncoding};
 use parking_lot::Mutex;
 
 use crate::tile::inbox::{InboxSender, SourceData, TileEvent};
@@ -395,7 +395,12 @@ impl Load {
                 // tiles; such a tile can't load.
                 let url = tileset.tiles.first().map_or("", String::as_str);
                 let canonical = loaded_tile(tileset, id);
-                let resource = Resource::tile(
+                let format = match tileset.vector_encoding {
+                    Some(VectorEncoding::MLT) => TileFormat::Mlt,
+                    Some(VectorEncoding::Mapbox) => TileFormat::Mvt,
+                    None => TileFormat::Raster,
+                };
+                let resource = Resource::tile_with_format(
                     url,
                     pixel_ratio,
                     canonical.x as i32,
@@ -403,6 +408,7 @@ impl Load {
                     canonical.z as i8,
                     tileset.scheme,
                     LoadingMethod::CacheOnly,
+                    format,
                 );
                 OriginLoad::Tileset(Box::new(TilesetLoad {
                     resource,

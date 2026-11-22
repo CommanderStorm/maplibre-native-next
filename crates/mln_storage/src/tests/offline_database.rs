@@ -348,7 +348,14 @@ fn example_tile() -> Resource {
     Resource::with_tile_data(
         Kind::Tile,
         "http://example.com/",
-        Some(TileData { url_template: "http://example.com/".to_owned(), pixel_ratio: 1, x: 0, y: 0, z: 0 }),
+        Some(TileData {
+            url_template: "http://example.com/".to_owned(),
+            pixel_ratio: 1,
+            x: 0,
+            y: 0,
+            z: 0,
+            format: crate::resource::TileFormat::Mvt,
+        }),
         LoadingMethod::All,
     )
 }

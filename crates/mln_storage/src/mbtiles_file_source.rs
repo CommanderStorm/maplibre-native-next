@@ -134,7 +134,10 @@ impl Databases {
         // TileJSON's center zoom is an integer.
         let center = row("center").and_then(numbers::<3>);
         members.extend(center.map(|[longitude, latitude, zoom]| ("center", json!([longitude, latitude, zoom as u8]))));
-        if format == "mlt" || format == "application/vnd.maplibre-vector-tile" {
+        if format == "mlt"
+            || format == "application/vnd.maplibre-tile"
+            || format == "application/vnd.maplibre-vector-tile"
+        {
             members.push(("encoding", json!("mlt")));
         }
         let tilejson = archive_tilejson(members, rows.into_iter().chain(json));
