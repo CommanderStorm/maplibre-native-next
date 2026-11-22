@@ -400,7 +400,7 @@ impl Load {
                     Some(VectorEncoding::Mapbox) => TileFormat::Mvt,
                     None => TileFormat::Raster,
                 };
-                let resource = Resource::tile_with_format(
+                let resource = Resource::tile(
                     url,
                     pixel_ratio,
                     canonical.x as i32,
