@@ -77,11 +77,16 @@ pub struct TileData {
     pub format: TileFormat,
 }
 
+/// What a tile's data is, which decides the media types that an HTTP
+/// request for it accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TileFormat {
+    /// A Mapbox Vector Tile.
     Mvt,
+    /// A MapLibre Tile.
     Mlt,
-    Raster,
+    /// An image: a raster or raster-dem tile.
+    Image,
 }
 
 /// A bitmask of the ways a resource may be loaded.
@@ -301,13 +306,19 @@ impl Resource {
     }
 
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tileset's template, the tile and its tileset's scheme and format"
+    )]
     pub fn tile(
         url_template: &str,
         pixel_ratio: f32,
-        (x,y,z): (i32,i32, i8),
+        x: i32,
+        y: i32,
+        z: i8,
         scheme: Scheme,
-        loading_method: LoadingMethod,
         format: TileFormat,
+        loading_method: LoadingMethod,
     ) -> Resource {
         let supports_ratio = url_template.contains("{ratio}");
         let mut y = y;
@@ -382,7 +393,7 @@ mod tests {
     }
 
     fn tile(url: &str, ratio: f32, x: i32, y: i32, z: i8, scheme: Scheme) -> Resource {
-        Resource::tile(url, ratio, x, y, z, scheme, LoadingMethod::All)
+        Resource::tile(url, ratio, x, y, z, scheme, TileFormat::Mvt, LoadingMethod::All)
     }
 
     fn check_tile(r: &Resource, url: &str, template: &str, pixel_ratio: u8, x: i32, y: i32, z: i8) {

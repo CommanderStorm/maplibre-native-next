@@ -171,7 +171,7 @@ impl SourceInfo {
     }
 
     pub(crate) fn new_tile(&mut self, id: OverscaledTileID, params: LayoutParams) -> Option<Tile> {
-        let load = Load::new(self.origin.as_ref()?, &id, params.pixel_ratio);
+        let load = Load::new(self.origin.as_ref()?, self.kind, &id, params.pixel_ratio);
         let generation = self.next();
         Some(Tile::new(id, load, Pipeline::new(self.kind, generation, params)))
     }

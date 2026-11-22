@@ -9,7 +9,7 @@ use std::sync::Arc;
 use feature::{Feature, PropertyMap};
 use geo_types::{Geometry, Point};
 use mln_map_types::MapMode;
-use mln_storage::resource::Priority;
+use mln_storage::resource::{Priority, TileFormat};
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::{FileSource, LoadingMethod, Resource, Responder, Response};
 use mln_tile::TileData;
@@ -30,7 +30,7 @@ use crate::tests::{OneTile, style, tile_store};
 use crate::tile::contents::Contents;
 use crate::tile::inbox::{SourceData, TileEvent};
 use crate::tile::job::{DataInput, Job, Run, TileKey};
-use crate::tile::loading::{Ancestors, DataOrigin, Fetch, OriginLoad, VectorTileEncoding};
+use crate::tile::loading::{Ancestors, DataOrigin, Fetch, Load, OriginLoad, VectorTileEncoding};
 use crate::tile::pipeline::LayoutWork;
 use crate::tile::tile::{TileKind, TileNecessity, TileOperation};
 use crate::tile::tile_workers::{InlineWorkers, TileWorkers};
@@ -998,4 +998,29 @@ fn a_stale_copy_shows_until_it_revalidates() {
     tile.update();
     assert!(!tile.shows_layout());
     assert_eq!(tile.actions(), [Error]);
+}
+
+/// The format that a request for a tile of a source of `kind` tiles, with
+/// `encoding`, names.
+fn requested_format(kind: TileKind, encoding: VectorTileEncoding) -> Option<TileFormat> {
+    let origin = DataOrigin::Tileset {
+        tileset: Tileset { tiles: vec!["tiles".to_owned()], ..Default::default() },
+        encoding,
+        file_source: None,
+        ancestors: Ancestors::default(),
+    };
+    match Load::new(&origin, kind, &OverscaledTileID::from_zxy(0, 0, 0), 1.0).origin {
+        OriginLoad::Tileset(load) => load.resource.tile_data.map(|tile| tile.format),
+        OriginLoad::GeoJson { .. } | OriginLoad::Custom(_) => None,
+    }
+}
+
+#[test]
+fn a_tile_request_names_the_format_its_source_decodes() {
+    let mlt = VectorTileEncoding::Mlt { fast_pfor_enabled: false };
+    assert_eq!(Some(TileFormat::Mvt), requested_format(TileKind::Geometry, VectorTileEncoding::Mvt));
+    assert_eq!(Some(TileFormat::Mlt), requested_format(TileKind::Geometry, mlt));
+    assert_eq!(Some(TileFormat::Image), requested_format(TileKind::Raster, VectorTileEncoding::Mvt));
+    let dem = TileKind::Dem(RasterEncoding::Mapbox);
+    assert_eq!(Some(TileFormat::Image), requested_format(dem, VectorTileEncoding::Mvt));
 }

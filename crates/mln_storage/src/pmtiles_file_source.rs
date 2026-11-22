@@ -749,6 +749,7 @@ mod tests {
 
     use super::*;
     use crate::local_file_request::read_file;
+    use crate::resource::TileFormat;
 
     /// Holds the archive's reads until the test answers them.
     #[derive(Default)]
@@ -801,7 +802,11 @@ mod tests {
         let saved = Arc::clone(&answers);
         let (request, responder) = Request::new(move |response| saved.lock().push(response));
         let task = Task::default();
-        source.state.request_tile(&task, &Resource::tile(&url, 1.0, x, y, 1, Scheme::XYZ, method), &responder);
+        source.state.request_tile(
+            &task,
+            &Resource::tile(&url, 1.0, x, y, 1, Scheme::XYZ, TileFormat::Image, method),
+            &responder,
+        );
         (task, request, answers)
     }
 

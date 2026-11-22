@@ -17,7 +17,7 @@ use mln_storage::offline_database::{DatabaseError, OfflineDatabase};
 use mln_storage::resource::{Priority, Usage};
 use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
-use mln_storage::{FileSource, Kind, LoadingMethod, Resource, Responder, Response};
+use mln_storage::{FileSource, Kind, LoadingMethod, Resource, Responder, Response, TileFormat};
 use mln_text::glyph::NON_IDEOGRAPH_GLYPH_RANGES_PER_FONT_STACK;
 use mln_util::chrono::{Timestamp, now};
 use mln_util::compression::compress;
@@ -781,7 +781,16 @@ fn request_errors_are_retried() {
 fn put_tile(test: &OfflineTest, x: i32, y: i32, z: i8) {
     let response = test.response("0-0-0.vector.pbf");
     test.db().put(
-        &Resource::tile("http://127.0.0.1:3000/{z}-{x}-{y}.vector.pbf", 1.0, x, y, z, Scheme::XYZ, LoadingMethod::All),
+        &Resource::tile(
+            "http://127.0.0.1:3000/{z}-{x}-{y}.vector.pbf",
+            1.0,
+            x,
+            y,
+            z,
+            Scheme::XYZ,
+            TileFormat::Mvt,
+            LoadingMethod::All,
+        ),
         &response,
     );
 }
@@ -1095,7 +1104,7 @@ fn hours_from_now(hours: i64) -> Timestamp {
 }
 
 fn xyz_tile(url_template: &str, x: i32, y: i32, z: i8) -> Resource {
-    Resource::tile(url_template, 1.0, x, y, z, Scheme::XYZ, LoadingMethod::All)
+    Resource::tile(url_template, 1.0, x, y, z, Scheme::XYZ, TileFormat::Mvt, LoadingMethod::All)
 }
 
 fn world_at_zoom(max_zoom: f64) -> OfflineRegionDefinition {

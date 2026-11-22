@@ -18,7 +18,7 @@ use mln_util::chrono::Timestamp;
 use mln_util::error::Error;
 use mln_util::hash::HashMap;
 use mln_util::pool::Pool;
-use mln_util::tileset::{Tileset, VectorEncoding};
+use mln_util::tileset::Tileset;
 use parking_lot::Mutex;
 
 use crate::tile::inbox::{InboxSender, SourceData, TileEvent};
@@ -388,17 +388,18 @@ impl CustomLoad {
 }
 
 impl Load {
-    pub(crate) fn new(origin: &DataOrigin, id: &OverscaledTileID, pixel_ratio: f32) -> Self {
+    /// The load of tile `id` of a source of `kind` tiles from `origin`.
+    pub(crate) fn new(origin: &DataOrigin, kind: TileKind, id: &OverscaledTileID, pixel_ratio: f32) -> Self {
         let origin = match origin {
-            DataOrigin::Tileset { tileset, .. } => {
+            DataOrigin::Tileset { tileset, encoding, .. } => {
                 // The render sources make no tiles for a tileset without
                 // tiles; such a tile can't load.
                 let url = tileset.tiles.first().map_or("", String::as_str);
                 let canonical = loaded_tile(tileset, id);
-                let format = match tileset.vector_encoding {
-                    Some(VectorEncoding::MLT) => TileFormat::Mlt,
-                    Some(VectorEncoding::Mapbox) => TileFormat::Mvt,
-                    None => TileFormat::Raster,
+                let format = match (kind, encoding) {
+                    (TileKind::Geometry, VectorTileEncoding::Mvt) => TileFormat::Mvt,
+                    (TileKind::Geometry, VectorTileEncoding::Mlt { .. }) => TileFormat::Mlt,
+                    (TileKind::Raster | TileKind::Dem(_), _) => TileFormat::Image,
                 };
                 let resource = Resource::tile(
                     url,
@@ -407,8 +408,8 @@ impl Load {
                     canonical.y as i32,
                     canonical.z as i8,
                     tileset.scheme,
-                    LoadingMethod::CacheOnly,
                     format,
+                    LoadingMethod::CacheOnly,
                 );
                 OriginLoad::Tileset(Box::new(TilesetLoad {
                     resource,
