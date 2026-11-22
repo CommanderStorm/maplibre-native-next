@@ -22,7 +22,7 @@ use mln_storage::response::{Reason, ResourceError};
 use mln_storage::stub_file_source::{ResponseType, StubFileSource};
 use mln_storage::{
     Cache, DatabaseFileSource, FileSource, Kind, Loader, LoadingMethod, OnlineFileSource, Resource, ResourceOptions,
-    Response, StoragePolicy,
+    Response, StoragePolicy, TileFormat,
 };
 use mln_style::conversion::layer::convert_layer;
 use mln_style::conversion::{Convertible, Error as ConversionError};
@@ -690,6 +690,7 @@ fn offline() {
             0,
             0,
             Scheme::XYZ,
+            TileFormat::Mvt,
             LoadingMethod::All,
         ),
         &expired_item("0-0-0.vector.pbf"),
@@ -1337,7 +1338,16 @@ fn no_content_tiles() {
     // Map.Offline for why the port waits for it first.
     let handle = test.run_loop.handle();
     dbfs.put(
-        &Resource::tile("http://example.com/{z}-{x}-{y}.vector.pbf", 1.0, 0, 0, 0, Scheme::XYZ, LoadingMethod::All),
+        &Resource::tile(
+            "http://example.com/{z}-{x}-{y}.vector.pbf",
+            1.0,
+            0,
+            0,
+            0,
+            Scheme::XYZ,
+            TileFormat::Mvt,
+            LoadingMethod::All,
+        ),
         &response,
     );
     dbfs.invoke(move |_| handle.stop());
@@ -2442,6 +2452,7 @@ fn expired_sprite_sheet() {
             0,
             0,
             Scheme::XYZ,
+            TileFormat::Mvt,
             LoadingMethod::All,
         ),
         &make_response("0-0-0.vector.pbf", false),

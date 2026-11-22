@@ -5,7 +5,7 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use mln_storage::resource::Priority;
+use mln_storage::resource::{Priority, TileFormat};
 use mln_storage::response::{Caching, Reason};
 use mln_storage::{Data, FileSource, LoadingMethod, Request, Resource, Response, StoragePolicy};
 use mln_style::custom_tile_loader::{CustomProvider, CustomTileSubscriber, SubscriberKey};
@@ -388,13 +388,19 @@ impl CustomLoad {
 }
 
 impl Load {
-    pub(crate) fn new(origin: &DataOrigin, id: &OverscaledTileID, pixel_ratio: f32) -> Self {
+    /// The load of tile `id` of a source of `kind` tiles from `origin`.
+    pub(crate) fn new(origin: &DataOrigin, kind: TileKind, id: &OverscaledTileID, pixel_ratio: f32) -> Self {
         let origin = match origin {
-            DataOrigin::Tileset { tileset, .. } => {
+            DataOrigin::Tileset { tileset, encoding, .. } => {
                 // The render sources make no tiles for a tileset without
                 // tiles; such a tile can't load.
                 let url = tileset.tiles.first().map_or("", String::as_str);
                 let canonical = loaded_tile(tileset, id);
+                let format = match (kind, encoding) {
+                    (TileKind::Geometry, VectorTileEncoding::Mvt) => TileFormat::Mvt,
+                    (TileKind::Geometry, VectorTileEncoding::Mlt { .. }) => TileFormat::Mlt,
+                    (TileKind::Raster | TileKind::Dem(_), _) => TileFormat::Image,
+                };
                 let resource = Resource::tile(
                     url,
                     pixel_ratio,
@@ -402,6 +408,7 @@ impl Load {
                     canonical.y as i32,
                     canonical.z as i8,
                     tileset.scheme,
+                    format,
                     LoadingMethod::CacheOnly,
                 );
                 OriginLoad::Tileset(Box::new(TilesetLoad {

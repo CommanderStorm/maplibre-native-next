@@ -25,7 +25,7 @@ use crate::offline::{
     OfflineRegionStatus, OfflineTilePyramidRegionDefinition,
 };
 use crate::offline_database::OfflineDatabase;
-use crate::resource::{Kind, LoadingMethod, Resource, TileData};
+use crate::resource::{Kind, LoadingMethod, Resource, TileData, TileFormat};
 use crate::response::{Caching, Reason, ResourceError, Response};
 
 fn fixture(name: &str) -> PathBuf {
@@ -91,7 +91,7 @@ mod fixture {
     }
 
     pub(crate) fn tile() -> Resource {
-        Resource::tile("https://example.com/test", 1.0, 0, 0, 0, Scheme::XYZ, LoadingMethod::All)
+        Resource::tile("https://example.com/test", 1.0, 0, 0, 0, Scheme::XYZ, TileFormat::Mvt, LoadingMethod::All)
     }
 
     pub(crate) fn response() -> Response {
@@ -134,7 +134,7 @@ fn style(url: &str) -> Resource {
 }
 
 fn tile(url: &str, pixel_ratio: f32, x: i32, y: i32, z: i8) -> Resource {
-    Resource::tile(url, pixel_ratio, x, y, z, Scheme::XYZ, LoadingMethod::All)
+    Resource::tile(url, pixel_ratio, x, y, z, Scheme::XYZ, TileFormat::Mvt, LoadingMethod::All)
 }
 
 fn check_log_empty(log: &FixtureLog) {
@@ -348,7 +348,14 @@ fn example_tile() -> Resource {
     Resource::with_tile_data(
         Kind::Tile,
         "http://example.com/",
-        Some(TileData { url_template: "http://example.com/".to_owned(), pixel_ratio: 1, x: 0, y: 0, z: 0 }),
+        Some(TileData {
+            url_template: "http://example.com/".to_owned(),
+            pixel_ratio: 1,
+            x: 0,
+            y: 0,
+            z: 0,
+            format: TileFormat::Mvt,
+        }),
         LoadingMethod::All,
     )
 }

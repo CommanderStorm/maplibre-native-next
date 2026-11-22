@@ -6,14 +6,20 @@
 //
 // Request headers as in C++: `Range` for data ranges, `If-None-Match` from
 // the prior etag, else `If-Modified-Since` from the prior modification date,
-// user agent "MapLibreNative/1.0", redirects followed. Then the host's
+// user agent "MapLibreNative/1.0", redirects followed. A tile or image
+// request also sends an `Accept` naming what it decodes as (`accept_header`),
+// so that a server that serves a tileset as either MVT or MLT, such as
+// Martin, sends the format the source's `encoding` names. Then the host's
 // headers from the `HttpHeaderTransform`, which a redirect to another origin
-// drops. Response headers are read with case-insensitive names:
-// `Last-Modified`, `ETag`, `Retry-After`, `X-Rate-Limit-Reset`, and the
-// caching headers, which give the response's caching rules together
-// (`CachingHeaders::freshness`) whatever their order: the `Cache-Control`
-// field lines' directives, `Expires`, `Date` and `Age`. A 408 is a connection
-// error, which is retried, and a 5xx takes its `Retry-After` as a 429 does.
+// drops; a host's `Accept` replaces the file source's. Response headers are
+// read with case-insensitive names: `Last-Modified`, `ETag`, `Retry-After`,
+// `X-Rate-Limit-Reset`, and the caching headers, which give the response's
+// caching rules together (`CachingHeaders::freshness`) whatever their order:
+// the `Cache-Control` field lines' directives, `Expires`, `Date` and `Age`.
+// A vector tile whose `Content-Type` names the other vector format logs a
+// warning and decodes as its tileset's format all the same. A 408 is a
+// connection error, which is retried, and a 5xx takes its `Retry-After` as a
+// 429 does.
 //
 // The transfer itself is an `HttpTransport`, the platform's HTTP stack where
 // it has one: NSURLSession on Apple platforms, HttpURLConnection on Android,
@@ -27,12 +33,13 @@ use std::sync::Arc;
 
 use mln_util::chrono::{now, parse_http_date};
 use mln_util::http_header::{CacheControl, CachingHeaders, parse_retry_headers};
+use mln_util::logging::{Event, Log};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::file_source::FileSource;
 use crate::http_header_transform::{HttpHeaderTransform, HttpHeaders};
 use crate::request::Responder;
-use crate::resource::{Kind, Resource};
+use crate::resource::{Kind, Resource, TileFormat};
 use crate::response::{Caching, Reason, ResourceError, Response};
 
 /// The value of `line` if it is the header `name`, matched as an
@@ -168,6 +175,7 @@ fn build_response(resource: &Resource, transfer: Result<Transfer, Box<ResourceEr
     let mut expires: Option<&str> = None;
     let mut date = None;
     let mut age = None;
+    let mut content_type = None;
     for (name, value) in &transfer.headers {
         let (name, value) = (name.as_str(), value.as_str());
         if let Some(value) = header_value(name, "last-modified", value) {
@@ -196,7 +204,14 @@ fn build_response(resource: &Resource, transfer: Result<Transfer, Box<ResourceEr
             retry_after = Some(value.to_owned());
         } else if let Some(value) = header_value(name, "x-rate-limit-reset", value) {
             x_rate_limit_reset = Some(value.to_owned());
+        } else if let Some(value) = header_value(name, "content-type", value) {
+            content_type = Some(value);
         }
+    }
+    if matches!(transfer.status, 200 | 206)
+        && let Some(content_type) = content_type
+    {
+        warn_of_other_vector_format(resource, content_type);
     }
 
     // A response the cache may keep, and a 304 that renews the cached copy,
@@ -268,6 +283,63 @@ fn build_response(resource: &Resource, transfer: Result<Transfer, Box<ResourceEr
 #[must_use]
 pub(crate) fn range_header(resource: &Resource) -> Option<String> {
     resource.data_range.map(|(first, second)| format!("bytes={first}-{second}"))
+}
+
+/// The `Accept` request header of a request for `resource` that sends the
+/// host's `headers`: the media types of what the resource decodes as, then,
+/// less wanted, any other, so that a server that offers none of them doesn't
+/// refuse the request. `None` for a resource that decodes whatever comes, or
+/// when the host's headers set their own `Accept`. Each value is one that a
+/// browser's fetch sends without a CORS preflight.
+#[must_use]
+pub(crate) fn accept_header(resource: &Resource, headers: &[(String, String)]) -> Option<&'static str> {
+    if headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("accept")) {
+        return None;
+    }
+    let format = match resource.kind {
+        Kind::Tile => resource.tile_data.as_ref()?.format,
+        Kind::Image | Kind::SpriteImage => TileFormat::Image,
+        Kind::Unknown | Kind::Style | Kind::Source | Kind::Glyphs | Kind::SpriteJSON => return None,
+    };
+    Some(match format {
+        TileFormat::Mvt => "application/vnd.mapbox-vector-tile, application/x-protobuf, */*;q=0.1",
+        TileFormat::Mlt => "application/vnd.maplibre-tile, */*;q=0.1",
+        TileFormat::Image => "image/png, image/webp, image/jpeg, */*;q=0.1",
+    })
+}
+
+/// The vector tile format that a `Content-Type` value names, if it names one.
+fn vector_tile_format(content_type: &str) -> Option<TileFormat> {
+    let essence = content_type.split(';').next().unwrap_or_default().trim();
+    let is = |media_type: &str| essence.eq_ignore_ascii_case(media_type);
+    if is("application/vnd.maplibre-tile") || is("application/vnd.maplibre-vector-tile") {
+        Some(TileFormat::Mlt)
+    } else if is("application/vnd.mapbox-vector-tile") || is("application/x-protobuf") {
+        Some(TileFormat::Mvt)
+    } else {
+        None
+    }
+}
+
+/// Warns when `resource` is a vector tile and its response's `content_type`
+/// names the other vector format: the source's `encoding` is likely wrong,
+/// or the server ignored the `Accept` header. The tile still decodes as its
+/// tileset's format.
+fn warn_of_other_vector_format(resource: &Resource, content_type: &str) {
+    let Some(expected) = resource.tile_data.as_ref().map(|tile| tile.format) else {
+        return;
+    };
+    let name = match expected {
+        TileFormat::Mvt => "MVT",
+        TileFormat::Mlt => "MLT",
+        TileFormat::Image => return,
+    };
+    if vector_tile_format(content_type).is_some_and(|sent| sent != expected) {
+        Log::warning(
+            Event::HttpRequest,
+            format!("{}: the tileset's tiles are {name}, but the response is {content_type}", resource.url),
+        );
+    }
 }
 
 /// Whether two absolute `http` or `https` URLs have the same origin: scheme,
@@ -422,6 +494,106 @@ mod tests {
 
     fn tile() -> Resource {
         Resource::new(Kind::Tile, "https://example.com/0/0/0.png")
+    }
+
+    fn tile_of(format: TileFormat) -> Resource {
+        let scheme = mln_util::tileset::Scheme::XYZ;
+        Resource::tile("https://example.com/{z}/{x}/{y}", 1.0, 0, 0, 0, scheme, format, crate::LoadingMethod::All)
+    }
+
+    #[test]
+    fn tiles_and_images_accept_what_they_decode_as_first() {
+        let accept = |resource: &Resource| accept_header(resource, &[]);
+        assert_eq!(
+            Some("application/vnd.mapbox-vector-tile, application/x-protobuf, */*;q=0.1"),
+            accept(&tile_of(TileFormat::Mvt))
+        );
+        assert_eq!(Some("application/vnd.maplibre-tile, */*;q=0.1"), accept(&tile_of(TileFormat::Mlt)));
+        let images = Some("image/png, image/webp, image/jpeg, */*;q=0.1");
+        assert_eq!(images, accept(&tile_of(TileFormat::Image)));
+        assert_eq!(images, accept(&Resource::image("https://example.com/image")));
+        assert_eq!(images, accept(&Resource::sprite_image("https://example.com/sprite", 1.0)));
+        assert_eq!(None, accept(&Resource::style("https://example.com/style.json")));
+        assert_eq!(None, accept(&Resource::sprite_json("https://example.com/sprite", 1.0)));
+    }
+
+    #[test]
+    fn a_hosts_accept_replaces_the_file_sources() {
+        let headers = [("accept".to_owned(), "application/x-custom".to_owned())];
+        assert_eq!(None, accept_header(&tile_of(TileFormat::Mlt), &headers));
+        let other = [("X-Token".to_owned(), "a".to_owned())];
+        assert_eq!(Some("application/vnd.maplibre-tile, */*;q=0.1"), accept_header(&tile_of(TileFormat::Mlt), &other));
+    }
+
+    /// A browser preflights a cross-origin request whose `Accept` isn't
+    /// CORS-safelisted (Fetch standard, "CORS-safelisted request-header").
+    #[test]
+    fn every_accept_is_cors_safelisted() {
+        let resources = [
+            tile_of(TileFormat::Mvt),
+            tile_of(TileFormat::Mlt),
+            tile_of(TileFormat::Image),
+            Resource::image("https://example.com/image"),
+        ];
+        for resource in &resources {
+            let accept = accept_header(resource, &[]).unwrap();
+            let unsafe_byte = |b: u8| (b < 0x20 && b != b'\t') || b == 0x7f || b"\"():<>?@[\\]{}".contains(&b);
+            assert!(accept.len() <= 128 && !accept.bytes().any(unsafe_byte), "{accept}");
+        }
+    }
+
+    #[test]
+    fn content_types_name_vector_tile_formats() {
+        assert_eq!(Some(TileFormat::Mlt), vector_tile_format("application/vnd.maplibre-tile"));
+        assert_eq!(Some(TileFormat::Mlt), vector_tile_format("application/vnd.maplibre-vector-tile"));
+        assert_eq!(Some(TileFormat::Mvt), vector_tile_format("Application/X-Protobuf; charset=binary"));
+        assert_eq!(Some(TileFormat::Mvt), vector_tile_format("application/vnd.mapbox-vector-tile"));
+        assert_eq!(None, vector_tile_format("application/octet-stream"));
+    }
+
+    struct Recorder(std::sync::mpsc::Sender<String>);
+
+    impl mln_util::logging::Observer for Recorder {
+        fn on_record(&self, _: mln_util::logging::EventSeverity, event: Event, _: i64, msg: &str) -> bool {
+            if event == Event::HttpRequest {
+                let _ = self.0.send(msg.to_owned());
+            }
+            true
+        }
+    }
+
+    /// The messages logged while `responses` builds responses.
+    fn logged(responses: impl FnOnce()) -> Vec<String> {
+        let (sender, records) = std::sync::mpsc::channel();
+        let previous = Log::set_thread_observer(Some(Box::new(Recorder(sender))));
+        responses();
+        let _ = Log::set_thread_observer(previous);
+        records.try_iter().collect()
+    }
+
+    #[test]
+    fn a_vector_tile_of_the_other_format_warns_and_still_delivers() {
+        let mlt = tile_of(TileFormat::Mlt);
+        let messages = logged(|| {
+            let res = response(200, &[("Content-Type", "application/x-protobuf")], &mlt);
+            assert!(res.data.is_some() && res.error.is_none());
+        });
+        assert_eq!(
+            vec!["https://example.com/0/0/0: the tileset's tiles are MLT, but the response is application/x-protobuf"],
+            messages
+        );
+    }
+
+    #[test]
+    fn a_vector_tile_of_its_own_or_no_named_format_doesnt_warn() {
+        let messages = logged(|| {
+            response(200, &[("Content-Type", "application/vnd.maplibre-tile")], &tile_of(TileFormat::Mlt));
+            response(200, &[("Content-Type", "application/octet-stream")], &tile_of(TileFormat::Mlt));
+            response(200, &[("Content-Type", "application/x-protobuf")], &tile_of(TileFormat::Mvt));
+            response(200, &[("Content-Type", "application/x-protobuf")], &tile_of(TileFormat::Image));
+            response(404, &[("Content-Type", "application/x-protobuf")], &tile_of(TileFormat::Mlt));
+        });
+        assert!(messages.is_empty(), "{messages:?}");
     }
 
     /// Seconds from now until the response expires.

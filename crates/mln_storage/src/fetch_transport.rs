@@ -13,6 +13,9 @@
 //! native cache, too, shows a stale copy rather than none, where the
 //! browser's cache would fail the request.
 //!
+//! A tile or image request sends its `Accept` (`accept_header`), which is
+//! CORS-safelisted, so it needs no preflight, and follows redirects.
+//!
 //! The host's headers (`TransferRequest::headers`) go with the request, which
 //! makes a cross-origin request one that the server must allow in its CORS
 //! preflight. fetch follows a redirect with every header it was given, and
@@ -135,7 +138,7 @@ async fn fetch(
     let cache = if revalidate { web_sys::RequestCache::NoCache } else { web_sys::RequestCache::Default };
     let (response, stale) = match early {
         Some(response) => (response, false),
-        None => match send(url, range.as_deref(), request.headers(), signal, cache).await {
+        None => match send(request, range.as_deref(), signal, cache).await {
             Ok(response) => (response, false),
             // A requester with a copy keeps showing it.
             Err(error) if revalidate => return Err(connection_error(error)),
@@ -165,8 +168,7 @@ async fn stored_copy(
     if signal.is_some_and(web_sys::AbortSignal::aborted) {
         return None;
     }
-    let url = &request.resource().url;
-    let response = send(url, range, request.headers(), signal, web_sys::RequestCache::ForceCache).await.ok()?;
+    let response = send(request, range, signal, web_sys::RequestCache::ForceCache).await.ok()?;
     // A copy of the whole resource isn't the range the request asked for.
     if range.is_some() && response.status() != 206 {
         return None;
@@ -195,20 +197,25 @@ async fn transfer(response: &web_sys::Response, stale: bool) -> Result<Transfer,
     Ok(Transfer { status, headers, body, stale })
 }
 
+/// Fetches `request`'s resource, its `range` of it if any.
 async fn send(
-    url: &str,
+    request: &TransferRequest,
     range: Option<&str>,
-    extra: &[(String, String)],
     signal: Option<&web_sys::AbortSignal>,
     cache: web_sys::RequestCache,
 ) -> Result<web_sys::Response, JsValue> {
+    let (resource, extra) = (request.resource(), request.headers());
+    let accept = http_file_source::accept_header(resource, extra);
     let init = web_sys::RequestInit::new();
     init.set_signal(signal);
     init.set_cache(cache);
-    if range.is_some() || !extra.is_empty() {
+    if range.is_some() || accept.is_some() || !extra.is_empty() {
         let headers = web_sys::Headers::new()?;
         if let Some(range) = range {
             headers.set("Range", range)?;
+        }
+        if let Some(accept) = accept {
+            headers.set("Accept", accept)?;
         }
         for (name, value) in extra {
             headers.set(name, value)?;
@@ -218,6 +225,6 @@ async fn send(
     if !extra.is_empty() {
         init.set_redirect(web_sys::RequestRedirect::Manual);
     }
-    let request = web_sys::Request::new_with_str_and_init(url, &init)?;
+    let request = web_sys::Request::new_with_str_and_init(&resource.url, &init)?;
     JsFuture::from(global_fetch(&request)).await?.dyn_into()
 }
