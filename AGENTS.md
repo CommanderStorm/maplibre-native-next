@@ -92,6 +92,9 @@ not the code.
 
 Use Conventional Commits for commit titles and pull request titles.
 
+Credit AI tools with `Assisted-by:`, never as a commit's author, committer or
+`Co-authored-by:`.
+
 Open a PR as a draft until it's ready to merge.
 
 A PR that could impact performance includes measurements in its description. A
