@@ -71,16 +71,18 @@ ci:
           then: apply
     android:
       covers: >-
-        The workspace and render tests built for aarch64-linux-android, run
-        after CI on AWS Device Farm's phones (a Pixel 9 with a Mali GPU and a
-        Galaxy S25 with an Adreno one) on Vulkan. Catches Android platform code,
-        NDK, JNI and AHardwareBuffer integration, and rendering that differs on
-        phones' GPU drivers. Platform-independent changes that `linux-x64`
-        already covers do not need it.
+        Android cross-target clippy for all four Android ABIs, and the workspace
+        and render tests on Vulkan on AWS Device Farm's phones (a Pixel 9 with a
+        Mali GPU and a Galaxy S25 with an Adreno one), whose package CI builds.
+        Catches Android platform code, NDK/JNI/AHardwareBuffer integration,
+        Vulkan backend portability, rendering that differs on phones' GPU
+        drivers, and Android CI setup issues. Platform-independent changes that
+        `linux-x64` already covers do not need it.
       rules:
         - if:
             files:
               - mise.target-android.*
+              - tools/android-test-host/**
               - tools/device-farm/**
               - mise-tasks/device-farm/**
           then: apply

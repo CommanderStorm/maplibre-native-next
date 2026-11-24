@@ -151,6 +151,27 @@ class PlanTest(unittest.TestCase):
         )
         self.assertEqual(result["target"], {"include": []})
 
+    def test_android_unit_populates_target_matrix(self) -> None:
+        result = outputs(selected(["android"]), secrets=False)
+        self.assertEqual(result["jobs"], ["commits", "lint", "target", "prepare-device-tests"])
+        self.assertFalse(result["secrets"])
+        self.assertEqual(result["test"], {"include": []})
+        self.assertEqual(result["backend"], {"include": []})
+        self.assertEqual(
+            result["target"]["include"],
+            [
+                {
+                    "target": "android",
+                    "runner": "blacksmith-4vcpu-ubuntu-2604",
+                    "mise_env": "target-android",
+                    "clippy_targets": (
+                        "aarch64-linux-android,armv7-linux-androideabi,"
+                        "x86_64-linux-android,i686-linux-android"
+                    ),
+                }
+            ],
+        )
+
     def test_dispatch_units_override_and_validation(self) -> None:
         self.assertIsNone(parse_dispatch_units(""))
         self.assertIsNone(parse_dispatch_units("   "))

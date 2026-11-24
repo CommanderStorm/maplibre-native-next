@@ -77,6 +77,15 @@
     "backend": "webgpu",
     "coverage": "true"
   },
-  { "job": "device-farm", "unit": "android" },
+  {
+    "job": "target",
+    "variant": "android",
+    "unit": "android",
+    "target": "android",
+    "runner": "blacksmith-4vcpu-ubuntu-2604",
+    "mise_env": "target-android",
+    "clippy_targets": "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android"
+  },
+  { "job": "prepare-device-tests", "unit": "android" },
   { "job": "web", "unit": "web" }
 ]

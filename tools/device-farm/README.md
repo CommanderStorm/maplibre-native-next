@@ -9,10 +9,9 @@ Google Pixel 9 (Mali GPU) and a Samsung Galaxy S25 (Adreno GPU), both on Android
 
 1. `mise -E target-android run device-farm:package` builds the test package,
    `target/device-farm/android-tests.zip`. It holds the tests archived by
-   cargo-nextest, the test host (`host/`), the workspace's files, a Linux x64
-   cargo-nextest, and `run-tests.sh` and `runner.sh`. It builds the test host
-   with a JDK, which the task installs, and the SDK's build-tools, which the
-   target-android environment installs.
+   cargo-nextest, the test host for the phones' ABI (`tools/android-test-host`),
+   the workspace's files, a Linux x64 cargo-nextest, and `run-tests.sh` and
+   `runner.sh`.
 2. `schedule.sh` uploads the package with the test spec, `android.yml`, and
    schedules them as a web app test, the kind of test that needs no app. Once
    the run finished, `collect.sh` downloads each phone's test spec output and
@@ -26,23 +25,22 @@ Google Pixel 9 (Mali GPU) and a Samsung Galaxy S25 (Adreno GPU), both on Android
    that other tests write. A test that fails gets one more try, which nextest
    reports as flaky when it passes.
 
-Each test runs in a Java VM's process, as an app's code does, so that HTTP
-(`HttpURLConnection`) and the locale-sensitive expressions (`android.icu`) work:
-`app_process` starts Android's runtime with `host/TestHost.java`, whose native
-half (`host/test-host.c`) loads the test executable into the process and calls
-its main, and the library finds the process's VM. Each test still gets a process
-of its own, so nextest runs them in parallel, as it does elsewhere.
+Each test runs in a Java VM's process, as an app's code does, through the test
+host that the emulator's runs use too (`tools/android-test-host`). `runner.sh`
+copies files with `adb push` rather than through devices-cli, since Device
+Farm's `adb` garbles what `adb shell` reads from stdin.
 
 ## In CI
 
-CI's `device-farm` job builds the package when the `android` unit runs, without
-credentials. Three workflows run it, so that no GitHub runner waits for the
-phones while a run is queued or in progress:
+CI's `prepare-device-tests` job builds the package when the `android` unit runs,
+without credentials. Three workflows run it, so that no GitHub runner waits for
+the phones while a run is queued or in progress:
 
-- `device-farm` schedules the package once the CI run completes, and reports it
-  on the commit as pending, as the `device-farm / android` status. It names the
-  run for the commit. A newer commit of a pull request stops the run of the
-  commit before it.
+- `device-farm` starts with the CI run, waits for `prepare-device-tests`, and
+  schedules the package once the job has built it, while the rest of CI runs. It
+  reports the run on the commit as pending, as the `device-farm / android`
+  status. It names the run for the commit. A newer commit of a pull request
+  stops the run of the commit before it.
 - `device-farm-watch`, one at a time for every run, waits for the runs, and
   starts `device-farm-finish` for each that finished (`watch.sh`). An hourly
   schedule starts it too, in case one failed.
