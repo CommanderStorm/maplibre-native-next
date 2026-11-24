@@ -480,6 +480,7 @@ const _: unsafe extern "C" fn(
     *mut mln_diagnostic,
 ) -> mln_status = crate::style::mln_map_move_style_layer;
 const _: unsafe extern "C" fn(
+    mln_map,
     *const mln_map_view,
     *mut mln_map_projection,
     *mut mln_diagnostic,
@@ -489,6 +490,12 @@ const _: unsafe extern "C" fn(
     *mut mln_map_projection_camera_result,
     *mut mln_diagnostic,
 ) -> mln_status = crate::projection::mln_map_projection_get_camera;
+const _: unsafe extern "C" fn(
+    mln_map_projection,
+    mln_lat_lng,
+    *mut mln_map_projection_terrain_elevation_result,
+    *mut mln_diagnostic,
+) -> mln_status = crate::projection::mln_map_projection_get_terrain_elevation;
 const _: unsafe extern "C" fn(
     mln_map_projection,
     mln_lat_lng,

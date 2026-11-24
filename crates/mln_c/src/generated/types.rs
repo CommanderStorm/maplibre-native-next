@@ -995,6 +995,7 @@ pub const MLN_MAP_VIEWPORT_OPTION_NORTH_ORIENTATION: mln_map_viewport_option_fie
 pub const MLN_MAP_VIEWPORT_OPTION_CONSTRAIN_MODE: mln_map_viewport_option_field = 2;
 pub const MLN_MAP_VIEWPORT_OPTION_VIEWPORT_MODE: mln_map_viewport_option_field = 4;
 pub const MLN_MAP_VIEWPORT_OPTION_FRUSTUM_OFFSET: mln_map_viewport_option_field = 8;
+pub const MLN_MAP_VIEWPORT_OPTION_CENTER_CLAMPED_TO_GROUND: mln_map_viewport_option_field = 16;
 /// The fields that mln_map_viewport_options sets.
 pub type mln_map_viewport_option_field = u32;
 /// A set of mln_map_viewport_option_field bits.
@@ -1023,6 +1024,13 @@ pub const MLN_MAP_MODE_STATIC: mln_map_mode = 1;
 pub const MLN_MAP_MODE_TILE: mln_map_mode = 2;
 /// When a map renders.
 pub type mln_map_mode = u32;
+/// Far enough to hide the cracks.
+pub const MLN_TERRAIN_SKIRT_LENGTH_AUTO: mln_terrain_skirt_length = 0;
+/** No skirts, so they don't show through translucent layers over the
+ terrain.*/
+pub const MLN_TERRAIN_SKIRT_LENGTH_NONE: mln_terrain_skirt_length = 1;
+/// How far the skirts that hide the cracks between terrain tiles reach down.
+pub type mln_terrain_skirt_length = u32;
 /// A size in logical pixels, and the physical pixels in each logical pixel.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1042,6 +1050,8 @@ pub const MLN_MAP_OPTION_EVENT_MASK: mln_map_option_field = 1;
 pub const MLN_MAP_OPTION_TILE_CACHE_ENABLED: mln_map_option_field = 2;
 pub const MLN_MAP_OPTION_SYSTEM_FONTS_ENABLED: mln_map_option_field = 4;
 pub const MLN_MAP_OPTION_LOCAL_IDEOGRAPHS_ENABLED: mln_map_option_field = 8;
+pub const MLN_MAP_OPTION_TERRAIN_SKIRT_LENGTH: mln_map_option_field = 16;
+pub const MLN_MAP_OPTION_TERRAIN_DRAPE_MEMORY_LIMIT: mln_map_option_field = 32;
 /// The fields that mln_map_options sets.
 pub type mln_map_option_field = u32;
 /// A set of mln_map_option_field bits.
@@ -1087,6 +1097,12 @@ pub struct mln_map_options {
  from a glyph PBF downloaded for every few characters. Without it, they
  do.*/
     pub local_ideographs_enabled: bool,
+    /// The terrain's skirts. Without it, MLN_TERRAIN_SKIRT_LENGTH_AUTO.
+    pub terrain_skirt_length: mln_terrain_skirt_length,
+    /** The most GPU memory, in bytes, for the layers drawn over the terrain. Past
+ it, the terrain farthest from the center of the view looks blurrier.
+ Without it, there's no limit.*/
+    pub terrain_drape_memory_limit: u64,
 }
 /// A point on the screen, in logical pixels from the map's top-left corner.
 #[repr(C)]
@@ -1567,6 +1583,9 @@ pub struct mln_map_viewport_options {
     pub constrain_mode: mln_constrain_mode,
     pub viewport_mode: mln_viewport_mode,
     pub frustum_offset: mln_edge_insets,
+    /** Whether the camera's center stands on the terrain, in place of the center
+ altitude it's given, the style's included. On by default.*/
+    pub center_clamped_to_ground: bool,
 }
 /** A map's whole viewport.
 
@@ -1578,6 +1597,7 @@ pub struct mln_map_viewport {
     pub constrain_mode: mln_constrain_mode,
     pub viewport_mode: mln_viewport_mode,
     pub frustum_offset: mln_edge_insets,
+    pub center_clamped_to_ground: bool,
 }
 pub const MLN_PROJECTION_TYPE_MERCATOR: mln_projection_type = 0;
 /// Draws the map as a globe.
@@ -4055,6 +4075,17 @@ pub struct mln_log_handler {
 pub struct mln_map_projection_camera_result {
     pub size: u32,
     pub camera: mln_camera,
+}
+/// The height of the ground at a coordinate.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct mln_map_projection_terrain_elevation_result {
+    pub size: u32,
+    /// Whether the map drew terrain at the coordinate.
+    pub has_elevation: bool,
+    /** Meters above sea level, with the terrain's exaggeration. 0 without
+ `has_elevation`.*/
+    pub elevation_meters: f64,
 }
 pub const MLN_RENDER_RESULT_RENDERED: mln_render_result = 0;
 /// The map had nothing new to draw.

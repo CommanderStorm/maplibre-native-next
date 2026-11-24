@@ -150,6 +150,7 @@ typedef enum MLN_BINDING(
   MLN_MAP_VIEWPORT_OPTION_CONSTRAIN_MODE = 1U << 1U,
   MLN_MAP_VIEWPORT_OPTION_VIEWPORT_MODE = 1U << 2U,
   MLN_MAP_VIEWPORT_OPTION_FRUSTUM_OFFSET = 1U << 3U,
+  MLN_MAP_VIEWPORT_OPTION_CENTER_CLAMPED_TO_GROUND = 1U << 4U,
 } mln_map_viewport_option_field;
 
 /** A set of mln_map_viewport_option_field bits. */
@@ -186,6 +187,19 @@ typedef enum mln_map_mode : uint32_t {
   MLN_MAP_MODE_TILE = 2,
 } mln_map_mode;
 
+/**
+ * How far the skirts that hide the cracks between terrain tiles reach down.
+ */
+typedef enum mln_terrain_skirt_length : uint32_t {
+  /** Far enough to hide the cracks. */
+  MLN_TERRAIN_SKIRT_LENGTH_AUTO = 0,
+  /**
+   * No skirts, so they don't show through translucent layers over the
+   * terrain.
+   */
+  MLN_TERRAIN_SKIRT_LENGTH_NONE = 1,
+} mln_terrain_skirt_length;
+
 /** A size in logical pixels, and the physical pixels in each logical pixel. */
 typedef struct mln_logical_extent {
   uint32_t width;
@@ -205,6 +219,8 @@ typedef enum MLN_BINDING("kind=bitmask") mln_map_option_field : uint32_t {
   MLN_MAP_OPTION_TILE_CACHE_ENABLED = 1U << 1U,
   MLN_MAP_OPTION_SYSTEM_FONTS_ENABLED = 1U << 2U,
   MLN_MAP_OPTION_LOCAL_IDEOGRAPHS_ENABLED = 1U << 3U,
+  MLN_MAP_OPTION_TERRAIN_SKIRT_LENGTH = 1U << 4U,
+  MLN_MAP_OPTION_TERRAIN_DRAPE_MEMORY_LIMIT = 1U << 5U,
 } mln_map_option_field;
 
 /** A set of mln_map_option_field bits. */
@@ -265,6 +281,16 @@ typedef struct mln_map_options {
    */
   bool local_ideographs_enabled
     MLN_BINDING("mask=fields;bit=MLN_MAP_OPTION_LOCAL_IDEOGRAPHS_ENABLED");
+  /** The terrain's skirts. Without it, MLN_TERRAIN_SKIRT_LENGTH_AUTO. */
+  mln_terrain_skirt_length terrain_skirt_length
+    MLN_BINDING("mask=fields;bit=MLN_MAP_OPTION_TERRAIN_SKIRT_LENGTH");
+  /**
+   * The most GPU memory, in bytes, for the layers drawn over the terrain. Past
+   * it, the terrain farthest from the center of the view looks blurrier.
+   * Without it, there's no limit.
+   */
+  uint64_t terrain_drape_memory_limit
+    MLN_BINDING("mask=fields;bit=MLN_MAP_OPTION_TERRAIN_DRAPE_MEMORY_LIMIT");
 } mln_map_options;
 
 /** A point on the screen, in logical pixels from the map's top-left corner. */
@@ -1009,6 +1035,13 @@ typedef struct mln_map_viewport_options {
     MLN_BINDING("mask=fields;bit=MLN_MAP_VIEWPORT_OPTION_VIEWPORT_MODE");
   mln_edge_insets frustum_offset
     MLN_BINDING("mask=fields;bit=MLN_MAP_VIEWPORT_OPTION_FRUSTUM_OFFSET");
+  /**
+   * Whether the camera's center stands on the terrain, in place of the center
+   * altitude it's given, the style's included. On by default.
+   */
+  bool center_clamped_to_ground MLN_BINDING(
+    "mask=fields;bit=MLN_MAP_VIEWPORT_OPTION_CENTER_CLAMPED_TO_GROUND"
+  );
 } mln_map_viewport_options;
 
 /**
@@ -1021,6 +1054,7 @@ typedef struct mln_map_viewport {
   mln_constrain_mode constrain_mode;
   mln_viewport_mode viewport_mode;
   mln_edge_insets frustum_offset;
+  bool center_clamped_to_ground;
 } mln_map_viewport;
 
 /**

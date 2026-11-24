@@ -236,6 +236,61 @@ fn a_projection_converts_on_the_ground_it_is_given() {
     assert!(on_the_ridge > 9, "{on_the_ridge} pixels meet the ridge");
 }
 
+/// A projection reads the height of its ground where the ground was drawn,
+/// and none where it wasn't, or on the flat map.
+#[test]
+fn a_projection_reads_the_height_of_its_ground() {
+    let run_loop = Queue::<()>::new();
+    let ridge = Ridge::drawn_from(world(&center()).y);
+    let map = map_over(STYLE, Some(&ridge), true, pitched(60.0), &run_loop);
+    let from_map = MapProjection::new(&map);
+    let flat = MapProjection::from_view(&map.snapshot().view).unwrap();
+
+    let at = |pixels_south: f64| {
+        let point = world(&center()) + DVec2::new(0.0, pixels_south * PIXEL);
+        let point = geometry::Point::new(point.x, point.y);
+        mln_util::projection::Projection::unproject(&point, 1.0 / mln_util::constants::TILE_SIZE_D, WrapMode::Wrapped)
+            .unwrap()
+    };
+    assert_near(Ridge::PEAK, from_map.elevation(&at(100.0)).unwrap(), 1e-6, "the peak");
+    assert_near(Ridge::PEAK / 2.0, from_map.elevation(&at(130.0)).unwrap(), 1e-6, "the slope");
+    assert_eq!(from_map.elevation(&at(-10.0)), None, "north of the drawn ground");
+    assert_eq!(flat.elevation(&at(100.0)), None, "the flat map");
+}
+
+/// Ground the camera stands on under its center, at 500 m, that the
+/// renderer didn't draw, as when the camera is below every tile's range.
+#[derive(Debug)]
+struct UndrawnUnderCenter;
+
+impl Elevation for UndrawnUnderCenter {
+    fn at(&self, _: LatLng) -> Option<f64> {
+        Some(500.0)
+    }
+
+    fn min_at(&self, _: LatLng) -> Option<f64> {
+        Some(500.0)
+    }
+
+    fn surface_at(&self, _: DVec2) -> Option<f64> {
+        None
+    }
+
+    fn range(&self) -> Option<(f64, f64)> {
+        Some((500.0, 500.0))
+    }
+}
+
+/// A projection reads no height from ground the camera stands on but the
+/// renderer didn't draw.
+#[test]
+fn a_projection_reads_no_height_of_ground_not_drawn() {
+    let run_loop = Queue::<()>::new();
+    let ground: Arc<dyn Elevation> = Arc::new(UndrawnUnderCenter);
+    let map = map_over(STYLE, Some(&ground), true, pitched(60.0), &run_loop);
+    assert_eq!(MapProjection::new(&map).elevation(&center()), None);
+}
+
 /// A projection given the map's ground fits its view's planes to it as the
 /// map does, so the far rows of a camera at sea level over ground 1000 m
 /// below it meet that ground, past the flat map's far plane; and a camera
