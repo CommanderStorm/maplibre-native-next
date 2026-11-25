@@ -549,16 +549,16 @@ fn fill_extrusion_roof_counts_its_vertices_once() {
 #[test]
 fn fill_extrusion_roof_beside_long_walls_takes_its_own_segment() {
     // The zigzag makes a ring of 9,644 vertices, which only the walls draw,
-    // and a roof of 59,160 at the zoom's granularity, few enough for a
+    // and a roof of 42,372 at the zoom's granularity, few enough for a
     // segment of their own.
     let polygon = fine_zigzag();
-    let tile = CanonicalTileID::new(2, 1, 1);
+    let tile = CanonicalTileID::new(4, 5, 5);
     let bucket = extrude_on_the_globe(&polygon, &tile);
-    let roof = subdivide_polygon(&polygon, &tile, 32, false, &mut Tessellator::default());
+    let roof = subdivide_polygon(&polygon, &tile, 8, false, &mut Tessellator::default());
     let last = bucket.triangle_segments.last().expect("segment");
     assert_eq!(roof.vertices.len(), last.vertex_length);
     assert_eq!(roof.triangles.len() * 3, last.index_length);
-    assert_eq!(32, roof_granularity(&bucket, &polygon, &tile));
+    assert_eq!(8, roof_granularity(&bucket, &polygon, &tile));
 }
 
 // gtest: Subdivision.FillExtrusionRoofBeyondTheIndexLimitKeepsItsGranularity
