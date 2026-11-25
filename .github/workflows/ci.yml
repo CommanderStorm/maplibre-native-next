@@ -53,6 +53,7 @@ jobs:
       test: ${{ steps.plan.outputs.test }}
       backend: ${{ steps.plan.outputs.backend }}
       target: ${{ steps.plan.outputs.target }}
+      prepare-device-tests: ${{ steps.plan.outputs.prepare-device-tests }}
     steps:
       - name: Plan coverage
         id: rubberstamp
@@ -345,35 +346,48 @@ jobs:
           path: target/*/tmp/render_tests*
           if-no-files-found: ignore
 
-  # The Android tests, built for AWS Device Farm's phones (`mise run
-  # device-farm:package`). The maplibre-device-farm GitHub App picks up the
-  # uploaded artifact once this job finishes (.config/device-farm.toml,
-  # tools/device-farm/README.md).
+  # The tests built for AWS Device Farm's phones, one package per platform
+  # (`mise run device-farm:package <platform>`). The maplibre-device-farm GitHub
+  # App runs main's packages on the phones once this job has built them
+  # (.config/device-farm.toml, tools/device-farm/README.md). A pull request
+  # builds a platform's package only when it changes its packaging, and tests
+  # on the emulator and the simulator in the target jobs.
   prepare-device-tests:
     needs: plan
     if:
       github.event.pull_request.state != 'closed' &&
       contains(fromJSON(needs.plan.outputs.jobs), 'prepare-device-tests')
-    runs-on: blacksmith-4vcpu-ubuntu-2604
+    name: prepare-${{ matrix.platform }}-device-tests
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.prepare-device-tests) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     steps:
-      - uses: useblacksmith/checkout@75c49b6ed30ce59336e9252425796cfcfac155f8 # v1.8.3
+      - if: runner.os == 'Linux'
+        uses: useblacksmith/checkout@75c49b6ed30ce59336e9252425796cfcfac155f8 # v1.8.3
+        with:
+          persist-credentials: false
+      - if: runner.os != 'Linux'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-ci-deps
         with:
-          mise-env: target-android
+          mise-env: ${{ matrix.mise_env }}
           save-rust-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Package
-        run: mise run device-farm:package
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: mise run device-farm:package "$PLATFORM"
 
       - name: Upload the package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-device-tests
-          path: target/device-farm/android-tests.zip
+          name: ${{ matrix.platform }}-device-tests
+          path: target/device-farm/${{ matrix.platform }}
           retention-days: 3
           # The package's archives are compressed already.
           compression-level: 0

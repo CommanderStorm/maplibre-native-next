@@ -100,6 +100,7 @@ class PlanTest(unittest.TestCase):
             ["android"],
             ["freebsd"],
             ["ohos"],
+            ["android-device-farm", "ios-device-farm"],
             ["web", "package"],
             ["linux-x64"],
         ):
@@ -112,6 +113,24 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(result["test"], {"include": []})
         self.assertEqual(result["backend"], {"include": []})
         self.assertEqual(result["target"], {"include": []})
+
+    def test_device_farm_units_build_each_platforms_package(self) -> None:
+        result = outputs(selected(["ios-device-farm"]), secrets=False)
+        self.assertEqual(result["jobs"], ["commits", "lint", "prepare-device-tests"])
+        self.assertEqual(
+            result["prepare-device-tests"]["include"],
+            [
+                {
+                    "platform": "ios",
+                    "runner": "blacksmith-6vcpu-macos-26",
+                    "mise_env": "target-apple",
+                }
+            ],
+        )
+        self.assertEqual(
+            outputs(selected([]), secrets=False)["prepare-device-tests"],
+            {"include": []},
+        )
 
     def test_unknown_rubberstamp_units_select_nothing_extra(self) -> None:
         self.assertEqual(names(selected(["nonexistent"])), ALWAYS)
@@ -158,7 +177,7 @@ class PlanTest(unittest.TestCase):
     def test_android_unit_populates_target_matrix(self) -> None:
         result = outputs(selected(["android"]), secrets=False)
         self.assertEqual(
-            result["jobs"], ["commits", "lint", "target", "prepare-device-tests"]
+            result["jobs"], ["commits", "lint", "target"]
         )
         self.assertFalse(result["secrets"])
         self.assertEqual(result["test"], {"include": []})
@@ -170,10 +189,14 @@ class PlanTest(unittest.TestCase):
                     "target": "android",
                     "runner": "blacksmith-4vcpu-ubuntu-2604",
                     "mise_env": "target-android",
+                    "device": "Android emulator",
+                    "device_command": "bash tools/ci/boot-android.sh",
                     "clippy_targets": (
                         "aarch64-linux-android,armv7-linux-androideabi,"
                         "x86_64-linux-android,i686-linux-android"
                     ),
+                    "test_target": "x86_64-linux-android",
+                    "backend": "vulkan",
                 }
             ],
         )

@@ -121,9 +121,12 @@
     "target": "android",
     "runner": "blacksmith-4vcpu-ubuntu-2604",
     "mise_env": "target-android",
-    "clippy_targets": "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android"
+    "device": "Android emulator",
+    "device_command": "bash tools/ci/boot-android.sh",
+    "clippy_targets": "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android",
+    "test_target": "x86_64-linux-android",
+    "backend": "vulkan"
   },
-  { "job": "prepare-device-tests", "unit": "android" },
   {
     "job": "target",
     "variant": "ios",
@@ -162,6 +165,22 @@
     "clippy_targets": "aarch64-unknown-linux-ohos,armv7-unknown-linux-ohos,x86_64-unknown-linux-ohos",
     "test_target": "x86_64-unknown-linux-ohos",
     "backend": "gl"
+  },
+  {
+    "job": "prepare-device-tests",
+    "variant": "android",
+    "unit": "android-device-farm",
+    "platform": "android",
+    "runner": "blacksmith-4vcpu-ubuntu-2604",
+    "mise_env": "target-android"
+  },
+  {
+    "job": "prepare-device-tests",
+    "variant": "ios",
+    "unit": "ios-device-farm",
+    "platform": "ios",
+    "runner": "blacksmith-6vcpu-macos-26",
+    "mise_env": "target-apple"
   },
   { "job": "web", "unit": "web" }
 ]
