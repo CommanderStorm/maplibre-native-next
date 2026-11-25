@@ -26,7 +26,7 @@ use mln_vec_map::VecMap;
 use crate::bucket::{Bucket, BucketBase, FeatureStates, UploadNeeds};
 use crate::bucket_geometry::{GeometryUpload, GeometryVec};
 use crate::layer_type::EvaluatedLayer;
-use crate::layout::symbol_instance::{SymbolInstance, SymbolInstancePools, WritingModes};
+use crate::layout::symbol_instance::{SymbolInstance, SymbolInstancePools, WritingMode};
 use crate::paint_property_binder::PaintPropertyBinder;
 use crate::text::quads::SymbolQuad;
 use crate::util::pool::PoolRange;
@@ -121,10 +121,33 @@ pub(crate) struct SortKeyRange {
     pub(crate) end: usize,
 }
 
+/// What a symbol's size depends on.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub(crate) enum SizeKind {
+    /// Neither the zoom nor the feature.
+    #[default]
+    Constant,
+    /// The zoom: a camera expression.
+    Camera,
+    /// The feature: a source function.
+    Source,
+    /// Both: a composite function.
+    Composite,
+}
+
+impl SizeKind {
+    pub(crate) fn is_zoom_constant(self) -> bool {
+        matches!(self, SizeKind::Constant | SizeKind::Source)
+    }
+
+    pub(crate) fn is_feature_constant(self) -> bool {
+        matches!(self, SizeKind::Constant | SizeKind::Camera)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ZoomEvaluatedSize {
-    pub(crate) is_zoom_constant: bool,
-    pub(crate) is_feature_constant: bool,
+    pub(crate) kind: SizeKind,
     pub(crate) size_t: f32,
     pub(crate) size: f32,
     pub(crate) layout_size: f32,
@@ -227,7 +250,11 @@ impl SymbolSizeBinder {
         match self {
             SymbolSizeBinder::Constant { layout_size, covering_ranges, expression } => {
                 let mut size = *layout_size;
-                let is_zoom_constant = !(covering_ranges.is_some() || expression.is_some());
+                let kind = if covering_ranges.is_some() || expression.is_some() {
+                    SizeKind::Camera
+                } else {
+                    SizeKind::Constant
+                };
                 if let (Some((zoom_levels, size_levels)), Some(expression)) = (covering_ranges, expression) {
                     // Even though we could get the exact value of the camera
                     // function at the current zoom, we intentionally do not:
@@ -240,27 +267,16 @@ impl SymbolSizeBinder {
                 } else if let Some(expression) = expression {
                     size = expression.evaluate(&EvaluationContext::new(current_zoom), 0.0);
                 }
-                ZoomEvaluatedSize {
-                    is_zoom_constant,
-                    is_feature_constant: true,
-                    size_t: unused,
-                    size,
-                    layout_size: *layout_size,
-                }
+                ZoomEvaluatedSize { kind, size_t: unused, size, layout_size: *layout_size }
             }
-            SymbolSizeBinder::SourceFunction { .. } => ZoomEvaluatedSize {
-                is_zoom_constant: true,
-                is_feature_constant: false,
-                size_t: unused,
-                size: unused,
-                layout_size: unused,
-            },
+            SymbolSizeBinder::SourceFunction { .. } => {
+                ZoomEvaluatedSize { kind: SizeKind::Source, size_t: unused, size: unused, layout_size: unused }
+            }
             SymbolSizeBinder::CompositeFunction { expression, covering_zoom_stops, .. } => {
                 let size_interpolation_t =
                     mln_math::clamp_f32(expression.interpolation_factor(*covering_zoom_stops, current_zoom), 0.0, 1.0);
                 ZoomEvaluatedSize {
-                    is_zoom_constant: false,
-                    is_feature_constant: false,
+                    kind: SizeKind::Composite,
                     size_t: size_interpolation_t,
                     size: unused,
                     layout_size: unused,
@@ -279,7 +295,7 @@ pub(crate) struct PlacedSymbol {
     pub(crate) lower_size: f32,
     pub(crate) upper_size: f32,
     pub(crate) line_offset: [f32; 2],
-    pub(crate) writing_modes: WritingModes,
+    pub(crate) writing_modes: WritingMode,
     /// The line the symbol is placed along, in its buffer's `pools.lines`.
     pub(crate) line: PoolRange,
     /// The distance along `line` from the anchor to each vertex, in its

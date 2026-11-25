@@ -1262,7 +1262,7 @@ fn assert_glyphs_draw_in_circles(dem: fn() -> Response, pitch_with_map: bool) {
 
     use crate::buckets::symbol_bucket::{PlacedSymbol, PlacedSymbolPools, SymbolSizeBinder};
     use crate::geometry::feature_index::IndexedSubfeature;
-    use crate::layout::symbol_instance::WritingModes;
+    use crate::layout::symbol_instance::WritingMode;
     use crate::layout::symbol_projection::{
         LabelPlaneProjector, LineLabelAlignment, SymbolHeights, reproject_line_labels,
     };
@@ -1296,7 +1296,7 @@ fn assert_glyphs_draw_in_circles(dem: fn() -> Response, pitch_with_map: bool) {
         lower_size: 24.0,
         upper_size: 24.0,
         line_offset: [0.0; 2],
-        writing_modes: WritingModes { horizontal: true, vertical: false },
+        writing_modes: WritingMode::Horizontal,
         line: PoolRange::extend(&mut pools.lines, line.iter().copied()),
         tile_distances: PoolRange::extend(
             &mut pools.tile_distances,

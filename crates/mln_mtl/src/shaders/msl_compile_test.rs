@@ -32,6 +32,12 @@ use super::msl_sources::PRELUDE;
 use super::shader_source::{BUILT_INS, ShaderSource, first_vertex_buffer};
 use crate::Id;
 
+#[derive(Clone, Copy)]
+enum Overdraw {
+    Off,
+    On,
+}
+
 fn sources() -> impl Iterator<Item = (&'static Program, &'static ShaderSource)> {
     BUILT_INS.iter().copied()
 }
@@ -87,15 +93,15 @@ fn uniform_properties(text: &str) -> BTreeSet<String> {
     names
 }
 
-/// ProgramParameters(1.0, overdraw), the globe define if `globe`, and a
-/// uniform define per name.
+/// ProgramParameters(1.0, overdraw), the projection defines, and a uniform
+/// define per name.
 fn defines<'a>(
-    overdraw: bool,
+    overdraw: Overdraw,
     projection: ProjectionVariant,
     uniforms: impl IntoIterator<Item = &'a String>,
 ) -> Vec<(String, String)> {
     let mut defines = vec![("DEVICE_PIXEL_RATIO".to_owned(), "1.0".to_owned())];
-    if overdraw {
+    if matches!(overdraw, Overdraw::On) {
         defines.push(("OVERDRAW_INSPECTOR".to_owned(), String::new()));
     }
     if projection.is_globe() {
@@ -155,13 +161,14 @@ fn every_shader_source_compiles() {
             // Every property per vertex, every property as a uniform, each one
             // alone as a uniform, and the overdraw inspector.
             let mut variants = vec![
-                ("no uniforms".to_owned(), defines(false, projection, [])),
-                ("all uniforms".to_owned(), defines(false, projection, &properties)),
-                ("overdraw inspector".to_owned(), defines(true, projection, [])),
-                ("overdraw inspector, all uniforms".to_owned(), defines(true, projection, &properties)),
+                ("no uniforms".to_owned(), defines(Overdraw::Off, projection, [])),
+                ("all uniforms".to_owned(), defines(Overdraw::Off, projection, &properties)),
+                ("overdraw inspector".to_owned(), defines(Overdraw::On, projection, [])),
+                ("overdraw inspector, all uniforms".to_owned(), defines(Overdraw::On, projection, &properties)),
             ];
-            variants
-                .extend(properties.iter().map(|name| (format!("uniform {name}"), defines(false, projection, [name]))));
+            variants.extend(
+                properties.iter().map(|name| (format!("uniform {name}"), defines(Overdraw::Off, projection, [name]))),
+            );
             for (variant, defines) in variants {
                 match compile(&device, &text, &defines, source.fast_math) {
                     Ok(library) => {
@@ -374,7 +381,7 @@ fn ubo_ids_and_sizes_are_the_renderers() {
         }
         text.push_str(&asserts);
         for &projection in ProjectionVariant::of(program) {
-            if let Err(error) = compile(&device, &text, &defines(false, projection, []), source.fast_math) {
+            if let Err(error) = compile(&device, &text, &defines(Overdraw::Off, projection, []), source.fast_math) {
                 failures.push(format!("{} ({projection:?}):\n{error}", program.name));
             }
         }
@@ -456,8 +463,8 @@ fn pipelines_build_with_the_programs_attributes() {
         ];
         let variants = ProjectionVariant::of(program).iter().flat_map(|&projection| {
             [
-                (format!("{projection:?}, no uniforms"), defines(false, projection, [])),
-                (format!("{projection:?}, all uniforms"), defines(false, projection, &properties)),
+                (format!("{projection:?}, no uniforms"), defines(Overdraw::Off, projection, [])),
+                (format!("{projection:?}, all uniforms"), defines(Overdraw::Off, projection, &properties)),
             ]
         });
         for (variant, defines) in variants {

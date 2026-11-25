@@ -241,7 +241,7 @@ impl Placement {
         mut place: impl FnMut(&mut Self, bool) -> PlacedText,
     ) -> PlacedText {
         let bucket = ctx.bucket;
-        if !bucket.allow_vertical_placement || !text.runs.writing_modes().vertical {
+        if !bucket.allow_vertical_placement || !text.runs.writing_modes().has_vertical() {
             return place(self, false);
         }
         debug_assert_ne!(bucket.placement_modes.as_slice(), []);
