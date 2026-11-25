@@ -68,12 +68,12 @@ pub(crate) fn emit(layer: &LayerSpec) -> String {
     w.line("// (tools/style-codegen/v8.json). Do not edit.");
     w.blank();
 
-    let mut imports = vec!["crate::layer_type::LayerStyle".to_owned(), format!("crate::layers::{t}")];
+    let mut imports = vec!["crate::layer::LayerStyle".to_owned(), format!("crate::layers::{t}")];
     imports.extend(crate::emit_table::imports(&Visit::Function));
     let heatmap_color = layer.paint_properties.iter().find(|p| p.name == "heatmap-color");
     if heatmap_color.is_some() {
-        imports.push("crate::color_ramp_property_value::ColorRampPropertyValue".into());
-        imports.push("crate::conversion::convert_color_ramp_property_value".into());
+        imports.push("crate::property::color_ramp::ColorRampPropertyValue".into());
+        imports.push("crate::property::color_ramp::convert_color_ramp_property_value".into());
         imports.push("crate::expression::Functions".into());
         imports.push("crate::conversion::{Convertible, Error}".into());
     }

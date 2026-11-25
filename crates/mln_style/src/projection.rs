@@ -1,19 +1,14 @@
-#[cfg(test)]
 use std::sync::Arc;
 
 use mln_style_types::{ProjectionDefinition, ProjectionType};
 use mln_util::subdivision_granularity::SubdivisionGranularitySetting;
 
-#[cfg(test)]
-use crate::conversion::convert_property_value;
-#[cfg(test)]
+use crate::conversion::to_value::make_style_property;
 use crate::conversion::{Convertible, Error};
-use crate::conversion_impl::make_style_property;
-use crate::expression::EvaluationContext;
-#[cfg(test)]
-use crate::expression::Functions;
-use crate::property_value::{PropertyValue, StyleValue as _};
-use crate::style_property::StyleProperty;
+use crate::expression::{EvaluationContext, Functions};
+use crate::property::convert::convert_property_value;
+use crate::property::table::StyleProperty;
+use crate::property::value::{PropertyValue, StyleValue as _};
 
 /// The style's root `projection` object.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -95,4 +90,26 @@ impl Projection {
         };
         definition.at_zoom(f64::from(zoom))
     }
+}
+
+/// Converts the style's `projection`, whose expressions parse against
+/// `functions`.
+pub fn convert_projection(
+    value: &Convertible<'_>,
+    functions: &Arc<Functions>,
+    error: &mut Error,
+) -> Option<Projection> {
+    if !value.is_object() {
+        error.message = "projection must be an object".to_owned();
+        return None;
+    }
+
+    let mut projection = Projection::new();
+
+    if let Some(type_) = value.object_member("type") {
+        let converted = convert_property_value::<ProjectionDefinition>(&type_, error, false, false, functions)?;
+        projection.set_type(converted);
+    }
+
+    Some(projection)
 }

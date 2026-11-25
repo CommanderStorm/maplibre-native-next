@@ -18,7 +18,7 @@ use mln_gfx::texture2d::SamplerState;
 use mln_gfx::types::{TextureFilterType, TextureWrapType};
 use mln_gfx::{AttributeDataType, ColorMode, CullFaceMode, DrawMode};
 use mln_style::expression::{Dependency, EvaluationContext, GlobalStateMap, global_state_refs_intersect};
-use mln_style::layer_type::LayerStyle;
+use mln_style::layer::LayerStyle;
 use mln_style::layers::Line;
 use mln_style::layers::line_layer_properties::LinePaintProperties;
 use mln_style::{PropertyEvaluationParameters, StyleValue as _};
@@ -130,7 +130,7 @@ fn dash_pattern_cap(bucket: &LineBucket) -> LinePatternCap {
 }
 
 pub(crate) fn apply_color_ramp(
-    color_value: &mln_style::color_ramp_property_value::ColorRampPropertyValue,
+    color_value: &mln_style::property::color_ramp::ColorRampPropertyValue,
     image: &mut PremultipliedImage,
     global_state: Option<&GlobalStateMap>,
 ) -> bool {

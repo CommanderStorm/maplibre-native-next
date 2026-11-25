@@ -2,9 +2,10 @@ use mln_style_types::Position;
 use mln_util::Color;
 
 use super::util::parse_json;
-use crate::conversion::{Convertible, Error, convert_light};
+use crate::conversion::{Convertible, Error};
 use crate::expression::Functions;
-use crate::property_value::StyleValue as _;
+use crate::light::convert_light;
+use crate::property::value::StyleValue as _;
 
 // gtest: StyleConversion.Light
 #[test]

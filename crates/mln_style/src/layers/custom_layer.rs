@@ -14,8 +14,8 @@ use std::sync::{Arc, Weak};
 
 use mln_map_types::{FrameProjection, MapView};
 
-use crate::layer_type::{LayerStyle, LayerTypeInfo, NoProperties, SourceKind, StyleLayerType};
-use crate::property_table::{PropertyTable, PropertyVisitor};
+use crate::layer::{LayerStyle, LayerTypeInfo, NoProperties, SourceKind, StyleLayerType};
+use crate::property::table::{PropertyTable, PropertyVisitor};
 
 /// The frame that a custom layer draws into.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,8 +143,7 @@ mod tests {
 
     use super::{Custom, CustomLayerHost};
     use crate::StyleRegistry;
-    use crate::layer::Layer;
-    use crate::layer_type::LayerStyle;
+    use crate::layer::{Layer, LayerStyle};
 
     struct Host;
 

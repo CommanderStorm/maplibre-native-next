@@ -4,12 +4,11 @@
 use std::sync::Arc;
 
 use mln_map_types::MapMode;
-use mln_style::conversion::{Convertible, Error as ConversionError, convert_layer};
-use mln_style::layer::Layer;
+use mln_style::conversion::{Convertible, Error as ConversionError};
+use mln_style::layer::{Layer, convert_layer};
 use mln_style::layers::Fill;
-use mln_style::renderer::property_evaluation_parameters::PropertyEvaluationParameters;
-use mln_style::renderer::transition_parameters::TransitionParameters;
-use mln_style::transition_options::TransitionOptions;
+use mln_style::property::evaluation::PropertyEvaluationParameters;
+use mln_style::property::transition::{TransitionOptions, TransitionParameters};
 use mln_style_types::image::{ImageMap, ImageType};
 use mln_text::glyph::{GlyphIDType, GlyphMap, GlyphRange};
 use mln_text::glyph_pbf::parse_glyph_pbf;
@@ -311,7 +310,7 @@ fn every_geometry_layer_type_crosses() {
     ];
     for type_ in types {
         let layer = convert(&format!(r#"{{"id": "l", "type": "{type_}", "source": "s", "source-layer": "sl"}}"#));
-        let takes_geometry_tiles = layer.info().source == mln_style::layer_type::SourceKind::Geometry;
+        let takes_geometry_tiles = layer.info().source == mln_style::layer::SourceKind::Geometry;
         assert_eq!(
             takes_geometry_tiles,
             layers_of_type.iter().any(|(t, _)| *t == type_),
@@ -487,7 +486,7 @@ fn geojson_tiles_cross() {
 fn properties_cross_while_a_paint_property_transitions() {
     use std::time::Duration;
 
-    use mln_style::map::zoom_history::ZoomHistory;
+    use mln_style::property::evaluation::ZoomHistory;
     use mln_util::time::Instant;
 
     let constant = FILL.replace(r#"["case", ["has", "class"], "red", "rgba(0, 0, 255, 0.678)"]"#, r#""red""#);
@@ -607,16 +606,16 @@ fn answers_cross_without_pixels() {
 }
 
 /// Evaluated values without a wire form.
-struct Unknown(Arc<dyn mln_style::layer_type::ErasedLayerStyle>);
+struct Unknown(Arc<dyn mln_style::layer::ErasedLayerStyle>);
 
 impl ErasedEvaluatedLayer for Unknown {
     fn entry(&self) -> &'static dyn crate::layer_type::ErasedLayerType {
         crate::layer_type::entry::<mln_style::layers::Line>()
     }
-    fn style(&self) -> &dyn mln_style::layer_type::ErasedLayerStyle {
+    fn style(&self) -> &dyn mln_style::layer::ErasedLayerStyle {
         &*self.0
     }
-    fn shared_style(&self) -> Arc<dyn mln_style::layer_type::ErasedLayerStyle> {
+    fn shared_style(&self) -> Arc<dyn mln_style::layer::ErasedLayerStyle> {
         Arc::clone(&self.0)
     }
     fn constants_mask(&self) -> u64 {

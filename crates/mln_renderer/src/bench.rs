@@ -14,7 +14,7 @@ use glam::{DMat4, DVec4};
 use mln_map_types::{MapMode, View};
 use mln_storage::Resource;
 use mln_style::Style;
-use mln_style::renderer::property_evaluation_parameters::PropertyEvaluationParameters;
+use mln_style::property::evaluation::PropertyEvaluationParameters;
 use mln_style_types::VisibilityType;
 use mln_style_types::image::{ImageMap, ImageType};
 use mln_text::glyph::{GlyphMap, get_glyph_range};
@@ -237,7 +237,7 @@ impl SymbolView {
             if base.source != source || base.visibility == VisibilityType::None || layer.info().name != "symbol" {
                 continue;
             }
-            let style = mln_style::layer_type::LayerStyle::<mln_style::layers::Symbol>::recover(layer.style())
+            let style = mln_style::layer::LayerStyle::<mln_style::layers::Symbol>::recover(layer.style())
                 .ok_or_else(|| Error::invalid_argument(format!("no render layer for {}", layer.get_id())))?;
             let mut render_layer = RenderSymbolLayer::new(style);
             render_layer.evaluate(&parameters);
