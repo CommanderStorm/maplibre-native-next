@@ -1,10 +1,10 @@
-# fsst-rs 0.6.0 from crates.io, its library only, with one change: TableEntry
+# fsst-rs 0.7.0 from crates.io, its library only, with one change: TableEntry
 # (src/lossy_pht.rs) is aligned to 8 bytes, so it is 16 bytes on 32-bit
 # targets too, where u64 aligns to 4 and the crate's size assertion failed.
 # patches/README.md says when to drop the copy.
 [package]
 name = "fsst-rs"
-version = "0.6.0"
+version = "0.7.0"
 description = "Pure-Rust implementation of Fast Static Symbol Tables algorithm for string compression"
 authors = ["SpiralDB Developers <hello@spiraldb.com>"]
 license = "Apache-2.0"
