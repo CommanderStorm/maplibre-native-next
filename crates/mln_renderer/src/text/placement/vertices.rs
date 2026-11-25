@@ -28,20 +28,33 @@ fn extend<T: Copy>(v: &mut Vec<T>, n: usize, value: T) {
     v.extend(std::iter::repeat_n(value, n));
 }
 
-/// The collision debug buffer a feature of `symbol` draws in.
-fn collision_buffer(state: &mut SymbolBucketState, along_line: bool, text: bool) -> Option<&mut CollisionBuffer> {
-    match (along_line, text) {
-        (true, true) => state.text_collision_circle.as_mut(),
-        (true, false) => state.icon_collision_circle.as_mut(),
-        (false, true) => state.text_collision_box.as_mut(),
-        (false, false) => state.icon_collision_box.as_mut(),
-    }
-    .filter(|buffer| !buffer.segments.is_empty())
+/// Whether a label follows a line or sits at a point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LabelPlacement {
+    AlongLine,
+    Point,
 }
 
-/// The orientation a run of `vertical` text or its icon shows in.
-fn orientation(vertical: bool) -> TextWritingModeType {
-    if vertical { TextWritingModeType::Vertical } else { TextWritingModeType::Horizontal }
+/// The type of content (text or icon) for collision detection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollisionContent {
+    Text,
+    Icon,
+}
+
+/// The collision debug buffer a feature of `symbol` draws in.
+fn collision_buffer(
+    state: &mut SymbolBucketState,
+    placement: LabelPlacement,
+    content: CollisionContent,
+) -> Option<&mut CollisionBuffer> {
+    match (placement, content) {
+        (LabelPlacement::AlongLine, CollisionContent::Text) => state.text_collision_circle.as_mut(),
+        (LabelPlacement::AlongLine, CollisionContent::Icon) => state.icon_collision_circle.as_mut(),
+        (LabelPlacement::Point, CollisionContent::Text) => state.text_collision_box.as_mut(),
+        (LabelPlacement::Point, CollisionContent::Icon) => state.icon_collision_box.as_mut(),
+    }
+    .filter(|buffer| !buffer.segments.is_empty())
 }
 
 impl Placement {
@@ -64,16 +77,17 @@ impl Placement {
         text: &TextPart,
         id: Option<NonZeroU32>,
         run: usize,
-        vertical: bool,
+        orientation: TextWritingModeType,
     ) -> bool {
         let shown = self.orientation_of(allow_vertical, id);
-        if allow_vertical && shown != Some(orientation(vertical)) {
+        if allow_vertical && shown != Some(orientation) {
             return false;
         }
         let Some(offset) = id.and_then(|id| self.variable_offsets.get(&id)) else {
             return false;
         };
-        vertical || text.runs.get(Justification::of_anchor(offset.anchor)).is_none_or(|justified| justified == run)
+        orientation == TextWritingModeType::Vertical
+            || text.runs.get(Justification::of_anchor(offset.anchor)).is_none_or(|justified| justified == run)
     }
 
     /// Sets the opacities of the bucket's symbols from the placement, and
@@ -160,7 +174,9 @@ impl Placement {
             let text_shift = offset
                 .map_or(Vec2::ZERO, |offset| offset.screen_shift(rotate_with_map, pitch_with_map, view.angle() as f32));
             for (feature, is_text) in symbol.collision_features() {
-                let Some(buffer) = collision_buffer(state, feature.along_line, is_text) else {
+                let placement = if feature.along_line { LabelPlacement::AlongLine } else { LabelPlacement::Point };
+                let content = if is_text { CollisionContent::Text } else { CollisionContent::Icon };
+                let Some(buffer) = collision_buffer(state, placement, content) else {
                     continue;
                 };
                 let placed = if is_text { opacity.text.placed } else { opacity.icon.placed };
@@ -384,11 +400,11 @@ impl Placement {
             };
             let id = symbol.cross_tile_id;
             let offset = id.and_then(|id| self.variable_offsets.get(&id));
-            for (run_index, vertical) in text.runs.all() {
+            for (run_index, orientation) in text.runs.all() {
                 let run = &runs[run_index];
                 let glyphs = run.glyph_offsets.len();
                 let Some(offset) =
-                    offset.filter(|_| !run.hidden && self.shows_run(allow_vertical, text, id, run_index, vertical))
+                    offset.filter(|_| !run.hidden && self.shows_run(allow_vertical, text, id, run_index, orientation))
                 else {
                     hide_glyphs(glyphs, positions);
                     continue;
@@ -396,7 +412,7 @@ impl Placement {
                 placed_any = true;
                 let anchor = shifted_anchor(offset, run);
                 if let Some(icon_anchor) = icon_anchors.get_mut(index) {
-                    icon_anchor[usize::from(vertical)].get_or_insert(anchor);
+                    icon_anchor[orientation as usize].get_or_insert(anchor);
                 }
                 for _ in 0..glyphs {
                     add_dynamic_attributes(anchor, run.angle, 0.0, positions);
@@ -416,9 +432,9 @@ impl Placement {
                 let Some(icon) = symbol.icon.as_ref().filter(|icon| icon.sdf == sdf) else {
                     continue;
                 };
-                for (run_index, vertical) in icon.runs() {
+                for (run_index, orientation) in icon.runs() {
                     let run = &runs[run_index];
-                    match icon_anchors[index][usize::from(vertical)].filter(|_| !run.hidden) {
+                    match icon_anchors[index][orientation as usize].filter(|_| !run.hidden) {
                         Some(anchor) => {
                             for _ in 0..run.glyph_offsets.len() {
                                 add_dynamic_attributes(anchor, run.angle, 0.0, positions);
@@ -438,21 +454,22 @@ impl Placement {
         let allow_vertical = bucket.allow_vertical_placement;
         let SymbolBucketState { symbol_instances: symbols, text, icon, sdf_icon, .. } = &mut bucket.state;
         let shown = |symbol: &SymbolInstance| self.orientation_of(allow_vertical, symbol.cross_tile_id);
-        let write = |buffer: &mut Buffer,
-                     runs: &mut dyn Iterator<Item = (Option<TextWritingModeType>, usize, bool)>| {
-            let (positions, placed, _) = buffer.positions_and_symbols(layer_id);
-            positions.clear();
-            for (shown, run_index, vertical) in runs {
-                let run = &placed[run_index];
-                if run.hidden || shown != Some(orientation(vertical)) {
-                    hide_glyphs(run.glyph_offsets.len(), positions);
-                } else {
-                    for _ in 0..run.glyph_offsets.len() {
-                        add_dynamic_attributes(run.anchor_point, run.angle, 0.0, positions);
+        let write =
+            |buffer: &mut Buffer,
+             runs: &mut dyn Iterator<Item = (Option<TextWritingModeType>, usize, TextWritingModeType)>| {
+                let (positions, placed, _) = buffer.positions_and_symbols(layer_id);
+                positions.clear();
+                for (shown, run_index, orientation) in runs {
+                    let run = &placed[run_index];
+                    if run.hidden || shown != Some(orientation) {
+                        hide_glyphs(run.glyph_offsets.len(), positions);
+                    } else {
+                        for _ in 0..run.glyph_offsets.len() {
+                            add_dynamic_attributes(run.anchor_point, run.angle, 0.0, positions);
+                        }
                     }
                 }
-            }
-        };
+            };
         write(
             text,
             &mut symbols.iter().flat_map(|symbol| {
@@ -460,7 +477,7 @@ impl Placement {
                 symbol
                     .text
                     .iter()
-                    .flat_map(move |text| text.runs.all().map(move |(run, vertical)| (shown, run, vertical)))
+                    .flat_map(move |text| text.runs.all().map(move |(run, orientation)| (shown, run, orientation)))
             }),
         );
         // An icon fitted to its text turns with it.
@@ -474,7 +491,7 @@ impl Placement {
                             .icon
                             .iter()
                             .filter(move |icon| icon.sdf == sdf)
-                            .flat_map(move |icon| icon.runs().map(move |(run, vertical)| (shown, run, vertical)))
+                            .flat_map(move |icon| icon.runs().map(move |(run, orientation)| (shown, run, orientation)))
                     }),
                 );
             }
