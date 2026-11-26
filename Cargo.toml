@@ -30,7 +30,7 @@ exclude = ["patches/*"]
 # (RELEASING.md).
 version = "0.0.16"
 edition = "2024"
-# The oldest Rust the packages build with (mlt-core 0.23 needs 1.98). CI's
+# The oldest Rust the packages build with (mlt-core 0.24 needs 1.98). CI's
 # msrv job builds the workspace with it.
 rust-version = "1.98"
 description = "Part of mln-rs, a Rust port of the MapLibre Native map rendering core. Depend on mln-rs instead."
@@ -140,7 +140,7 @@ memmap2 = { version = "0.9.12" }
 earcut = { version = "0.4.5" }
 # MLT decoding: the Rust implementation of the MapLibre Tile spec, instead of
 # a port of the C++ decoder.
-mlt-core = { version = "0.23.0" }
+mlt-core = { version = "0.24.0" }
 # The even-odd union that repairs the polygons of version 1 vector tiles,
 # instead of porting wagyu. mlt-core already depends on it through geo.
 i_overlay = { version = "4.5.2", default-features = false }
